@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SGL UI Designer - 生成代码</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="app-header">
+
+    <nav class="nav-tabs">
+      <button class="nav-tab" data-nav="index">首页</button>
+      <button class="nav-tab" data-nav="editor">编辑器</button>
+      <button class="nav-tab" data-nav="preview">预览</button>
+      <button class="nav-tab active" data-nav="components">代码</button>
+      <button class="nav-tab" data-nav="settings">设置</button>
+    </nav>
+    <div class="header-actions">
+      <button class="btn btn-sm" id="btn-copy">复制代码</button>
+      <button class="btn btn-primary btn-sm" id="btn-download">下载 .c</button>
+    </div>
+  </header>
+
+  <div class="app-main" style="background:#0f0f1a;">
+    <div class="code-container">
+      <div class="code-toolbar">
+        <span style="color:var(--text-secondary);font-size:13px;">自动生成的 SGL C 代码</span>
+        <span style="flex:1;"></span>
+        <span style="color:var(--text-muted);font-size:12px;" id="code-meta">项目: -</span>
+      </div>
+      <div class="canvas-container" style="padding:0;display:block;">
+        <pre class="code-pre" id="code-output" style="padding:32px;background:#0a0a14;overflow:auto;height:100%;margin:0;"></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="status-bar">
+    <span id="status-project">项目: -</span>
+    <span id="status-pages">页面: 0</span>
+    <span id="status-total">组件总数: 0</span>
+  </div>
+
+  <script type="module" src="components.js"></script>
+</body>
+</html>

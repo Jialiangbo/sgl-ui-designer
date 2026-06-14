@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SGL UI Designer - 预览</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="app-header">
+
+    <nav class="nav-tabs">
+      <button class="nav-tab" data-nav="index">首页</button>
+      <button class="nav-tab" data-nav="editor">编辑器</button>
+      <button class="nav-tab active" data-nav="preview">预览</button>
+      <button class="nav-tab" data-nav="components">代码</button>
+      <button class="nav-tab" data-nav="settings">设置</button>
+    </nav>
+    <div class="header-actions">
+      <button class="btn btn-sm" id="btn-prev-page">← 上一页</button>
+      <button class="btn btn-sm" id="btn-next-page">下一页 →</button>
+    </div>
+  </header>
+
+  <div class="app-main" style="background:#0f0f1a;">
+    <div class="preview-container" id="preview-container">
+      <div class="preview-frame" id="preview-frame"></div>
+    </div>
+  </div>
+
+  <div class="status-bar">
+    <span id="status-current-page">页面 1 / 1</span>
+    <span id="status-page-name">-</span>
+    <span id="status-page-size">-</span>
+  </div>
+
+  <script type="module" src="preview.js"></script>
+</body>
+</html>

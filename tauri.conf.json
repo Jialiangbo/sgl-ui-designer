@@ -1,0 +1,44 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "SGL UI Designer",
+  "version": "0.1.0",
+  "identifier": "com.sgl.uidesigner",
+  "build": {
+    "frontendDist": "./dist",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "SGL UI Designer",
+        "width": 1400,
+        "height": 900,
+        "minWidth": 1024,
+        "minHeight": 720,
+        "resizable": true,
+        "url": "index.html"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["msi"],
+    "category": "DeveloperTools",
+    "shortDescription": "SGL UI Designer - Visual embedded GUI design tool",
+    "longDescription": "A visual drag-and-drop UI design tool for the SGL lightweight embedded graphics library.",
+    "icon": [
+      "icons/icon.ico",
+      "icons/128x128.png",
+      "icons/icon.png"
+    ],
+    "resources": [
+      "resources/sgl_font_conv.exe"
+    ]
+  }
+}

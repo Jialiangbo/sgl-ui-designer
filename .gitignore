@@ -1,0 +1,33 @@
+# Rust 编译产物
+target/
+
+# Node.js 依赖
+node_modules/
+
+# 前端构建产物（由 npm run build 生成）
+dist/
+
+# Tauri 生成文件
+gen/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 环境变量
+.env
+.env.local
+
+# 临时文件
+*.log
+stderr.log
+
+# 桌面临时文件
+sgl_ui_designer_test.exe
+sgl_ui_designer_v2.exe

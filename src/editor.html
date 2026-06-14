@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SGL UI Designer - 编辑器</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- 右键菜单 -->
+  <div id="context-menu" class="context-menu" style="display:none;">
+    <div class="context-menu-item" data-action="undo">撤销 Ctrl+Z</div>
+    <div class="context-menu-item" data-action="redo">恢复 Ctrl+Y</div>
+    <div class="context-menu-separator"></div>
+    <div class="context-menu-item" data-action="align-left">左对齐</div>
+    <div class="context-menu-item" data-action="align-right">右对齐</div>
+    <div class="context-menu-item" data-action="align-top">顶对齐</div>
+    <div class="context-menu-item" data-action="align-bottom">底对齐</div>
+    <div class="context-menu-separator"></div>
+    <div class="context-menu-item" data-action="align-center-h">水平居中</div>
+    <div class="context-menu-item" data-action="align-center-v">垂直居中</div>
+    <div class="context-menu-separator"></div>
+    <div class="context-menu-item" data-action="distribute-h">水平等距分布</div>
+    <div class="context-menu-item" data-action="distribute-v">垂直等距分布</div>
+    <div class="context-menu-separator"></div>
+    <div class="context-menu-item" data-action="copy">复制 Ctrl+C</div>
+    <div class="context-menu-item" data-action="paste">粘贴 Ctrl+V</div>
+    <div class="context-menu-item" data-action="delete">删除 Delete</div>
+  </div>
+
+  <header class="app-header">
+
+    <nav class="nav-tabs">
+      <button class="nav-tab" data-nav="index">首页</button>
+      <button class="nav-tab active" data-nav="editor">编辑器</button>
+      <button class="nav-tab" data-nav="preview">预览</button>
+      <button class="nav-tab" data-nav="components">代码</button>
+      <button class="nav-tab" data-nav="settings">设置</button>
+    </nav>
+    <div class="header-actions">
+      <button class="btn btn-sm" id="btn-open">📂 打开</button>
+      <button class="btn btn-sm" id="btn-save">💾 保存</button>
+      <button class="btn btn-sm btn-primary" id="btn-export">📄 导出代码</button>
+      <button class="btn btn-sm" id="btn-new-page">+ 新建页面</button>
+    </div>
+  </header>
+
+  <div class="app-main">
+    <!-- 左侧：图层 + 组件库（图层在上，组件栏在下） -->
+    <aside class="sidebar-left" id="sidebar-left">
+      <div class="panel">
+        <div class="panel-title">📋 图层列表</div>
+        <div class="layer-list" id="layer-list"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title">📁 资源管理</div>
+        <div class="resource-tabs">
+          <button class="resource-tab active" data-res-tab="fonts">字体</button>
+          <button class="resource-tab" data-res-tab="images">图片</button>
+        </div>
+        <div class="resource-panel" id="resource-fonts">
+          <button class="btn btn-sm btn-block" id="btn-add-font">+ 添加字体</button>
+          <div class="resource-list" id="font-list"></div>
+        </div>
+        <div class="resource-panel" id="resource-images" style="display:none;">
+          <button class="btn btn-sm btn-block" id="btn-add-image">+ 添加图片</button>
+          <div class="resource-list" id="image-list"></div>
+        </div>
+      </div>
+
+      <div class="panel" style="flex:1;overflow-y:auto;">
+        <div class="panel-title">📦 组件库</div>
+        <div id="widget-categories"></div>
+      </div>
+    </aside>
+
+    <!-- 中心：画布区域 -->
+    <main class="canvas-area">
+      <div class="canvas-toolbar">
+        <div class="page-tabs" id="page-tabs"></div>
+        <span style="flex:1;"></span>
+        <button class="btn btn-sm" id="btn-zoom-out" title="缩小">−</button>
+        <span id="zoom-label" style="min-width:48px;text-align:center;font-size:12px;color:var(--text-secondary);">100%</span>
+        <button class="btn btn-sm" id="btn-zoom-in" title="放大">+</button>
+        <button class="btn btn-sm" id="btn-zoom-fit" title="适应窗口">⊡</button>
+      </div>
+      <div class="canvas-container" id="canvas-container">
+        <div class="ruler-corner" id="ruler-corner"></div>
+        <canvas class="ruler-h" id="ruler-h" height="20"></canvas>
+        <canvas class="ruler-v" id="ruler-v" width="20"></canvas>
+        <div class="canvas-viewport" id="canvas-viewport">
+          <div class="canvas" id="canvas" tabindex="0">
+            <div id="canvas-hint" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#4b4b6b;font-size:14px;pointer-events:none;flex-direction:column;gap:8px;">
+              <div style="font-size:32px;opacity:0.3;">📦</div>
+              <div>从左侧拖拽 SGL 组件到此处</div>
+              <div style="font-size:11px;opacity:0.5;">共 37 种真实 SGL 组件</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="log-panel" id="log-panel">
+        <div class="log-resizer" id="log-resizer"></div>
+        <div class="log-header">
+          <span class="log-title">输出</span>
+          <div class="log-actions">
+            <button class="btn btn-sm" id="btn-clear-log" title="清空">清空</button>
+          </div>
+        </div>
+        <div class="log-content" id="log-content"></div>
+      </div>
+    </main>
+
+    <!-- 右侧：属性面板 -->
+    <aside class="sidebar-right" id="sidebar-right">
+      <!-- 项目信息 -->
+      <div class="panel" id="project-props">
+        <div class="panel-title">🏷️ 项目信息</div>
+        <div class="form-group">
+          <label class="form-label">项目名称</label>
+          <input type="text" class="form-input" id="prop-project-name" />
+        </div>
+        <div class="form-row">
+          <div class="form-group" style="margin-bottom:0;">
+            <label class="form-label">宽度</label>
+            <input type="number" class="form-input" id="prop-screen-w" min="80" />
+          </div>
+          <div class="form-group" style="margin-bottom:0;">
+            <label class="form-label">高度</label>
+            <input type="number" class="form-input" id="prop-screen-h" min="80" />
+          </div>
+        </div>
+        <div class="form-group" style="margin-top:12px;margin-bottom:0;">
+          <label class="form-label">颜色深度</label>
+          <select class="form-select" id="prop-color-depth">
+            <option value="8bit">8 bit (256色)</option>
+            <option value="16bit">16 bit (65K色)</option>
+            <option value="24bit">24 bit (RGB)</option>
+            <option value="32bit">32 bit (RGBA)</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- 页面属性 -->
+      <div class="panel" id="page-props">
+        <div class="panel-title">📄 页面属性</div>
+        <div class="form-group">
+          <label class="form-label">页面名称</label>
+          <input type="text" class="form-input" id="prop-page-name" />
+        </div>
+        <div class="form-group" style="margin-bottom:0;">
+          <label class="form-label">背景颜色</label>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <input type="color" id="prop-page-bgcolor" style="width:40px;height:32px;border:1px solid var(--border);border-radius:4px;cursor:pointer;padding:2px;background:var(--bg-primary);" />
+            <input type="text" class="form-input color-text" id="prop-page-bgcolor-text" style="flex:1;" />
+          </div>
+        </div>
+      </div>
+
+      <!-- 组件属性 -->
+      <div class="panel" id="widget-props-panel" style="display:none;">
+        <div class="panel-title">⚙️ 组件属性 <span id="widget-type-label" style="font-size:10px;color:var(--accent);font-weight:400;"></span></div>
+        <div id="widget-prop-content"></div>
+        <div class="divider"></div>
+        <button class="btn" id="btn-delete-widget" style="width:100%;border-color:var(--error);color:var(--error);">🗑 删除组件</button>
+      </div>
+
+      <!-- 空白提示 -->
+      <div class="panel" id="empty-props">
+        <div class="empty-state" style="padding:24px 0;">
+          <div style="font-size:24px;margin-bottom:8px;opacity:0.3;">👈</div>
+          <div style="font-size:12px;">从左侧拖入组件<br/>或在画布上点击选中</div>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <div class="status-bar">
+    <span id="status-project">项目: -</span>
+    <span id="status-size">屏幕: -</span>
+    <span id="status-widgets">组件: 0</span>
+    <span id="status-selection">未选中</span>
+    <span style="margin-left:auto;" id="status-api">API: SGL v2.0</span>
+  </div>
+
+  <script type="module" src="editor.js"></script>
+</body>
+</html>

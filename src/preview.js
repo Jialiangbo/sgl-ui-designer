@@ -6,6 +6,68 @@ AppState.init();
 
 let currentIndex = 0;
 
+// 计算控件的绝对位置（考虑父对象）
+function getWidgetAbsPos(w, page) {
+  const widgetMap = new Map();
+  page.widgets.forEach(pw => widgetMap.set(pw.id, pw));
+  let x = w.x, y = w.y;
+  let current = w;
+  while (current.parentId && widgetMap.has(current.parentId)) {
+    current = widgetMap.get(current.parentId);
+    x += current.x;
+    y += current.y;
+  }
+  return { x, y };
+}
+
+// 层级组排序：根祖先及其子孙作为整体，组之间按根祖先的 zOrder 排序，组内按深度排序
+function sortWidgetsByHierarchy(widgets) {
+  const widgetMap = new Map();
+  widgets.forEach(w => widgetMap.set(w.id, w));
+
+  // 找到每个控件的根祖先（组标识）
+  const rootMap = new Map();
+  function getRoot(w) {
+    if (rootMap.has(w.id)) return rootMap.get(w.id);
+    if (!w.parentId || !widgetMap.has(w.parentId)) {
+      rootMap.set(w.id, w.id);
+      return w.id;
+    }
+    const parent = widgetMap.get(w.parentId);
+    const root = getRoot(parent);
+    rootMap.set(w.id, root);
+    return root;
+  }
+  widgets.forEach(w => getRoot(w));
+
+  // 计算深度
+  const depthMap = new Map();
+  function getDepth(w) {
+    if (depthMap.has(w.id)) return depthMap.get(w.id);
+    if (!w.parentId || !widgetMap.has(w.parentId)) {
+      depthMap.set(w.id, 0);
+      return 0;
+    }
+    const parent = widgetMap.get(w.parentId);
+    const depth = getDepth(parent) + 1;
+    depthMap.set(w.id, depth);
+    return depth;
+  }
+  widgets.forEach(w => getDepth(w));
+
+  // 先按组的 zOrder 排序（组之间的顺序），组内按深度排序
+  return [...widgets].sort((a, b) => {
+    const rootA = rootMap.get(a.id);
+    const rootB = rootMap.get(b.id);
+    const rootAObj = widgetMap.get(rootA);
+    const rootBObj = widgetMap.get(rootB);
+    const zA = rootAObj?.zOrder != null ? rootAObj.zOrder : 0;
+    const zB = rootBObj?.zOrder != null ? rootBObj.zOrder : 0;
+    if (zA !== zB) return zA - zB;
+    return depthMap.get(a.id) - depthMap.get(b.id);
+  });
+}
+
 function render() {
   const pages = AppState.project.pages;
   if (!pages || pages.length === 0) return;
@@ -14,25 +76,58 @@ function render() {
 
   const page = pages[currentIndex];
   const frame = document.getElementById('preview-frame');
-  frame.style.width = page.width + 'px';
-  frame.style.height = page.height + 'px';
+  const container = document.getElementById('preview-container');
+
+  // 计算自适应缩放比例，让页面完整显示在容器中
+  const containerRect = container.getBoundingClientRect();
+  const padding = 48; // 容器内边距
+  const availW = containerRect.width - padding;
+  const availH = containerRect.height - padding;
+  const z = Math.min(availW / page.width, availH / page.height, 1); // 不放大，只缩小
+
+  // 手动缩放所有尺寸（不用transform:scale，避免边框亚像素渲染变粗）
+  frame.style.width = (page.width * z) + 'px';
+  frame.style.height = (page.height * z) + 'px';
   frame.style.background = page.bg_color || '#1e1e2e';
   frame.style.position = 'relative';
+  frame.style.transform = 'none';
+  frame.style.borderRadius = (AppState.project.screen_shape === 'circle') ? '50%' : '0';
   frame.innerHTML = '';
 
-  page.widgets.forEach(w => {
+  const widgetMap = new Map();
+  page.widgets.forEach(pw => widgetMap.set(pw.id, pw));
+
+  // 按层级组排序：根祖先及其子孙作为整体，组之间按 zOrder 排序
+  const sortedWidgets = sortWidgetsByHierarchy(page.widgets);
+
+  sortedWidgets.forEach(w => {
     const el = document.createElement('div');
     el.style.position = 'absolute';
-    el.style.left = w.x + 'px';
-    el.style.top = w.y + 'px';
-    el.style.width = w.width + 'px';
-    el.style.height = w.height + 'px';
+    // 使用绝对位置（累加父控件位置），乘以缩放因子
+    const absPos = getWidgetAbsPos(w, page);
+    el.style.left = (absPos.x * z) + 'px';
+    el.style.top = (absPos.y * z) + 'px';
+    el.style.width = (w.width * z) + 'px';
+    el.style.height = (w.height * z) + 'px';
     el.style.boxSizing = 'border-box';
     el.style.overflow = 'hidden';
 
-    const z = 1;
     const alpha = w.alpha != null ? w.alpha : 255;
     el.style.opacity = alpha < 255 ? alpha / 255 : 1;
+
+    // 如果有父对象，裁剪超出父区域的部分
+    if (w.parentId) {
+      const parent = widgetMap.get(w.parentId);
+      if (parent) {
+        const clipTop = w.y < 0 ? (-w.y) : 0;
+        const clipLeft = w.x < 0 ? (-w.x) : 0;
+        const clipRight = (w.x + w.width) > parent.width ? (w.x + w.width - parent.width) : 0;
+        const clipBottom = (w.y + w.height) > parent.height ? (w.y + w.height - parent.height) : 0;
+        if (clipTop > 0 || clipLeft > 0 || clipRight > 0 || clipBottom > 0) {
+          el.style.clipPath = `inset(${clipTop * z}px ${clipRight * z}px ${clipBottom * z}px ${clipLeft * z}px)`;
+        }
+      }
+    }
 
     renderPreviewWidget(el, w, z);
 
@@ -48,43 +143,68 @@ function renderPreviewWidget(el, w, z) {
   switch (w.type) {
     case 'rect':
       el.style.background = w.bgColor || 'transparent';
-      el.style.border = `${(w.borderWidth || 0)}px solid ${w.borderColor || 'transparent'}`;
-      el.style.borderRadius = ((w.radius || 0)) + 'px';
+      el.style.border = `${(w.borderWidth || 0) * z}px solid ${w.borderColor || 'transparent'}`;
+      el.style.borderRadius = ((w.radius || 0) * z) + 'px';
       if (w.color && w.color !== 'transparent') {
-        el.style.boxShadow = 'inset 0 0 0 4px ' + w.color;
+        const inner = document.createElement('div');
+        inner.style.cssText = 'position:absolute;inset:0;opacity:0.3;background:' + w.color + ';border-radius:' + ((w.radius || 0) * z) + 'px;pointer-events:none;';
+        el.appendChild(inner);
       }
       break;
 
     case 'circle':
       el.style.background = w.color || 'transparent';
-      el.style.border = `${(w.borderWidth || 0)}px solid ${w.borderColor || 'transparent'}`;
+      el.style.border = `${(w.borderWidth || 0) * z}px solid ${w.borderColor || 'transparent'}`;
       el.style.borderRadius = '50%';
       if (w.xOffset || w.yOffset) {
-        el.style.transform = `translate(${w.xOffset || 0}px, ${w.yOffset || 0}px)`;
+        el.style.transform = `translate(${(w.xOffset || 0) * z}px, ${(w.yOffset || 0) * z}px)`;
       }
       break;
 
     case 'line': {
       el.style.background = 'transparent';
-      const lineH = Math.max(2, w.borderWidth || 2);
+      const lineH = Math.max(2, w.borderWidth || 2) * z;
       const lineEl = document.createElement('div');
       lineEl.style.cssText = `position:absolute;left:0;top:50%;transform:translateY(-50%);width:100%;height:${lineH}px;background:${w.color || '#8b5cf6'};border-radius:${lineH / 2}px;`;
       el.appendChild(lineEl);
       break;
     }
 
+    case 'ring': {
+      el.style.background = 'transparent';
+      el.style.border = `${(w.borderWidth || 4) * z}px solid ${w.color || '#8b5cf6'}`;
+      el.style.borderRadius = '50%';
+      el.style.boxShadow = 'inset 0 0 ' + ((Math.min(w.width, w.height) / 2 - (w.borderWidth || 4)) * z) + 'px rgba(0,0,0,0.9)';
+      break;
+    }
+
+    case 'arc': {
+      el.style.background = 'transparent';
+      el.style.border = `${(w.borderWidth || 4) * z}px solid ${w.color || '#8b5cf6'}`;
+      el.style.borderRadius = '50%';
+      el.style.clipPath = 'polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%)';
+      break;
+    }
+
+    case 'polygon': {
+      el.style.background = w.color || '#8b5cf6';
+      el.style.border = `${(w.borderWidth || 2) * z}px solid ${w.borderColor || 'transparent'}`;
+      el.style.clipPath = 'polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%)';
+      break;
+    }
+
     case 'button': {
       el.style.background = w.bgColor || '#8b5cf6';
-      el.style.border = `${(w.borderWidth || 1)}px solid ${w.borderColor || '#7c3aed'}`;
-      el.style.borderRadius = ((w.radius || 8)) + 'px';
+      el.style.border = `${(w.borderWidth || 1) * z}px solid ${w.borderColor || '#7c3aed'}`;
+      el.style.borderRadius = ((w.radius || 8) * z) + 'px';
       el.style.display = 'flex';
       el.style.alignItems = 'center';
       el.style.justifyContent = justifyContent(w.align);
-      el.style.padding = '4px 8px';
+      el.style.padding = (4 * z) + 'px ' + (8 * z) + 'px';
       const text = document.createElement('span');
       text.textContent = w.text || '按钮';
       text.style.color = w.textColor || '#ffffff';
-      text.style.fontSize = (w.fontSize || 14) + 'px';
+      text.style.fontSize = ((w.fontSize || 14) * z) + 'px';
       text.style.overflow = 'hidden';
       text.style.textOverflow = 'ellipsis';
       text.style.whiteSpace = 'nowrap';
@@ -94,15 +214,15 @@ function renderPreviewWidget(el, w, z) {
 
     case 'label': {
       el.style.background = w.bgColor && w.bgColor !== 'transparent' ? w.bgColor : 'transparent';
-      el.style.borderRadius = ((w.radius || 0)) + 'px';
+      el.style.borderRadius = ((w.radius || 0) * z) + 'px';
       el.style.display = 'flex';
       el.style.alignItems = 'center';
       el.style.justifyContent = justifyContent(w.align);
-      el.style.padding = '2px 4px';
+      el.style.padding = (2 * z) + 'px ' + (4 * z) + 'px';
       const text = document.createElement('span');
       text.textContent = w.text || '标签';
       text.style.color = w.textColor || w.color || '#e4e4e7';
-      text.style.fontSize = (w.fontSize || 14) + 'px';
+      text.style.fontSize = ((w.fontSize || 14) * z) + 'px';
       text.style.overflow = 'hidden';
       text.style.textOverflow = 'ellipsis';
       text.style.whiteSpace = 'nowrap';
@@ -113,15 +233,15 @@ function renderPreviewWidget(el, w, z) {
 
     case 'textbox': {
       el.style.background = w.bgColor || '#1e1e2e';
-      el.style.border = `${(w.borderWidth || 2)}px solid ${w.borderColor || '#3d3d5c'}`;
-      el.style.borderRadius = ((w.radius || 6)) + 'px';
+      el.style.border = `${(w.borderWidth || 2) * z}px solid ${w.borderColor || '#3d3d5c'}`;
+      el.style.borderRadius = ((w.radius || 6) * z) + 'px';
       el.style.display = 'flex';
       el.style.alignItems = 'center';
-      el.style.padding = '0 8px';
+      el.style.padding = '0 ' + (8 * z) + 'px';
       const text = document.createElement('span');
       text.textContent = w.text || '';
       text.style.color = w.textColor || '#e4e4e7';
-      text.style.fontSize = (w.fontSize || 14) + 'px';
+      text.style.fontSize = ((w.fontSize || 14) * z) + 'px';
       text.style.opacity = 0.7;
       el.appendChild(text);
       break;
@@ -129,12 +249,13 @@ function renderPreviewWidget(el, w, z) {
 
     case 'switch': {
       el.style.background = w.bgColor || '#313149';
-      el.style.border = `${(w.borderWidth || 1)}px solid ${w.borderColor || '#3d3d5c'}`;
-      el.style.borderRadius = ((w.radius || 15)) + 'px';
+      el.style.border = `${(w.borderWidth || 1) * z}px solid ${w.borderColor || '#3d3d5c'}`;
+      el.style.borderRadius = ((w.radius || 15) * z) + 'px';
       if (w.status) el.style.background = w.color || '#8b5cf6';
-      const knobR = w.knobRadius || 10;
-      const margin = w.knobMargin || 2;
-      const pos = w.status ? el.clientWidth - knobR - margin : margin;
+      const knobR = (w.knobRadius || 10) * z;
+      const margin = (w.knobMargin || 2) * z;
+      const trackW = w.width * z;
+      const pos = w.status ? trackW - knobR - margin : margin;
       const knob = document.createElement('div');
       knob.style.cssText = `position:absolute;top:50%;left:${pos}px;transform:translateY(-50%);width:${knobR}px;height:${knobR}px;border-radius:50%;background:${w.knobColor || '#ffffff'};box-shadow:0 1px 3px rgba(0,0,0,0.3);`;
       el.appendChild(knob);
@@ -143,16 +264,16 @@ function renderPreviewWidget(el, w, z) {
 
     case 'checkbox': {
       el.style.background = 'transparent';
-      const boxSize = Math.min(w.height, 18);
+      const boxSize = Math.min(w.height * z, 18 * z);
       const box = document.createElement('div');
-      box.style.cssText = `display:inline-flex;align-items:center;justify-content:center;width:${boxSize}px;height:${boxSize}px;border:1px solid ${w.color || '#8b5cf6'};border-radius:${w.radius || 4}px;font-size:${boxSize * 0.7}px;color:${w.color || '#8b5cf6'};margin-right:6px;flex-shrink:0;`;
+      box.style.cssText = `display:inline-flex;align-items:center;justify-content:center;width:${boxSize}px;height:${boxSize}px;border:${1 * z}px solid ${w.color || '#8b5cf6'};border-radius:${(w.radius || 4) * z}px;font-size:${boxSize * 0.7}px;color:${w.color || '#8b5cf6'};margin-right:${6 * z}px;flex-shrink:0;`;
       if (w.status) box.textContent = '✓';
       const text = document.createElement('span');
       text.textContent = w.text || '';
       text.style.color = w.color || '#e4e4e7';
-      text.style.fontSize = (w.fontSize || 14) + 'px';
+      text.style.fontSize = ((w.fontSize || 14) * z) + 'px';
       const inner = document.createElement('div');
-      inner.style.cssText = 'display:flex;align-items:center;width:100%;height:100%;padding:0 4px;';
+      inner.style.cssText = `display:flex;align-items:center;width:100%;height:100%;padding:0 ${4 * z}px;`;
       inner.appendChild(box);
       inner.appendChild(text);
       el.appendChild(inner);
@@ -162,12 +283,12 @@ function renderPreviewWidget(el, w, z) {
     case 'slider': {
       const isHoriz = w.direct !== 1;
       el.style.background = w.trackColor || '#313149';
-      el.style.borderRadius = ((w.radius || 4)) + 'px';
+      el.style.borderRadius = ((w.radius || 4) * z) + 'px';
       const fill = document.createElement('div');
-      if (isHoriz) fill.style.cssText = `position:absolute;left:0;top:0;height:100%;width:${w.value || 0}%;background:${w.fillColor || '#8b5cf6'};border-radius:${(w.radius || 4)}px;`;
-      else fill.style.cssText = `position:absolute;left:0;bottom:0;width:100%;height:${w.value || 0}%;background:${w.fillColor || '#8b5cf6'};border-radius:${(w.radius || 4)}px;`;
+      if (isHoriz) fill.style.cssText = `position:absolute;left:0;top:0;height:100%;width:${w.value || 0}%;background:${w.fillColor || '#8b5cf6'};border-radius:${(w.radius || 4) * z}px;`;
+      else fill.style.cssText = `position:absolute;left:0;bottom:0;width:100%;height:${w.value || 0}%;background:${w.fillColor || '#8b5cf6'};border-radius:${(w.radius || 4) * z}px;`;
       el.appendChild(fill);
-      const knobSize = Math.max(12, (w.thickness || 8) + 6);
+      const knobSize = Math.max(12, (w.thickness || 8) + 6) * z;
       const knob = document.createElement('div');
       knob.style.cssText = `position:absolute;${isHoriz ? 'top:50%;left:' + (w.value || 0) + '%' : 'left:50%;bottom:' + (w.value || 0) + '%'};transform:translate(-50%,-50%);width:${knobSize}px;height:${knobSize}px;border-radius:50%;background:${w.knobColor || '#ffffff'};box-shadow:0 1px 4px rgba(0,0,0,0.4);`;
       el.appendChild(knob);
@@ -176,17 +297,17 @@ function renderPreviewWidget(el, w, z) {
 
     case 'progress': {
       el.style.background = w.trackColor || '#313149';
-      el.style.border = `${(w.borderWidth || 1)}px solid ${w.borderColor || '#3d3d5c'}`;
-      el.style.borderRadius = ((w.radius || 4)) + 'px';
+      el.style.border = `${(w.borderWidth || 1) * z}px solid ${w.borderColor || '#3d3d5c'}`;
+      el.style.borderRadius = ((w.radius || 4) * z) + 'px';
       const fill = document.createElement('div');
-      fill.style.cssText = `position:absolute;left:0;top:0;height:100%;width:${w.value || 0}%;background:${w.fillColor || '#22c55e'};border-radius:${(w.radius || 4)}px;`;
+      fill.style.cssText = `position:absolute;left:0;top:0;height:100%;width:${w.value || 0}%;background:${w.fillColor || '#22c55e'};border-radius:${(w.radius || 4) * z}px;`;
       el.appendChild(fill);
       break;
     }
 
     case 'bar': {
       el.style.background = w.bgColor || '#313149';
-      el.style.border = `${(w.borderWidth || 1)}px solid ${w.borderColor || '#3d3d5c'}`;
+      el.style.border = `${(w.borderWidth || 1) * z}px solid ${w.borderColor || '#3d3d5c'}`;
       const fill = document.createElement('div');
       fill.style.cssText = `position:absolute;left:0;bottom:0;width:100%;height:${w.value || 50}%;background:${w.color || '#8b5cf6'};`;
       el.appendChild(fill);
@@ -195,14 +316,14 @@ function renderPreviewWidget(el, w, z) {
 
     case 'gauge': {
       el.style.background = w.bgColor || '#1e1e2e';
-      el.style.border = `${(w.borderWidth || 2)}px solid ${w.borderColor || '#3d3d5c'}`;
+      el.style.border = `${(w.borderWidth || 2) * z}px solid ${w.borderColor || '#3d3d5c'}`;
       el.style.borderRadius = '50%';
       const cx = w.width / 2, cy = w.height / 2, r = Math.min(w.width, w.height) / 2 - (w.borderWidth || 2);
       const arc = document.createElement('div');
-      arc.style.cssText = `position:absolute;top:${cy - r}px;left:${cx - r}px;width:${r * 2}px;height:${r * 2}px;border:${(w.borderWidth || 4)}px solid ${w.color || '#8b5cf6'};border-radius:50%;border-right-color:transparent;border-bottom-color:transparent;transform:rotate(${-45 + ((w.value || 0) / 100) * 270}deg);`;
+      arc.style.cssText = `position:absolute;top:${(cy - r) * z}px;left:${(cx - r) * z}px;width:${r * 2 * z}px;height:${r * 2 * z}px;border:${(w.borderWidth || 4) * z}px solid ${w.color || '#8b5cf6'};border-radius:50%;border-right-color:transparent;border-bottom-color:transparent;transform:rotate(${-45 + ((w.value || 0) / 100) * 270}deg);`;
       el.appendChild(arc);
       const valText = document.createElement('div');
-      valText.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:12px;color:' + (w.color || '#8b5cf6') + ';';
+      valText.style.cssText = `position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:${12 * z}px;color:${w.color || '#8b5cf6'};`;
       valText.textContent = w.value || 0;
       el.appendChild(valText);
       break;
@@ -210,44 +331,44 @@ function renderPreviewWidget(el, w, z) {
 
     case 'led': {
       el.style.background = w.status ? w.color : (w.bgColor || '#313149');
-      el.style.border = '1px solid ' + (w.borderColor || '#3d3d5c');
+      el.style.border = (1 * z) + 'px solid ' + (w.borderColor || '#3d3d5c');
       el.style.borderRadius = '50%';
-      if (w.status) el.style.boxShadow = '0 0 6px ' + (w.color || '#22c55e');
+      if (w.status) el.style.boxShadow = '0 0 ' + (6 * z) + 'px ' + (w.color || '#22c55e');
       break;
     }
 
     case 'battery': {
       el.style.background = w.bgColor || '#313149';
-      el.style.border = `${(w.borderWidth || 1)}px solid ${w.borderColor || '#3d3d5c'}`;
-      el.style.borderRadius = ((w.radius || 4)) + 'px';
+      el.style.border = `${(w.borderWidth || 1) * z}px solid ${w.borderColor || '#3d3d5c'}`;
+      el.style.borderRadius = ((w.radius || 4) * z) + 'px';
       const pct = w.value || 80;
       const fill = document.createElement('div');
-      fill.style.cssText = `position:absolute;left:0;top:0;height:100%;width:${pct}%;background:${pct > 20 ? (w.color || '#22c55e') : '#ef4444'};border-radius:${(w.radius || 4)}px;`;
+      fill.style.cssText = `position:absolute;left:0;top:0;height:100%;width:${pct}%;background:${pct > 20 ? (w.color || '#22c55e') : '#ef4444'};border-radius:${(w.radius || 4) * z}px;`;
       el.appendChild(fill);
       const cap = document.createElement('div');
-      cap.style.cssText = `position:absolute;right:${-3}px;top:50%;transform:translateY(-50%);width:3px;height:50%;background:${w.borderColor || '#3d3d5c'};border-radius:0 3px 3px 0;`;
+      cap.style.cssText = `position:absolute;right:${-3 * z}px;top:50%;transform:translateY(-50%);width:${3 * z}px;height:50%;background:${w.borderColor || '#3d3d5c'};border-radius:0 ${3 * z}px ${3 * z}px 0;`;
       el.appendChild(cap);
       break;
     }
 
     case 'dropdown': {
       el.style.background = w.bgColor || '#1e1e2e';
-      el.style.border = `${(w.borderWidth || 1)}px solid ${w.borderColor || '#3d3d5c'}`;
-      el.style.borderRadius = ((w.radius || 4)) + 'px';
+      el.style.border = `${(w.borderWidth || 1) * z}px solid ${w.borderColor || '#3d3d5c'}`;
+      el.style.borderRadius = ((w.radius || 4) * z) + 'px';
       el.style.display = 'flex';
       el.style.alignItems = 'center';
-      el.style.padding = '0 8px';
+      el.style.padding = '0 ' + (8 * z) + 'px';
       const text = document.createElement('span');
       text.textContent = w.text || '请选择';
       text.style.color = w.textColor || '#e4e4e7';
-      text.style.fontSize = (w.fontSize || 14) + 'px';
+      text.style.fontSize = ((w.fontSize || 14) * z) + 'px';
       text.style.flex = '1';
       text.style.overflow = 'hidden';
       text.style.textOverflow = 'ellipsis';
       text.style.whiteSpace = 'nowrap';
       const arrow = document.createElement('span');
       arrow.textContent = '▼';
-      arrow.style.fontSize = '8px';
+      arrow.style.fontSize = (8 * z) + 'px';
       arrow.style.color = w.textColor || '#a1a1aa';
       el.appendChild(text);
       el.appendChild(arrow);
@@ -258,14 +379,14 @@ function renderPreviewWidget(el, w, z) {
     case 'textlist':
     case 'viewlist': {
       el.style.background = w.bgColor || '#1e1e2e';
-      el.style.border = `${(w.borderWidth || 1)}px solid ${w.borderColor || '#3d3d5c'}`;
-      el.style.borderRadius = ((w.radius || 4)) + 'px';
+      el.style.border = `${(w.borderWidth || 1) * z}px solid ${w.borderColor || '#3d3d5c'}`;
+      el.style.borderRadius = ((w.radius || 4) * z) + 'px';
       if (w.text) {
         const text = document.createElement('span');
         text.textContent = w.text;
         text.style.color = w.color || w.textColor || '#e4e4e7';
-        text.style.fontSize = (w.fontSize || 14) + 'px';
-        text.style.padding = '4px 8px';
+        text.style.fontSize = ((w.fontSize || 14) * z) + 'px';
+        text.style.padding = (4 * z) + 'px ' + (8 * z) + 'px';
         text.style.display = 'block';
         el.appendChild(text);
       }
@@ -274,14 +395,14 @@ function renderPreviewWidget(el, w, z) {
 
     case 'win': {
       el.style.background = w.bgColor || '#313149';
-      el.style.border = `${(w.borderWidth || 2)}px solid ${w.borderColor || '#8b5cf6'}`;
-      el.style.borderRadius = ((w.radius || 8)) + 'px';
+      el.style.border = `${(w.borderWidth || 2) * z}px solid ${w.borderColor || '#8b5cf6'}`;
+      el.style.borderRadius = ((w.radius || 8) * z) + 'px';
       const titleBar = document.createElement('div');
-      titleBar.style.cssText = `height:${Math.max(24, (w.fontSize || 14) * 2)}px;background:${w.color || '#8b5cf6'};display:flex;align-items:center;padding:0 8px;border-radius:${(w.radius || 8)}px ${(w.radius || 8)}px 0 0;`;
+      titleBar.style.cssText = `height:${Math.max(24, (w.fontSize || 14) * 2) * z}px;background:${w.color || '#8b5cf6'};display:flex;align-items:center;padding:0 ${8 * z}px;border-radius:${(w.radius || 8) * z}px ${(w.radius || 8) * z}px 0 0;`;
       const titleText = document.createElement('span');
       titleText.textContent = w.text || '窗口';
       titleText.style.color = w.textColor || '#ffffff';
-      titleText.style.fontSize = (w.fontSize || 14) + 'px';
+      titleText.style.fontSize = ((w.fontSize || 14) * z) + 'px';
       titleBar.appendChild(titleText);
       el.appendChild(titleBar);
       break;
@@ -289,30 +410,224 @@ function renderPreviewWidget(el, w, z) {
 
     case 'msgbox': {
       el.style.background = w.bgColor || '#313149';
-      el.style.border = `${(w.borderWidth || 2)}px solid ${w.borderColor || '#8b5cf6'}`;
-      el.style.borderRadius = ((w.radius || 8)) + 'px';
+      el.style.border = `${(w.borderWidth || 2) * z}px solid ${w.borderColor || '#8b5cf6'}`;
+      el.style.borderRadius = ((w.radius || 8) * z) + 'px';
       el.style.display = 'flex';
       el.style.alignItems = 'center';
       el.style.justifyContent = 'center';
       const text = document.createElement('span');
       text.textContent = w.text || '提示信息';
       text.style.color = w.textColor || '#ffffff';
-      text.style.fontSize = (w.fontSize || 14) + 'px';
+      text.style.fontSize = ((w.fontSize || 14) * z) + 'px';
       text.style.textAlign = 'center';
-      text.style.padding = '8px';
+      text.style.padding = (8 * z) + 'px';
       el.appendChild(text);
+      break;
+    }
+
+    case 'scroll': {
+      el.style.background = w.bgColor || '#1e1e2e';
+      el.style.border = `${(w.borderWidth || 1) * z}px solid ${w.borderColor || '#3d3d5c'}`;
+      el.style.borderRadius = ((w.radius || 4) * z) + 'px';
+      const scCol = w.color || '#8b5cf6';
+      const sb = document.createElement('div');
+      sb.style.cssText = `position:absolute;right:${2 * z}px;top:${4 * z}px;width:${4 * z}px;bottom:${4 * z}px;background:rgba(255,255,255,0.1);border-radius:${2 * z}px;`;
+      const thumb = document.createElement('div');
+      thumb.style.cssText = `position:absolute;left:0;top:20%;width:100%;height:40%;background:${scCol};opacity:0.6;border-radius:inherit;`;
+      sb.appendChild(thumb);
+      el.appendChild(sb);
+      break;
+    }
+
+    case 'box': {
+      el.style.background = w.bgColor || '#1e1e2e';
+      el.style.border = `${(w.borderWidth || 2) * z}px solid ${w.borderColor || '#8b5cf6'}`;
+      el.style.borderRadius = ((w.radius || 4) * z) + 'px';
+      const bxCol = w.color || '#8b5cf6';
+      const innerBorder = document.createElement('div');
+      innerBorder.style.cssText = `position:absolute;inset:${((w.borderWidth || 2) + 4) * z}px;border:1px solid ${bxCol};opacity:0.2;border-radius:${Math.max(0, ((w.radius || 4) - 4) * z)}px;pointer-events:none;`;
+      el.appendChild(innerBorder);
+      break;
+    }
+
+    case 'numberkbd': {
+      el.style.background = w.bgColor || '#1e1e2e';
+      el.style.border = `${(w.borderWidth || 2) * z}px solid ${w.borderColor || '#8b5cf6'}`;
+      el.style.borderRadius = ((w.radius || 8) * z) + 'px';
+      const cols = 3, rows = 4;
+      const btnW = (w.width * z - (cols + 1) * 4 * z) / cols;
+      const btnH = (w.height * z - (rows + 1) * 4 * z) / rows;
+      const nkCol = w.color || '#313149';
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const num = r * cols + c + 1;
+          const btn = document.createElement('div');
+          btn.style.cssText = `position:absolute;left:${4 * z + c * (btnW + 4 * z)}px;top:${4 * z + r * (btnH + 4 * z)}px;width:${btnW}px;height:${btnH}px;background:${num === 12 ? '#ef4444' : (num === 11 ? '#22c55e' : nkCol)};border-radius:${(w.radius || 8) * z}px;display:flex;align-items:center;justify-content:center;font-size:${(w.fontSize || 16) * z}px;color:#fff;`;
+          btn.textContent = num <= 9 ? num : (num === 10 ? '取消' : num === 11 ? '0' : '确认');
+          el.appendChild(btn);
+        }
+      }
+      break;
+    }
+
+    case 'keyboard': {
+      el.style.background = w.bgColor || '#1e1e2e';
+      el.style.border = `${(w.borderWidth || 2) * z}px solid ${w.borderColor || '#8b5cf6'}`;
+      el.style.borderRadius = ((w.radius || 6) * z) + 'px';
+      const keys = ['QWERTYUIOP', 'ASDFGHJKL', 'ZXCVBNM⌫'];
+      const keySize = (w.width * z) / 11;
+      const rowGap = 3 * z;
+      keys.forEach((row, ri) => {
+        for (let ci = 0; ci < row.length; ci++) {
+          const key = document.createElement('div');
+          const offset = ri === 1 ? keySize / 2 : 0;
+          key.style.cssText = `position:absolute;left:${ci * (keySize + 2 * z) + offset}px;top:${ri * (keySize * 0.6 + rowGap) + 4 * z}px;width:${keySize}px;height:${keySize * 0.6}px;background:${w.color || '#313149'};border-radius:${2 * z}px;display:flex;align-items:center;justify-content:center;font-size:${keySize * 0.4}px;color:#fff;`;
+          key.textContent = row[ci];
+          el.appendChild(key);
+        }
+      });
+      break;
+    }
+
+    case 'scope': {
+      el.style.background = w.bgColor || '#0f1a0f';
+      el.style.border = `${(w.borderWidth || 1) * z}px solid ${w.borderColor || '#3d3d5c'}`;
+      el.style.borderRadius = ((w.radius || 4) * z) + 'px';
+      for (let i = 1; i < 4; i++) {
+        const hLine = document.createElement('div');
+        hLine.style.cssText = `position:absolute;left:0;right:0;top:${i * 25}%;height:1px;background:rgba(34,197,94,0.2);`;
+        el.appendChild(hLine);
+      }
+      const wave = document.createElement('div');
+      wave.style.cssText = `position:absolute;left:0;right:0;top:0;bottom:0;border-bottom:${2 * z}px solid ${w.color || '#22c55e'};border-left:${2 * z}px solid transparent;`;
+      el.appendChild(wave);
+      break;
+    }
+
+    case 'spectrum': {
+      el.style.background = w.bgColor || '#1e1e2e';
+      el.style.border = `${(w.borderWidth || 1) * z}px solid ${w.borderColor || '#3d3d5c'}`;
+      el.style.borderRadius = ((w.radius || 4) * z) + 'px';
+      const bars = 12;
+      const spCol = w.color || '#8b5cf6';
+      for (let i = 0; i < bars; i++) {
+        const bar = document.createElement('div');
+        const h = (0.3 + (i % 5) * 0.15) * (w.height * z);
+        bar.style.cssText = `position:absolute;bottom:0;left:${i * (w.width * z / bars)}px;width:${(w.width * z / bars) - 2 * z}px;height:${h}px;background:${spCol};opacity:${0.6 + i * 0.03};border-radius:1px 1px 0 0;`;
+        el.appendChild(bar);
+      }
+      break;
+    }
+
+    case 'qrcode': {
+      el.style.background = w.bgColor || '#ffffff';
+      el.style.border = `${(w.borderWidth || 1) * z}px solid ${w.borderColor || '#000000'}`;
+      const grid = 7;
+      const qrCol = w.color || '#000000';
+      const seed = 42;
+      for (let r = 0; r < grid; r++) {
+        for (let c = 0; c < grid; c++) {
+          if ((r * 7 + c + seed) % 3 !== 0) {
+            const cell = document.createElement('div');
+            cell.style.cssText = `position:absolute;left:${c * (w.width * z / grid)}px;top:${r * (w.height * z / grid)}px;width:${(w.width * z / grid) - 1}px;height:${(w.height * z / grid) - 1}px;background:${qrCol};`;
+            el.appendChild(cell);
+          }
+        }
+      }
+      break;
+    }
+
+    case 'chart': {
+      el.style.background = w.bgColor || '#1e1e2e';
+      el.style.border = `${(w.borderWidth || 1) * z}px solid ${w.borderColor || '#3d3d5c'}`;
+      el.style.borderRadius = ((w.radius || 4) * z) + 'px';
+      const pts = [[0.2, 0.8], [0.4, 0.3], [0.6, 0.6], [0.8, 0.2], [1.0, 0.5]];
+      const chartCol = w.color || '#8b5cf6';
+      const wpx = w.width * z, hpx = w.height * z;
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('width', wpx); svg.setAttribute('height', hpx);
+      svg.style.cssText = 'position:absolute;inset:0;';
+      const polyEl = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+      const pointsStr = pts.map(([x, y]) => `${x * wpx},${(1 - y) * hpx}`).join(' ');
+      polyEl.setAttribute('points', pointsStr);
+      polyEl.setAttribute('fill', chartCol);
+      polyEl.setAttribute('opacity', '0.5');
+      svg.appendChild(polyEl);
+      el.appendChild(svg);
+      break;
+    }
+
+    case 'canvas': {
+      el.style.background = w.bgColor || '#1e1e2e';
+      el.style.border = `${(w.borderWidth || 1) * z}px solid ${w.borderColor || '#3d3d5c'}`;
+      el.style.borderRadius = ((w.radius || 4) * z) + 'px';
+      const cvCol = w.color || '#8b5cf6';
+      for (let x = 0; x < w.width * z; x += 10 * z) {
+        const vLine = document.createElement('div');
+        vLine.style.cssText = `position:absolute;left:${x}px;top:0;width:1px;height:100%;background:${cvCol};opacity:0.1;`;
+        el.appendChild(vLine);
+      }
+      for (let y = 0; y < w.height * z; y += 10 * z) {
+        const hLine = document.createElement('div');
+        hLine.style.cssText = `position:absolute;top:${y}px;left:0;height:1px;width:100%;background:${cvCol};opacity:0.1;`;
+        el.appendChild(hLine);
+      }
+      break;
+    }
+
+    case 'analogclock': {
+      el.style.background = w.bgColor || '#1e1e2e';
+      el.style.border = `${(w.borderWidth || 2) * z}px solid ${w.borderColor || '#3d3d5c'}`;
+      el.style.borderRadius = '50%';
+      const cx = w.width / 2, cy = w.height / 2, r = Math.min(w.width, w.height) / 2 - (w.borderWidth || 2);
+      const acCol = w.color || '#8b5cf6';
+      const hourHand = document.createElement('div');
+      hourHand.style.cssText = `position:absolute;top:${cy * z}px;left:${cx * z}px;width:${2 * z}px;height:${r * 0.4 * z}px;background:${acCol};transform-origin:bottom center;transform:translateX(-50%) rotate(120deg);border-radius:1px;`;
+      el.appendChild(hourHand);
+      const minHand = document.createElement('div');
+      minHand.style.cssText = `position:absolute;top:${cy * z}px;left:${cx * z}px;width:${1.5 * z}px;height:${r * 0.6 * z}px;background:${acCol};transform-origin:bottom center;transform:translateX(-50%) rotate(45deg);border-radius:1px;`;
+      el.appendChild(minHand);
+      const dot = document.createElement('div');
+      dot.style.cssText = `position:absolute;top:${(cy - 2) * z}px;left:${(cx - 2) * z}px;width:${4 * z}px;height:${4 * z}px;background:${acCol};border-radius:50%;transform:translateY(-50%);`;
+      el.appendChild(dot);
+      break;
+    }
+
+    case 'icon':
+    case 'sprite':
+    case '2dball': {
+      el.style.background = w.bgColor || 'transparent';
+      el.style.border = `${(w.borderWidth || 0) * z}px solid ${w.borderColor || 'transparent'}`;
+      el.style.borderRadius = ((w.radius || 4) * z) + 'px';
+      const iconInner = document.createElement('div');
+      iconInner.style.cssText = `width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:${Math.min(w.width, w.height) * 0.5 * z}px;`;
+      const iconMap = { 'icon': '⭐', 'sprite': '🎮', '2dball': '⚽' };
+      iconInner.textContent = iconMap[w.type] || '●';
+      iconInner.style.color = w.color || '#8b5cf6';
+      el.appendChild(iconInner);
+      break;
+    }
+
+    case 'ext_img': {
+      el.style.background = w.bgColor || '#313149';
+      el.style.border = `${(w.borderWidth || 1) * z}px solid ${w.borderColor || '#3d3d5c'}`;
+      el.style.borderRadius = ((w.radius || 4) * z) + 'px';
+      const imgPlaceholder = document.createElement('div');
+      imgPlaceholder.style.cssText = `width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:${Math.min(w.width, w.height) * 0.3 * z}px;opacity:0.3;color:${w.color || '#8b5cf6'};`;
+      imgPlaceholder.textContent = '🖼';
+      el.appendChild(imgPlaceholder);
       break;
     }
 
     default: {
       el.style.background = w.bgColor || '#313149';
-      el.style.border = `${(w.borderWidth || 1)}px solid ${w.borderColor || '#8b5cf6'}`;
-      el.style.borderRadius = ((w.radius || 4)) + 'px';
+      el.style.border = `${(w.borderWidth || 1) * z}px solid ${w.borderColor || '#8b5cf6'}`;
+      el.style.borderRadius = ((w.radius || 4) * z) + 'px';
       const typeInfo = SGL_WIDGET_TYPES.find(t => t.type === w.type);
       const text = document.createElement('span');
       text.textContent = w.text || typeInfo?.name || w.type;
       text.style.color = w.color || '#8b5cf6';
-      text.style.fontSize = '12px';
+      text.style.fontSize = (12 * z) + 'px';
       text.style.display = 'flex';
       text.style.alignItems = 'center';
       text.style.justifyContent = 'center';

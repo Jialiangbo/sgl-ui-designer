@@ -23,13 +23,17 @@
     <div class="context-menu-item" data-action="distribute-h">水平等距分布</div>
     <div class="context-menu-item" data-action="distribute-v">垂直等距分布</div>
     <div class="context-menu-separator"></div>
+    <div class="context-menu-item" data-action="z-order-top">置顶</div>
+    <div class="context-menu-item" data-action="z-order-up">上移一层</div>
+    <div class="context-menu-item" data-action="z-order-down">下移一层</div>
+    <div class="context-menu-item" data-action="z-order-bottom">置底</div>
+    <div class="context-menu-separator"></div>
     <div class="context-menu-item" data-action="copy">复制 Ctrl+C</div>
     <div class="context-menu-item" data-action="paste">粘贴 Ctrl+V</div>
     <div class="context-menu-item" data-action="delete">删除 Delete</div>
   </div>
 
   <header class="app-header">
-
     <nav class="nav-tabs">
       <button class="nav-tab" data-nav="index">首页</button>
       <button class="nav-tab active" data-nav="editor">编辑器</button>
@@ -37,23 +41,45 @@
       <button class="nav-tab" data-nav="components">代码</button>
       <button class="nav-tab" data-nav="settings">设置</button>
     </nav>
+
     <div class="header-actions">
-      <button class="btn btn-sm" id="btn-open">📂 打开</button>
-      <button class="btn btn-sm" id="btn-save">💾 保存</button>
-      <button class="btn btn-sm btn-primary" id="btn-export">📄 导出代码</button>
-      <button class="btn btn-sm" id="btn-new-page">+ 新建页面</button>
+      <button class="btn btn-sm btn-action" id="btn-open" title="打开项目">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        <span>打开</span>
+      </button>
+      <button class="btn btn-sm btn-action" id="btn-save" title="保存项目">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+        <span>保存</span>
+      </button>
+      <div class="toolbar-divider"></div>
+      <button class="btn btn-sm btn-action btn-export" id="btn-export-code" title="导出C代码到项目目录">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        <span>导出</span>
+      </button>
+      <button class="btn btn-sm btn-action btn-run" id="btn-build-run" title="编译并运行模拟器">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        <span>运行</span>
+      </button>
     </div>
   </header>
 
   <div class="app-main">
-    <!-- 左侧：图层 + 组件库（图层在上，组件栏在下） -->
+    <!-- 左侧：页面列表 + 控件结构树 -->
     <aside class="sidebar-left" id="sidebar-left">
-      <div class="panel">
-        <div class="panel-title">📋 图层列表</div>
+      <div class="panel" style="flex:1;min-height:0;display:flex;flex-direction:column;">
+        <div class="panel-title-row">
+          <div class="panel-title">📑 页面列表</div>
+          <button class="btn btn-sm btn-icon" id="btn-new-page" title="新建页面">+</button>
+        </div>
+        <div class="page-tabs-mini" id="page-tabs-mini"></div>
+      </div>
+
+      <div class="panel" style="flex:1;min-height:0;display:flex;flex-direction:column;">
+        <div class="panel-title">📋 控件结构树</div>
         <div class="layer-list" id="layer-list"></div>
       </div>
 
-      <div class="panel">
+      <div class="panel" style="flex:0 0 auto;">
         <div class="panel-title">📁 资源管理</div>
         <div class="resource-tabs">
           <button class="resource-tab active" data-res-tab="fonts">字体</button>
@@ -67,11 +93,6 @@
           <button class="btn btn-sm btn-block" id="btn-add-image">+ 添加图片</button>
           <div class="resource-list" id="image-list"></div>
         </div>
-      </div>
-
-      <div class="panel" style="flex:1;overflow-y:auto;">
-        <div class="panel-title">📦 组件库</div>
-        <div id="widget-categories"></div>
       </div>
     </aside>
 
@@ -102,7 +123,7 @@
       <div class="log-panel" id="log-panel">
         <div class="log-resizer" id="log-resizer"></div>
         <div class="log-header">
-          <span class="log-title">输出</span>
+          <span class="log-title">Console</span>
           <div class="log-actions">
             <button class="btn btn-sm" id="btn-clear-log" title="清空">清空</button>
           </div>
@@ -131,6 +152,13 @@
           </div>
         </div>
         <div class="form-group" style="margin-top:12px;margin-bottom:0;">
+          <label class="form-label">屏幕形状</label>
+          <select class="form-select" id="prop-screen-shape">
+            <option value="rect">矩形</option>
+            <option value="circle">圆形</option>
+          </select>
+        </div>
+        <div class="form-group" style="margin-top:12px;margin-bottom:0;">
           <label class="form-label">颜色深度</label>
           <select class="form-select" id="prop-color-depth">
             <option value="8bit">8 bit (256色)</option>
@@ -148,12 +176,22 @@
           <label class="form-label">页面名称</label>
           <input type="text" class="form-input" id="prop-page-name" />
         </div>
+        <div class="form-group">
+          <label class="form-label">背景图片</label>
+          <select class="form-select" id="prop-page-pixmap">
+            <option value="">无</option>
+          </select>
+        </div>
         <div class="form-group" style="margin-bottom:0;">
           <label class="form-label">背景颜色</label>
           <div style="display:flex;gap:6px;align-items:center;">
             <input type="color" id="prop-page-bgcolor" style="width:40px;height:32px;border:1px solid var(--border);border-radius:4px;cursor:pointer;padding:2px;background:var(--bg-primary);" />
             <input type="text" class="form-input color-text" id="prop-page-bgcolor-text" style="flex:1;" />
           </div>
+        </div>
+        <div class="form-group" style="margin-bottom:0;">
+          <label class="form-label">透明度</label>
+          <input type="number" class="form-input" id="prop-page-alpha" min="0" max="255" />
         </div>
       </div>
 
@@ -173,6 +211,16 @@
         </div>
       </div>
     </aside>
+  </div>
+
+  <!-- 浮动组件库面板 -->
+  <div class="floating-palette" id="floating-palette">
+    <div class="floating-palette-header" id="palette-header">
+      <span class="floating-palette-title">📦 组件库</span>
+      <button class="floating-palette-btn" id="btn-palette-minimize" title="最小化">−</button>
+    </div>
+    <div class="floating-palette-content" id="widget-categories"></div>
+    <div class="floating-palette-resize" id="palette-resize"></div>
   </div>
 
   <div class="status-bar">

@@ -40,7 +40,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/></svg>',
     category: 'basic',
     defaultSize: [120, 80],
-    properties: ['color', 'bgColor', 'borderColor', 'borderWidth', 'radius', 'alpha', 'locked']
+    properties: ['color', 'bgColor', 'borderColor', 'borderAlpha', 'borderWidth', 'radius', 'mainAlpha', 'alpha', 'pixmap', 'locked']
   },
   {
     type: 'circle',
@@ -354,6 +354,9 @@ export const PROP_META = {
   borderWidth: { label: '边框宽度', type: 'number', min: 0, max: 20 },
   radius: { label: '圆角半径', type: 'number', min: 0, max: 100 },
   alpha: { label: '透明度', type: 'number', min: 0, max: 255 },
+  mainAlpha: { label: '填充透明度', type: 'number', min: 0, max: 255 },
+  borderAlpha: { label: '边框透明度', type: 'number', min: 0, max: 255 },
+  pixmap: { label: '图片', type: 'select' },
   align: { label: '对齐方式', type: 'select', options: [['LEFT', '左'], ['CENTER', '居中'], ['RIGHT', '右']] },
   fontSize: { label: '字体大小', type: 'number', min: 8, max: 72 },
   fontFamily: { label: '字体文件', type: 'select', options: [['simsun.ttc', '宋体'], ['simhei.ttf', '黑体'], ['simkai.ttf', '楷体'], ['simsunb.ttf', '宋体加粗'], ['msyh.ttf', '微软雅黑'], ['arial.ttf', 'Arial'], ['DejaVuSans.ttf', 'DejaVu Sans'], ['sourcehansans.ttf', '思源黑体'], ['notosanscjk.ttf', 'Noto Sans CJK'], ['default', '默认字体']] },
@@ -376,7 +379,76 @@ export const PROP_META = {
   fillGap: { label: '填充间隔', type: 'number', min: 0, max: 20 },
   fillRadius: { label: '填充圆角', type: 'number', min: 0, max: 20 },
   fillWidth: { label: '填充宽度', type: 'number', min: 0, max: 20 },
-  locked: { label: '锁定控件', type: 'bool' }
+  locked: { label: '锁定控件', type: 'bool' },
+  eventCb: { label: '事件回调函数', type: 'text' },
+  parentId: { label: '父对象', type: 'parentSelect' },
+
+  // 事件回调属性（按 SGL 事件类型）
+  onPressed: { label: 'PRESSED 按下', type: 'text', event: 'SGL_EVENT_PRESSED' },
+  onReleased: { label: 'RELEASED 释放', type: 'text', event: 'SGL_EVENT_RELEASED' },
+  onClicked: { label: 'CLICKED 点击', type: 'text', event: 'SGL_EVENT_CLICKED' },
+  onLongClicked: { label: 'LONG_CLICKED 长按', type: 'text', event: 'SGL_EVENT_LONG_CLICKED' },
+  onLongPressed: { label: 'LONG_PRESSED 长按触发', type: 'text', event: 'SGL_EVENT_LONG_PRESSED' },
+  onMotion: { label: 'MOTION 滑动', type: 'text', event: 'SGL_EVENT_MOTION' },
+  onMoveUp: { label: 'MOVE_UP 上移', type: 'text', event: 'SGL_EVENT_MOVE_UP' },
+  onMoveDown: { label: 'MOVE_DOWN 下移', type: 'text', event: 'SGL_EVENT_MOVE_DOWN' },
+  onMoveLeft: { label: 'MOVE_LEFT 左移', type: 'text', event: 'SGL_EVENT_MOVE_LEFT' },
+  onMoveRight: { label: 'MOVE_RIGHT 右移', type: 'text', event: 'SGL_EVENT_MOVE_RIGHT' },
+  onFocused: { label: 'FOCUSED 获得焦点', type: 'text', event: 'SGL_EVENT_FOCUSED' },
+  onUnfocused: { label: 'UNFOCUSED 失去焦点', type: 'text', event: 'SGL_EVENT_UNFOCUSED' },
+  onKeyUp: { label: 'KEY_UP 上键', type: 'text', event: 'SGL_EVENT_KEY_UP' },
+  onKeyDown: { label: 'KEY_DOWN 下键', type: 'text', event: 'SGL_EVENT_KEY_DOWN' },
+  onKeyLeft: { label: 'KEY_LEFT 左键', type: 'text', event: 'SGL_EVENT_KEY_LEFT' },
+  onKeyRight: { label: 'KEY_RIGHT 右键', type: 'text', event: 'SGL_EVENT_KEY_RIGHT' },
+  onKeyEnter: { label: 'KEY_ENTER 确认键', type: 'text', event: 'SGL_EVENT_KEY_ENTER' },
+  onKeyEsc: { label: 'KEY_ESC 取消键', type: 'text', event: 'SGL_EVENT_KEY_ESC' },
+};
+
+// ============ 各控件类型支持的事件列表 ============
+export const WIDGET_EVENTS = {
+  // 基础图形：支持按下/释放（可点击）
+  rect: ['onPressed', 'onReleased'],
+  circle: [],
+  ring: [],
+  arc: [],
+  line: [],
+  polygon: [],
+  // 交互组件
+  button: ['onPressed', 'onReleased', 'onClicked', 'onLongClicked'],
+  switch: ['onPressed', 'onClicked'],
+  checkbox: ['onPressed', 'onClicked'],
+  slider: ['onPressed', 'onReleased', 'onMotion', 'onMoveUp', 'onMoveDown', 'onMoveLeft', 'onMoveRight'],
+  numberkbd: ['onPressed', 'onReleased'],
+  keyboard: ['onPressed', 'onReleased', 'onKeyRight', 'onKeyEnter'],
+  dropdown: ['onClicked', 'onReleased', 'onMoveUp', 'onMoveDown', 'onKeyEnter'],
+  // 文本组件
+  label: [],
+  textbox: ['onPressed', 'onReleased', 'onFocused', 'onUnfocused', 'onMoveUp', 'onMoveDown'],
+  textline: [],
+  textlist: ['onClicked', 'onReleased', 'onMoveUp', 'onMoveDown', 'onKeyEnter', 'onKeyDown', 'onKeyUp'],
+  // 显示组件
+  progress: [],
+  bar: ['onPressed', 'onReleased', 'onMotion', 'onMoveUp', 'onMoveDown', 'onMoveLeft', 'onMoveRight'],
+  gauge: [],
+  spectrum: [],
+  battery: [],
+  led: [],
+  viewlist: ['onMoveUp', 'onMoveDown', 'onReleased', 'onClicked'],
+  qrcode: [],
+  scope: [],
+  chart: [],
+  analogclock: [],
+  // 特殊组件
+  msgbox: ['onPressed', 'onReleased', 'onKeyLeft', 'onKeyRight', 'onKeyEnter'],
+  scroll: ['onMoveUp', 'onMoveDown', 'onMoveLeft', 'onMoveRight'],
+  box: ['onPressed', 'onReleased', 'onMoveUp', 'onMoveDown', 'onMoveLeft', 'onMoveRight'],
+  win: ['onPressed', 'onClicked'],
+  canvas: [],
+  '2dball': [],
+  sprite: [],
+  // 图像组件
+  icon: [],
+  ext_img: ['onPressed', 'onReleased'],
 };
 
 // ============ 组件分类 ============
@@ -395,12 +467,14 @@ export function createWidgetDefaults(type) {
     type,
     alpha: 255,
     zIndex: 0,
-    locked: false
+    locked: false,
+    parentId: null,
+    events: []
   };
 
   switch (type) {
     case 'rect':
-      return { ...base, color: '#8b5cf6', bgColor: '#313149', borderColor: '#7c3aed', borderWidth: 2, radius: 6 };
+      return { ...base, color: '#8b5cf6', bgColor: '#313149', borderColor: '#7c3aed', borderWidth: 2, borderAlpha: 255, radius: 6, mainAlpha: 255, pixmap: '' };
     case 'circle':
       return { ...base, color: '#8b5cf6', bgColor: 'transparent', borderColor: '#7c3aed', borderWidth: 2, xOffset: 0, yOffset: 0 };
     case 'ring':
@@ -510,21 +584,89 @@ export function generateSGLCode(project) {
 
   code += `\n`;
 
+  // 收集所有事件回调函数名，生成前向声明（基于 events 数组）
+  const eventCbs = new Set();
+  const eventWrappers = [];
+  project.pages.forEach(page => {
+    if (!Array.isArray(page.widgets)) return;
+    page.widgets.forEach(w => {
+      const events = (w.events || []).filter(e => e.callback && e.callback.trim());
+      if (events.length > 0) {
+        events.forEach(e => eventCbs.add(e.callback.trim()));
+        eventWrappers.push({ widget: w, events });
+      }
+    });
+  });
+
+  if (eventCbs.size > 0) {
+    code += `/* === 事件回调函数（弱定义，用户可覆盖实现） === */\n`;
+    eventCbs.forEach(cb => {
+      code += `sgl_weak_fn void ${cb}(sgl_event_t *e) { (void)e; }\n`;
+    });
+    code += `\n`;
+  }
+
+  // 生成事件分发包装函数
+  if (eventWrappers.length > 0) {
+    code += `/* === 事件分发包装函数 === */\n`;
+    eventWrappers.forEach(({ widget, events }) => {
+      const wrapperName = `_${sanitizeId(widget.id)}_event_handler`;
+      code += `static void ${wrapperName}(sgl_event_t *e)\n{\n`;
+      code += `    switch (e->type) {\n`;
+      events.forEach(evt => {
+        const eventType = PROP_META[evt.type]?.event;
+        if (eventType) {
+          code += `        case ${eventType}:\n`;
+          code += `            ${evt.callback.trim()}(e);\n`;
+          code += `            break;\n`;
+        }
+      });
+      code += `        default: break;\n`;
+      code += `    }\n`;
+      code += `}\n\n`;
+    });
+  }
+
+  // 按父子层级排序控件的辅助函数：父控件在前，子控件在后
+  function sortWidgetsByHierarchy(widgets) {
+    const widgetMap = new Map();
+    widgets.forEach(w => widgetMap.set(w.id, w));
+    const depthMap = new Map();
+    function getDepth(w) {
+      if (depthMap.has(w.id)) return depthMap.get(w.id);
+      if (!w.parentId || !widgetMap.has(w.parentId)) {
+        depthMap.set(w.id, 0);
+        return 0;
+      }
+      const parent = widgetMap.get(w.parentId);
+      const depth = getDepth(parent) + 1;
+      depthMap.set(w.id, depth);
+      return depth;
+    }
+    widgets.forEach(w => getDepth(w));
+    return [...widgets].sort((a, b) => depthMap.get(a.id) - depthMap.get(b.id));
+  }
+
   project.pages.forEach(page => {
     const pageId = sanitizeId(page.id);
     code += `/* === Page: ${page.name} === */\n`;
     code += `void ui_page_${pageId}_init(void)\n{\n`;
-    code += `    sgl_obj_t *page_${pageId} = sgl_page_create("${page.name}", 0, 0, ${page.width}, ${page.height});\n`;
+    code += `    sgl_obj_t *page_${pageId} = sgl_screen_act();\n`;
     if (page.bg_color) {
-      code += `    sgl_page_set_bg_color(page_${pageId}, ${hexToSglColor(page.bg_color)});\n`;
+      code += `    sgl_page_set_color(page_${pageId}, ${hexToSglColor(page.bg_color)});\n`;
     }
     code += `\n`;
 
-    page.widgets.forEach(w => {
+    // 按层级排序：父控件先创建，子控件后创建
+    const sortedWidgets = sortWidgetsByHierarchy(page.widgets);
+
+    sortedWidgets.forEach(w => {
       const objId = sanitizeId(w.id);
       const createFn = getSglCreateFn(w.type);
+      // 父对象：如果有 parentId 则使用父控件对象，否则使用页面对象
+      const parentObjId = w.parentId ? sanitizeId(w.parentId) : `page_${pageId}`;
       code += `    /* ${getWidgetDisplayName(w.type)} */\n`;
-      code += `    sgl_obj_t *${objId} = ${createFn}(page_${pageId});\n`;
+      code += `    sgl_obj_t *${objId} = ${createFn}(${parentObjId});\n`;
       code += `    sgl_obj_set_pos(${objId}, ${w.x}, ${w.y});\n`;
       code += `    sgl_obj_set_size(${objId}, ${w.width}, ${w.height});\n`;
 
@@ -534,10 +676,16 @@ export function generateSGLCode(project) {
         code += `    ${setter}\n`;
       });
 
+      // 事件回调绑定：如果有事件，绑定包装函数
+      const widgetEvents = (w.events || []).filter(e => e.callback && e.callback.trim());
+      if (widgetEvents.length > 0) {
+        const wrapperName = `_${objId}_event_handler`;
+        code += `    sgl_obj_set_event_cb(${objId}, ${wrapperName}, NULL);\n`;
+      }
+
       code += `\n`;
     });
 
-    code += `    sgl_page_set_active(page_${pageId});\n`;
     code += `}\n\n`;
   });
 
@@ -587,14 +735,12 @@ function sanitizeId(id) {
 }
 
 function hexToSglColor(hex) {
-  // 将 #RRGGBB 转换为 SGL RGB565 格式
+  // 将 #RRGGBB 转换为 sgl_rgb(r, g, b) 格式
   if (!hex || !hex.startsWith('#') || hex.length !== 7) return 'SGL_COLOR_BLACK';
   const r = parseInt(hex.slice(1, 3), 16);
   const g = parseInt(hex.slice(3, 5), 16);
   const b = parseInt(hex.slice(5, 7), 16);
-  // RGB565: R5 G6 B5
-  const rgb565 = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
-  return `SGL_MAKE_COLOR(${rgb565})`;
+  return `sgl_rgb(${r}, ${g}, ${b})`;
 }
 
 function hexAlphaToAlpha(hex) {
@@ -654,8 +800,11 @@ function getSglSetters(w) {
       if (w.bgColor) setters.push(`sgl_rect_set_bg_color(${obj(w)}, ${hexToSglColor(w.bgColor)});`);
       if (w.borderColor) setters.push(`sgl_rect_set_border_color(${obj(w)}, ${hexToSglColor(w.borderColor)});`);
       if (w.borderWidth != null) setters.push(`sgl_rect_set_border_width(${obj(w)}, ${w.borderWidth});`);
+      if (w.borderAlpha != null && w.borderAlpha < 255) setters.push(`sgl_rect_set_border_alpha(${obj(w)}, ${w.borderAlpha});`);
       if (w.radius != null) setters.push(`sgl_rect_set_radius(${obj(w)}, ${w.radius});`);
+      if (w.mainAlpha != null && w.mainAlpha < 255) setters.push(`sgl_rect_set_main_alpha(${obj(w)}, ${w.mainAlpha});`);
       if (w.alpha != null && w.alpha < 255) setters.push(`sgl_rect_set_alpha(${obj(w)}, ${w.alpha});`);
+      if (w.pixmap) setters.push(`sgl_rect_set_pixmap(${obj(w)}, "${escapeStr(w.pixmap)}");`);
       break;
 
     case 'circle':

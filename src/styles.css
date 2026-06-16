@@ -43,40 +43,19 @@ body {
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
-  padding: 0 16px;
-  gap: 16px;
-  user-select: none;
-}
-
-.app-logo {
-  display: flex;
-  align-items: center;
+  padding: 0 12px;
   gap: 8px;
-  font-weight: 700;
-  font-size: 16px;
-}
-
-.app-logo-icon {
-  width: 28px;
-  height: 28px;
-  background: linear-gradient(135deg, var(--accent), var(--accent-light));
-  border-radius: 6px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: white;
-  font-weight: bold;
-  font-size: 14px;
+  user-select: none;
 }
 
 .nav-tabs {
   display: flex;
-  gap: 4px;
+  gap: 2px;
   flex: 1;
 }
 
 .nav-tab {
-  padding: 8px 16px;
+  padding: 6px 14px;
   border-radius: 6px;
   cursor: pointer;
   color: var(--text-secondary);
@@ -99,7 +78,62 @@ body {
 
 .header-actions {
   display: flex;
-  gap: 8px;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.header-actions .toolbar-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--border);
+  margin: 0 4px;
+}
+
+.btn-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  font-size: 12px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.btn-action svg {
+  flex-shrink: 0;
+}
+
+.btn-action:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--border);
+}
+
+.btn-action.btn-export {
+  color: var(--accent-light);
+}
+
+.btn-action.btn-export:hover {
+  background: rgba(139, 92, 246, 0.12);
+  color: var(--accent-light);
+  border-color: rgba(139, 92, 246, 0.3);
+}
+
+.btn-action.btn-run {
+  color: #22d3ee;
+}
+
+.btn-action.btn-run:hover {
+  background: rgba(0, 229, 255, 0.1);
+  color: #22d3ee;
+  border-color: rgba(0, 229, 255, 0.3);
 }
 
 .btn {
@@ -225,6 +259,9 @@ body {
 .log-content .log-line {
   white-space: pre-wrap;
   word-break: break-all;
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
 }
 
 .log-content .log-line.info { color: #60a0ff; }
@@ -249,6 +286,38 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.8px;
   margin-bottom: 12px;
+}
+
+.panel-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.panel-title-row .panel-title {
+  margin-bottom: 0;
+}
+
+.btn-icon {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  font-size: 14px;
+  line-height: 1;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-icon:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 
 /* ============ 组件库 ============ */
@@ -350,6 +419,19 @@ body {
   padding: 0 16px;
   gap: 12px;
   flex-shrink: 0;
+}
+
+.toolbar-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--border);
+  margin: 0 4px;
+}
+
+.form-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 4px;
 }
 
 .page-tabs {
@@ -460,24 +542,30 @@ body {
 
 .canvas-widget {
   position: absolute;
-  border: 1px solid transparent;
   cursor: move;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 8px;
+  padding: 0;
   font-size: 12px;
   overflow: hidden;
   box-sizing: border-box;
-  transition: border-color 0.1s;
+  transition: outline-color 0.1s;
 }
 
 .canvas-widget:hover {
-  border-color: var(--accent-light);
+  outline: 1px solid var(--accent-light);
+  outline-offset: 0px;
 }
 
 .canvas-widget.selected {
   outline: 2px dashed var(--accent);
+  outline-offset: 2px;
+}
+
+/* 子控件选中样式：与父控件区分开，用绿色虚线 */
+.canvas-widget.child-selected {
+  outline: 2px dashed #22c55e;
   outline-offset: 2px;
 }
 
@@ -757,43 +845,45 @@ body {
 
 .tree-children {
   margin-top: 2px;
-  padding-left: 0;
-}
-
-.tree-children .tree-row {
-  margin-left: 18px;
-  padding-left: 0;
+  padding-left: 18px;
   position: relative;
-  overflow: visible;
-  border-radius: 0;
 }
 
-/* 竖线：从第一个子节点延伸到最后一个子节点 */
-.tree-children .tree-row::before {
+/* 最后一个子节点的 tree-node：竖线只到横线位置（L形） */
+.tree-children > .tree-node:last-child::before {
   content: '';
   position: absolute;
-  left: -10px;
+  left: -9px;
+  top: 0;
+  height: 13px;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.15);
+}
+
+/* 非最后一个子节点：竖线贯穿到下一个兄弟 */
+.tree-children > .tree-node:not(:last-child)::before {
+  content: '';
+  position: absolute;
+  left: -9px;
   top: 0;
   bottom: 0;
   width: 1px;
   background: rgba(255, 255, 255, 0.15);
 }
 
-/* 最后一个子节点：竖线只到横线位置（L形） */
-.tree-children .tree-row:last-child::before {
-  height: 13px;
-  bottom: auto;
-}
-
 /* 横线：连接竖线和控件行 */
-.tree-children .tree-row::after {
+.tree-children > .tree-node::after {
   content: '';
   position: absolute;
-  left: -10px;
+  left: -9px;
   top: 13px;
-  width: 10px;
+  width: 9px;
   height: 1px;
   background: rgba(255, 255, 255, 0.15);
+}
+
+.tree-node {
+  position: relative;
 }
 
 /* ============ 首页/项目管理 ============ */
@@ -1137,4 +1227,156 @@ body {
 @keyframes toast-in {
   from { opacity: 0; transform: translate(-50%, 10px); }
   to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+/* ============ 浮动组件库面板 ============ */
+.floating-palette {
+  position: fixed;
+  z-index: 1000;
+  width: 280px;
+  height: auto;
+  max-height: 500px;
+  min-width: 200px;
+  min-height: 0;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  overflow: visible;
+}
+
+.floating-palette.minimized {
+  height: auto;
+  max-height: none;
+  min-height: 0;
+}
+
+.floating-palette.minimized .floating-palette-content {
+  display: none;
+}
+
+.floating-palette.minimized .floating-palette-resize {
+  display: none;
+}
+
+.floating-palette-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border);
+  cursor: move;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.floating-palette-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.floating-palette-btn {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-size: 16px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.floating-palette-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.floating-palette-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+  max-height: 450px;
+}
+
+.floating-palette-resize {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 16px;
+  height: 16px;
+  cursor: se-resize;
+  background: linear-gradient(135deg, transparent 50%, var(--border) 50%);
+  opacity: 0.5;
+}
+
+.floating-palette-resize:hover {
+  opacity: 1;
+}
+
+/* 页面列表迷你标签 */
+.page-tabs-mini {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  max-height: 150px;
+  overflow-y: auto;
+}
+
+.page-tab-mini {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--bg-tertiary);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.page-tab-mini:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.page-tab-mini.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.page-tab-mini .page-tab-close {
+  margin-left: auto;
+  opacity: 0;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  color: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.page-tab-mini:hover .page-tab-close {
+  opacity: 0.7;
+}
+
+.page-tab-mini .page-tab-close:hover {
+  opacity: 1;
+  background: rgba(255,255,255,0.2);
 }

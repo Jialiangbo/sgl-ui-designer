@@ -10,6 +10,7 @@ export const AppState = {
     color_depth: '16bit',
     screen_width: 480,
     screen_height: 320,
+    screen_shape: 'rect', // 'rect' | 'circle'
     pages: [],
     resources: { fonts: [], images: [] }
   },
@@ -118,6 +119,8 @@ export const AppState = {
       width: this.project.screen_width,
       height: this.project.screen_height,
       bg_color: '#1e1e2e',
+      pixmap: '',
+      alpha: 255,
       widgets: []
     };
     this.project.pages.push(page);
@@ -170,12 +173,18 @@ export const AppState = {
     });
     const id = type + (maxNum + 1);
     const defaults = createWidgetDefaults(type);
+    // 找到当前页面中最大的 zOrder
+    let maxZ = 0;
+    page.widgets.forEach(ww => {
+      if (ww.zOrder != null && ww.zOrder > maxZ) maxZ = ww.zOrder;
+    });
     const widget = {
       id,
       x: Math.round(x),
       y: Math.round(y),
       width: Math.round(w),
       height: Math.round(h),
+      zOrder: maxZ + 1,
       ...defaults
     };
     page.widgets.push(widget);
@@ -241,11 +250,27 @@ export const AppState = {
     return this.selectedWidgetIds.size > 0 ? [...this.selectedWidgetIds][0] : null;
   },
 
-  // 批量删除选中控件
+  // 批量删除选中控件（包括其子控件）
   removeSelectedWidgets() {
     const page = this.getCurrentPage();
     if (!page) return;
-    page.widgets = page.widgets.filter(w => !this.selectedWidgetIds.has(w.id));
+    
+    // 收集所有要删除的控件（包括子控件）
+    const toRemove = new Set(this.selectedWidgetIds);
+    
+    // 递归查找子控件
+    let changed = true;
+    while (changed) {
+      changed = false;
+      page.widgets.forEach(w => {
+        if (!toRemove.has(w.id) && toRemove.has(w.parentId)) {
+          toRemove.add(w.id);
+          changed = true;
+        }
+      });
+    }
+    
+    page.widgets = page.widgets.filter(w => !toRemove.has(w.id));
     this.selectedWidgetIds.clear();
     this.notify();
   },
@@ -373,6 +398,7 @@ export const AppState = {
       color_depth: '16bit',
       screen_width: 480,
       screen_height: 320,
+      screen_shape: 'rect',
       pages: [],
       resources: { fonts: [], images: [] }
     };

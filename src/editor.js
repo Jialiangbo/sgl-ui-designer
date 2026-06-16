@@ -1,5 +1,5 @@
 import { AppState, navigate, showToast, initNav, downloadFile, escapeHtml, escapeAttr } from './app.js';
-import { SGL_WIDGET_TYPES, WIDGET_CATEGORIES, PROP_META } from './sgl_api.js';
+import { SGL_WIDGET_TYPES, WIDGET_CATEGORIES, PROP_META, WIDGET_EVENTS } from './sgl_api.js';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 
@@ -15,6 +15,7 @@ let draggingFromPalette = null;
 
 // 对齐辅助线状态
 let snapLines = []; // { axis: 'x'|'y', value: number }
+let snapLinesWidgetId = null; // 记录当前辅助线对应的控件ID（用于判断是否需要限制在父控件内）
 const SNAP_THRESHOLD = 3; // 画布坐标单位，接近3px以内时显示辅助线
 
 // 复制粘贴剪贴板
@@ -61,6 +62,10 @@ function logMessage(msg, type = 'info') {
   line.textContent = `[${time}] ${msg}`;
   logContent.appendChild(line);
   logContent.scrollTop = logContent.scrollHeight;
+  // 同步写入日志文件
+  if (AppState.projectPath) {
+    invoke('append_log', { projectPath: AppState.projectPath, message: `[${type.toUpperCase()}] ${msg}` }).catch(() => {});
+  }
 }
 const widgetPropsPanel = document.getElementById('widget-props-panel');
 const emptyProps = document.getElementById('empty-props');
@@ -168,7 +173,159 @@ function renderPalette() {
   });
 }
 
-// ============ 渲染页面 Tabs ============
+// ============ 浮动组件库面板 ============
+const floatingPalette = document.getElementById('floating-palette');
+const paletteHeader = document.getElementById('palette-header');
+const paletteMinimizeBtn = document.getElementById('btn-palette-minimize');
+const paletteResizeHandle = document.getElementById('palette-resize');
+
+// 从 localStorage 读取位置和大小
+function loadPaletteState() {
+  try {
+    const state = JSON.parse(localStorage.getItem('paletteState') || '{}');
+    if (state.left != null && state.top != null) {
+      floatingPalette.style.left = state.left + 'px';
+      floatingPalette.style.top = state.top + 'px';
+    } else {
+      // 默认位置：右上角
+      floatingPalette.style.right = '20px';
+      floatingPalette.style.top = '60px';
+    }
+    if (state.width) floatingPalette.style.width = state.width + 'px';
+    // 如果是最小化状态，保存高度用于展开时恢复
+    if (state.minimized) {
+      if (state.height) floatingPalette.dataset.savedHeight = state.height;
+      floatingPalette.classList.add('minimized');
+      paletteMinimizeBtn.textContent = '+';
+      paletteMinimizeBtn.title = '展开';
+    } else if (state.height) {
+      floatingPalette.style.height = state.height + 'px';
+    }
+  } catch (e) {
+    // 默认位置
+    floatingPalette.style.right = '20px';
+    floatingPalette.style.top = '60px';
+  }
+}
+
+function savePaletteState() {
+  const isMin = floatingPalette.classList.contains('minimized');
+  const state = {
+    left: floatingPalette.offsetLeft,
+    top: floatingPalette.offsetTop,
+    width: floatingPalette.offsetWidth,
+    // 如果最小化，保存的是拉伸后的高度，不是当前渲染高度
+    height: isMin ? (floatingPalette.dataset.savedHeight || floatingPalette.offsetHeight) : floatingPalette.offsetHeight,
+    minimized: isMin
+  };
+  localStorage.setItem('paletteState', JSON.stringify(state));
+}
+
+// 拖动
+let isDraggingPalette = false;
+let dragOffsetX = 0, dragOffsetY = 0;
+
+paletteHeader.addEventListener('mousedown', (e) => {
+  if (e.target === paletteMinimizeBtn || e.target.closest('.floating-palette-btn')) return;
+  isDraggingPalette = true;
+  dragOffsetX = e.clientX - floatingPalette.offsetLeft;
+  dragOffsetY = e.clientY - floatingPalette.offsetTop;
+  document.body.style.cursor = 'move';
+  e.preventDefault();
+});
+
+document.addEventListener('mousemove', (e) => {
+  if (!isDraggingPalette) return;
+  let newLeft = e.clientX - dragOffsetX;
+  let newTop = e.clientY - dragOffsetY;
+  // 限制在窗口内
+  newLeft = Math.max(0, Math.min(newLeft, window.innerWidth - 100));
+  newTop = Math.max(0, Math.min(newTop, window.innerHeight - 50));
+  floatingPalette.style.left = newLeft + 'px';
+  floatingPalette.style.top = newTop + 'px';
+});
+
+document.addEventListener('mouseup', () => {
+  if (isDraggingPalette) {
+    isDraggingPalette = false;
+    document.body.style.cursor = '';
+    savePaletteState();
+  }
+});
+
+// 最小化/展开
+paletteMinimizeBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  const wasMin = floatingPalette.classList.contains('minimized');
+  if (!wasMin) {
+    // 即将最小化 - 保存当前高度，切换到最小化状态
+    const currentH = floatingPalette.offsetHeight;
+    floatingPalette.dataset.savedHeight = currentH;
+    floatingPalette.style.height = '';
+    floatingPalette.classList.add('minimized');
+    paletteMinimizeBtn.textContent = '+';
+    paletteMinimizeBtn.title = '展开';
+  } else {
+    // 即将展开 - 恢复保存的高度
+    const savedH = floatingPalette.dataset.savedHeight;
+    floatingPalette.classList.remove('minimized');
+    if (savedH) {
+      floatingPalette.style.height = savedH + 'px';
+    }
+    paletteMinimizeBtn.textContent = '−';
+    paletteMinimizeBtn.title = '最小化';
+  }
+  savePaletteState();
+});
+
+// 调整大小
+let isResizingPalette = false;
+let resizeStartX = 0, resizeStartY = 0, resizeStartW = 0, resizeStartH = 0;
+
+paletteResizeHandle.addEventListener('mousedown', (e) => {
+  isResizingPalette = true;
+  resizeStartX = e.clientX;
+  resizeStartY = e.clientY;
+  resizeStartW = floatingPalette.offsetWidth;
+  resizeStartH = floatingPalette.offsetHeight;
+  e.preventDefault();
+  e.stopPropagation();
+});
+
+document.addEventListener('mousemove', (e) => {
+  if (!isResizingPalette) return;
+  const dx = e.clientX - resizeStartX;
+  const dy = e.clientY - resizeStartY;
+  const newW = Math.max(200, resizeStartW + dx);
+  const newH = resizeStartH + dy;
+  // 如果高度小于 80px，自动最小化
+  if (newH < 80) {
+    floatingPalette.classList.add('minimized');
+    paletteMinimizeBtn.textContent = '+';
+    paletteMinimizeBtn.title = '展开';
+    floatingPalette.style.height = '';
+  } else {
+    // 恢复正常高度，移除最小化状态
+    if (floatingPalette.classList.contains('minimized')) {
+      floatingPalette.classList.remove('minimized');
+      paletteMinimizeBtn.textContent = '−';
+      paletteMinimizeBtn.title = '最小化';
+    }
+    floatingPalette.style.height = newH + 'px';
+  }
+});
+
+document.addEventListener('mouseup', () => {
+  if (isResizingPalette) {
+    isResizingPalette = false;
+    savePaletteState();
+  }
+});
+
+// 初始化浮动面板状态
+loadPaletteState();
+
+// ============ 渲染页面 Tabs（顶部工具栏） ============
 function renderPageTabs() {
   pageTabs.innerHTML = '';
   AppState.project.pages.forEach(page => {
@@ -184,6 +341,22 @@ function renderPageTabs() {
       }
     });
     pageTabs.appendChild(tab);
+  });
+}
+
+// ============ 渲染页面列表（左侧迷你版） ============
+function renderPageTabsMini() {
+  const miniTabs = document.getElementById('page-tabs-mini');
+  if (!miniTabs) return;
+  miniTabs.innerHTML = '';
+  AppState.project.pages.forEach(page => {
+    const tab = document.createElement('div');
+    tab.className = 'page-tab-mini' + (page.id === AppState.currentPageId ? ' active' : '');
+    tab.innerHTML = `<span>${escapeHtml(page.name)}</span>`;
+    tab.addEventListener('click', () => {
+      AppState.setCurrentPage(page.id);
+    });
+    miniTabs.appendChild(tab);
   });
 }
 
@@ -216,7 +389,30 @@ function renderCanvas() {
 
   canvas.style.width = cw + 'px';
   canvas.style.height = ch + 'px';
-  canvas.style.background = page.bg_color || '#1e1e2e';
+  canvas.style.borderRadius = (AppState.project.screen_shape === 'circle') ? '50%' : '0';
+
+  // 背景：先清除，再分别设置图片或颜色
+  canvas.style.background = '';
+  canvas.style.backgroundImage = '';
+  canvas.style.backgroundColor = '';
+  canvas.style.backgroundSize = '';
+  canvas.style.backgroundPosition = '';
+
+  if (page.pixmap) {
+    let imgPath = page.pixmap;
+    if (!imgPath.startsWith('file://') && !imgPath.startsWith('http')) {
+      imgPath = 'file:///' + imgPath.replace(/\\/g, '/');
+    }
+    canvas.style.backgroundImage = `url('${imgPath}')`;
+    canvas.style.backgroundSize = 'cover';
+    canvas.style.backgroundPosition = 'center';
+  } else {
+    canvas.style.background = page.bg_color || '#1e1e2e';
+  }
+
+  // alpha 透明度
+  const pageAlpha = (page.alpha != null && page.alpha !== undefined) ? page.alpha : 255;
+  canvas.style.opacity = pageAlpha < 255 ? (pageAlpha / 255) : 1;
 
   // 画布定位（居中 + 平移偏移）
   const viewport = document.getElementById('canvas-viewport');
@@ -232,7 +428,9 @@ function renderCanvas() {
   const hint = document.getElementById('canvas-hint');
   if (hint) hint.style.display = page.widgets.length === 0 ? 'flex' : 'none';
 
-  page.widgets.forEach(w => drawWidget(w));
+  // 按父子层级排序渲染：父控件先渲染（在下层），子控件后渲染（在上层）
+  const sortedWidgets = sortWidgetsByHierarchy(page.widgets);
+  sortedWidgets.forEach(w => drawWidget(w));
 
   // 绘制对齐辅助线
   renderSnapLines();
@@ -251,14 +449,50 @@ function renderSnapLines() {
   const page = AppState.getCurrentPage();
   if (!page) return;
 
+  // 检查当前拖动控件是否有父控件，如果有则将辅助线添加到父控件内（会被 clip-path 裁剪）
+  let parentWidget = null;
+  let parentEl = null;
+  if (snapLinesWidgetId) {
+    const w = AppState.getWidget(snapLinesWidgetId);
+    if (w && w.parentId) {
+      parentWidget = AppState.getWidget(w.parentId);
+      if (parentWidget) {
+        parentEl = canvas.querySelector(`[data-id="${w.parentId}"]`);
+      }
+    }
+  }
+
   snapLines.forEach(line => {
     const el = document.createElement('div');
     el.className = 'snap-line';
+
+    if (parentWidget) {
+      // 子控件的辅助线：限制在父控件可见区域内
+      // computeSnap 返回的 line.value 已经是相对父控件的坐标
+      if (line.axis === 'x') {
+        // 垂直虚线
+        const relX = line.value * z;
+        const top = 0;
+        const height = parentWidget.height * z;
+        el.style.cssText = `position:absolute;left:${relX}px;top:${top}px;width:0;height:${height}px;border-left:1px dashed #00e5ff;pointer-events:none;z-index:9999;opacity:0.8;`;
+      } else {
+        // 水平虚线
+        const relY = line.value * z;
+        const left = 0;
+        const width = parentWidget.width * z;
+        el.style.cssText = `position:absolute;top:${relY}px;left:${left}px;height:0;width:${width}px;border-top:1px dashed #00e5ff;pointer-events:none;z-index:9999;opacity:0.8;`;
+      }
+      // 添加到父控件元素内，这样会受父控件的 clip-path 裁剪
+      if (parentEl) {
+        parentEl.appendChild(el);
+        return;
+      }
+    }
+
+    // 默认：添加到画布，全页面范围
     if (line.axis === 'x') {
-      // 垂直虚线（x坐标对齐）
       el.style.cssText = `position:absolute;left:${line.value * z}px;top:0;width:0;height:${page.height * z}px;border-left:1px dashed #00e5ff;pointer-events:none;z-index:9999;opacity:0.8;`;
     } else {
-      // 水平虚线（y坐标对齐）
       el.style.cssText = `position:absolute;top:${line.value * z}px;left:0;height:0;width:${page.width * z}px;border-top:1px dashed #00e5ff;pointer-events:none;z-index:9999;opacity:0.8;`;
     }
     canvas.appendChild(el);
@@ -292,6 +526,14 @@ function computeSnap(dragWidget, newX, newY) {
   // 遍历其他控件
   page.widgets.forEach(w => {
     if (w.id === dragWidget.id) return;
+
+    // 如果拖动的是子控件，只与同属一个父控件的其他子控件对齐
+    if (dragWidget.parentId) {
+      if (w.parentId !== dragWidget.parentId) return;
+    } else {
+      // 如果拖动的是根控件，只与其他根控件对齐
+      if (w.parentId) return;
+    }
 
     const otherEdges = {
       x: [w.x, w.x + w.width, w.x + w.width / 2],
@@ -444,24 +686,112 @@ function getRulerStep(zoom) {
   return 200;
 }
 
-function drawWidget(w) {
+// 按层级组排序：父控件和子控件作为整体，组之间按 zOrder 排序，组内按深度（父在前，子在后）
+function sortWidgetsByHierarchy(widgets) {
+  const widgetMap = new Map();
+  widgets.forEach(w => widgetMap.set(w.id, w));
+
+  // 计算每个控件的根祖先（组标识）
+  const rootMap = new Map();
+  function getRoot(w) {
+    if (rootMap.has(w.id)) return rootMap.get(w.id);
+    if (!w.parentId || !widgetMap.has(w.parentId)) {
+      rootMap.set(w.id, w.id);
+      return w.id;
+    }
+    const parent = widgetMap.get(w.parentId);
+    const root = getRoot(parent);
+    rootMap.set(w.id, root);
+    return root;
+  }
+  widgets.forEach(w => getRoot(w));
+
+  // 计算深度
+  const depthMap = new Map();
+  function getDepth(w) {
+    if (depthMap.has(w.id)) return depthMap.get(w.id);
+    if (!w.parentId || !widgetMap.has(w.parentId)) {
+      depthMap.set(w.id, 0);
+      return 0;
+    }
+    const parent = widgetMap.get(w.parentId);
+    const depth = getDepth(parent) + 1;
+    depthMap.set(w.id, depth);
+    return depth;
+  }
+  widgets.forEach(w => getDepth(w));
+
+  // 先按组的 zOrder 排序（组之间的顺序），组内按深度排序
+  return [...widgets].sort((a, b) => {
+    const rootA = rootMap.get(a.id);
+    const rootB = rootMap.get(b.id);
+    const rootAObj = widgetMap.get(rootA);
+    const rootBObj = widgetMap.get(rootB);
+    const zA = rootAObj?.zOrder != null ? rootAObj.zOrder : 0;
+    const zB = rootBObj?.zOrder != null ? rootBObj.zOrder : 0;
+    // 先按组排序（组 zOrder）
+    if (zA !== zB) return zA - zB;
+    // 同组内按深度排序（父在前，子在后）
+    return depthMap.get(a.id) - depthMap.get(b.id);
+  });
+}
+
+// 计算控件的绝对位置（考虑父对象）
+function getWidgetAbsPos(w, page) {
+  let absX = w.x;
+  let absY = w.y;
+  let parentId = w.parentId;
+  while (parentId) {
+    const parent = page.widgets.find(pw => pw.id === parentId);
+    if (!parent) break;
+    absX += parent.x;
+    absY += parent.y;
+    parentId = parent.parentId;
+  }
+  return { x: absX, y: absY };
+}
+
+// 获取所有子控件（包括嵌套）
+function getChildWidgets(wId, page) {
+  const children = [];
+  page.widgets.forEach(w => {
+    if (w.parentId === wId) {
+      children.push(w);
+    }
+  });
+  return children;
+}
+
+function drawWidget(w, parentEl) {
+  const page = AppState.getCurrentPage();
+  if (!page) return;
+
+  // 计算绝对位置
+  const absPos = getWidgetAbsPos(w, page);
+  const z = AppState.zoom;
+
   const el = document.createElement('div');
   el.className = 'canvas-widget';
   el.dataset.id = w.id;
-  el.style.left = (w.x * AppState.zoom) + 'px';
-  el.style.top = (w.y * AppState.zoom) + 'px';
-  el.style.width = (w.width * AppState.zoom) + 'px';
-  el.style.height = (w.height * AppState.zoom) + 'px';
+  el.style.left = (absPos.x * z) + 'px';
+  el.style.top = (absPos.y * z) + 'px';
+  el.style.width = (w.width * z) + 'px';
+  el.style.height = (w.height * z) + 'px';
   el.style.boxSizing = 'border-box';
   el.style.position = 'absolute';
   el.style.cursor = 'move';
-  el.style.overflow = 'hidden';
+  el.style.overflow = 'visible'; // 父控件需要 overflow:visible 以显示子控件
   el.style.transition = 'border-color 0.1s';
 
-  // 选中状态
+  // 选中状态：子控件和父控件的选中样式不同
   const isLocked = w.locked;
   if (AppState.selectedWidgetIds.has(w.id)) {
-    el.classList.add('selected');
+    if (w.parentId) {
+      // 子控件选中：用绿色虚线区别于父控件
+      el.classList.add('child-selected');
+    } else {
+      el.classList.add('selected');
+    }
   }
   if (isLocked) {
     el.classList.add('locked-widget');
@@ -470,6 +800,64 @@ function drawWidget(w) {
     lockIcon.style.cssText = 'position:absolute;top:4px;right:4px;width:16px;height:16px;background:rgba(0,0,0,0.5);border-radius:3px;display:flex;align-items:center;justify-content:center;font-size:10px;pointer-events:none;z-index:10;';
     lockIcon.textContent = '🔒';
     el.appendChild(lockIcon);
+  }
+
+  // 如果有父对象且未被选中，添加子控件视觉标识（用outline避免影响border渲染），并裁剪超出父区域的部分
+  // 选中的子控件优先显示选中框，不显示子控件虚线
+  if (w.parentId) {
+    if (!AppState.selectedWidgetIds.has(w.id)) {
+      el.style.outline = '1px dashed rgba(139, 92, 246, 0.5)';
+      el.style.outlineOffset = '0px';
+    }
+    const parent = page.widgets.find(p => p.id === w.parentId);
+    if (parent) {
+      // 计算裁剪：子控件超出父区域的部分不可见
+      const clipTop = w.y < 0 ? (-w.y) : 0;
+      const clipLeft = w.x < 0 ? (-w.x) : 0;
+      const clipRight = (w.x + w.width) > parent.width ? (w.x + w.width - parent.width) : 0;
+      const clipBottom = (w.y + w.height) > parent.height ? (w.y + w.height - parent.height) : 0;
+      if (clipTop > 0 || clipLeft > 0 || clipRight > 0 || clipBottom > 0) {
+        el.style.clipPath = `inset(${clipTop * z}px ${clipRight * z}px ${clipBottom * z}px ${clipLeft * z}px)`;
+      }
+      // 如果子控件完全在父控件可视区域外，在父控件边缘显示指示器
+      const completelyOutside = (w.x + w.width <= 0 || w.y + w.height <= 0 || w.x >= parent.width || w.y >= parent.height);
+      if (completelyOutside) {
+        const parentEl = canvas.querySelector(`[data-id="${w.parentId}"]`);
+        if (parentEl) {
+          // 计算指示器位置：在父控件边缘，指向子控件方向
+          const childCenterX = w.x + w.width / 2;
+          const childCenterY = w.y + w.height / 2;
+          const parentCenterX = parent.width / 2;
+          const parentCenterY = parent.height / 2;
+          // 指示器放在父控件边缘
+          let indicatorX, indicatorY, arrow;
+          if (childCenterX < 0) { indicatorX = 0; arrow = '◀'; }
+          else if (childCenterX > parent.width) { indicatorX = parent.width - 16; arrow = '▶'; }
+          else { indicatorX = childCenterX - 8; arrow = ''; }
+          if (childCenterY < 0) { indicatorY = 0; arrow = '▲'; }
+          else if (childCenterY > parent.height) { indicatorY = parent.height - 16; arrow = '▼'; }
+          else { indicatorY = childCenterY - 8; if (!arrow) arrow = '●'; }
+          // 限制在父控件范围内
+          indicatorX = Math.max(0, Math.min(indicatorX, parent.width - 16));
+          indicatorY = Math.max(0, Math.min(indicatorY, parent.height - 16));
+          const indicator = document.createElement('div');
+          indicator.className = 'offscreen-child-indicator';
+          indicator.dataset.childId = w.id;
+          indicator.style.cssText = `position:absolute;left:${indicatorX * z}px;top:${indicatorY * z}px;width:${16 * z}px;height:${16 * z}px;display:flex;align-items:center;justify-content:center;font-size:${10 * z}px;background:rgba(139,92,246,0.7);color:#fff;border-radius:3px;cursor:pointer;z-index:100;pointer-events:auto;`;
+          indicator.textContent = arrow;
+          indicator.title = `子控件 "${w.name || w.type}" 在可视区域外，点击移回`;
+          indicator.addEventListener('click', (e) => {
+            e.stopPropagation();
+            // 将子控件移回父控件可视区域中心
+            const newX = Math.max(0, Math.min((parent.width - w.width) / 2, parent.width - w.width));
+            const newY = Math.max(0, Math.min((parent.height - w.height) / 2, parent.height - w.height));
+            AppState.updateWidget(w.id, { x: Math.round(newX), y: Math.round(newY) });
+            AppState.selectWidget(w.id);
+          });
+          parentEl.appendChild(indicator);
+        }
+      }
+    }
   }
 
   // WYSIWYG 渲染
@@ -526,13 +914,45 @@ function renderWidgetVisual(el, w) {
   switch (w.type) {
     case 'rect': {
       el.style.background = p('bgColor', 'transparent');
-      el.style.border = `${p('borderWidth', 0) * z}px solid ${p('borderColor', 'transparent')}`;
+      const borderAlphaVal = p('borderAlpha', 255);
+      const borderColor = p('borderColor', 'transparent');
+      const borderWidth = p('borderWidth', 0) * z;
+      // 边框透明度需要用 rgba 格式实现
+      if (borderAlphaVal < 255 && borderColor && borderColor !== 'transparent') {
+        // 将 hex 颜色转为 rgba
+        const hex2rgba = (hex, alpha) => {
+          const r = parseInt(hex.slice(1, 3), 16);
+          const g = parseInt(hex.slice(3, 5), 16);
+          const b = parseInt(hex.slice(5, 7), 16);
+          return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+        };
+        el.style.border = `${borderWidth}px solid ${hex2rgba(borderColor, borderAlphaVal / 255)}`;
+      } else {
+        el.style.border = `${borderWidth}px solid ${borderColor}`;
+      }
       el.style.borderRadius = (p('radius', 0) * z) + 'px';
       el.style.opacity = alphaCss;
       const rectCol = p('color', '#8b5cf6');
-      if (rectCol && rectCol !== 'transparent') {
+      const mainAlphaVal = p('mainAlpha', 255);
+      const mainAlphaCss = mainAlphaVal < 255 ? (mainAlphaVal / 255) : 1;
+      const radius = p('radius', 0) * z;
+
+      // 处理图片（pixmap）——value 存的是图片路径
+      const pixmap = p('pixmap', '');
+      if (pixmap) {
+        // pixmap 存的是完整路径，直接使用
+        let imgPath = pixmap;
+        // 转换为 file:// URL
+        if (imgPath && !imgPath.startsWith('file://') && !imgPath.startsWith('http')) {
+          imgPath = 'file:///' + imgPath.replace(/\\/g, '/');
+        }
+        // 图片层 - 直接显示图片，不叠加颜色
+        const imgEl = document.createElement('div');
+        imgEl.style.cssText = `position:absolute;inset:0;background-image:url('${imgPath}');background-size:cover;background-position:center;border-radius:${radius}px;opacity:${mainAlphaCss};`;
+        el.appendChild(imgEl);
+      } else if (rectCol && rectCol !== 'transparent') {
         const inner = document.createElement('div');
-        inner.style.cssText = 'position:absolute;inset:0;opacity:0.3;background:' + rectCol + ';border-radius:' + (p('radius', 0) * z) + 'px;';
+        inner.style.cssText = `position:absolute;inset:0;opacity:${mainAlphaCss};background:${rectCol};border-radius:${radius}px;`;
         el.appendChild(inner);
       }
       break;
@@ -1159,13 +1579,29 @@ function addResizeHandles(widgetEl) {
   });
 }
 
-// ============ 鼠标事件 ============
+// 收集控件的所有后代ID（包括直接子控件和嵌套子控件）
+function getAllDescendantIds(wId, page) {
+  const descendants = [];
+  const stack = [wId];
+  while (stack.length > 0) {
+    const currentId = stack.pop();
+    page.widgets.forEach(w => {
+      if (w.parentId === currentId) {
+        descendants.push(w.id);
+        stack.push(w.id);
+      }
+    });
+  }
+  return descendants;
+}
+
+// 鼠标事件
 document.addEventListener('mousemove', (e) => {
   if (isDragging && AppState.selectedWidgetIds.size > 0) {
     const dx = (e.clientX - dragStart.x) / AppState.zoom;
     const dy = (e.clientY - dragStart.y) / AppState.zoom;
 
-    // 多选拖动：移动所有选中控件
+    // 多选拖动：移动所有选中控件及其后代
     if (dragStart.widgetPositions && dragStart.widgetPositions.length > 0) {
       // 用第一个未锁定控件计算吸附
       const firstPos = dragStart.widgetPositions.find(p => {
@@ -1179,13 +1615,23 @@ document.addEventListener('mousemove', (e) => {
         const newY = firstPos.y + dy;
         const snap = computeSnap(w, newX, newY);
         snapLines = snap.lines;
+        snapLinesWidgetId = w.id; // 记录辅助线对应的控件
         const sdx = dx + snap.snapX;
         const sdy = dy + snap.snapY;
 
         dragStart.widgetPositions.forEach(pos => {
           const ww = AppState.getWidget(pos.id);
           if (ww && !ww.locked) {
-            AppState.moveWidget(pos.id, pos.x + sdx, pos.y + sdy);
+            let newX = pos.x + sdx;
+            let newY = pos.y + sdy;
+            // 如果有父控件，允许自由坐标（子控件可以超出父控件区域，超出部分由clip-path裁剪）
+            const page = AppState.getCurrentPage();
+            if (page && ww.parentId) {
+              // 不限制坐标范围，超出父控件区域的部分由渲染时的 clip-path 自动裁剪
+            }
+            AppState.moveWidget(pos.id, newX, newY);
+            // 子控件不需要显式移动：它们的相对位置不变，
+            // 渲染时 getWidgetAbsPos 会自动加上父控件的位移，视觉上自然跟随
           }
         });
       }
@@ -1209,6 +1655,7 @@ document.addEventListener('mouseup', () => {
     isDragging = false;
     AppState.endBatch(); // 拖动结束
     snapLines = [];
+    snapLinesWidgetId = null;
     renderSnapLines();
   }
   if (isResizing) {
@@ -1295,7 +1742,19 @@ function renderWidgetProps() {
   // 位置与尺寸（通用）
   html += `<div class="form-group"><label class="form-label">位置与尺寸</label></div>`;
   html += `<div class="form-row"><div class="form-group"><label class="form-label">X</label><input type="number" class="form-input" data-prop="x" value="${w.x}" /></div><div class="form-group"><label class="form-label">Y</label><input type="number" class="form-input" data-prop="y" value="${w.y}" /></div></div>`;
-  html += `<div class="form-row" style="margin-bottom:12px;"><div class="form-group"><label class="form-label">宽度</label><input type="number" class="form-input" data-prop="width" value="${w.width}" min="20" /></div><div class="form-group"><label class="form-label">高度</label><input type="number" class="form-input" data-prop="height" value="${w.height}" min="20" /></div></div>`;
+  html += `<div class="form-row" style="margin-bottom:8px;"><div class="form-group"><label class="form-label">宽度</label><input type="number" class="form-input" data-prop="width" value="${w.width}" min="20" /></div><div class="form-group"><label class="form-label">高度</label><input type="number" class="form-input" data-prop="height" value="${w.height}" min="20" /></div></div>`;
+
+  // 父对象选择器：空选项 = 当前页面
+  const currentPage = AppState.project.pages.find(p => p.id === AppState.currentPageId);
+  const pageName = currentPage ? currentPage.name : '页面';
+  const siblings = currentPage ? currentPage.widgets.filter(w2 => w2.id !== w.id) : [];
+  html += `<div class="form-group"><label class="form-label">📦 父对象</label>`;
+  html += `<select class="form-select" data-prop="parentId">`;
+  html += `<option value="">📄 ${pageName}（顶级）</option>`;
+  siblings.forEach(s => {
+    html += `<option value="${s.id}" ${w.parentId === s.id ? 'selected' : ''}>${s.id} (${s.type})</option>`;
+  });
+  html += `</select></div>`;
 
   // 锁定控件开关（在最上面，位置与尺寸之后）
   const hasLocked = propList.includes('locked');
@@ -1305,6 +1764,7 @@ function renderWidgetProps() {
 
   // 根据 properties 列表 + PROP_META 动态渲染属性（跳过 locked，已在上面显示）
   let inFontSection = false;
+  let inEventSection = false;
   propList.forEach(prop => {
     if (prop === 'locked') return;
     const meta = PROP_META[prop];
@@ -1328,31 +1788,12 @@ function renderWidgetProps() {
       html += `<div class="form-group"><label class="form-label">${label}</label><div class="switch-input ${rawVal ? 'on' : ''}" data-prop="${prop}" data-bool="1" style="cursor:pointer;"></div></div>`;
     } else if (meta.type === 'select') {
       if (prop === 'fontFamily') {
-        // 字体选择：内置字体 + 项目资源字体 + "其他字体..."选项
-        const knownFonts = [
-          ['simsun.ttc', '宋体'],
-          ['simhei.ttf', '黑体'],
-          ['simkai.ttf', '楷体'],
-          ['simsunb.ttf', '宋体加粗'],
-          ['msyh.ttf', '微软雅黑'],
-          ['arial.ttf', 'Arial'],
-          ['DejaVuSans.ttf', 'DejaVu Sans'],
-          ['sourcehansans.ttf', '思源黑体'],
-          ['notosanscjk.ttf', 'Noto Sans CJK'],
-          ['default', '默认字体']
-        ];
-        // 项目资源中的字体
+        // 字体选择：只显示项目资源中的字体
         const projectFonts = (AppState.project.resources && AppState.project.resources.fonts) || [];
         const currentVal = rawVal || '';
-        const isKnown = knownFonts.some(f => f[0] === currentVal);
-        const isProjectFont = projectFonts.some(f => f.path === currentVal);
-        const isCustom = !isKnown && !isProjectFont && currentVal;
         html += `<div class="form-group"><label class="form-label">${label}</label>`;
         html += `<select class="form-select" data-prop="fontFamily">`;
-        knownFonts.forEach(([optVal, optLabel]) => {
-          html += `<option value="${optVal}" ${currentVal === optVal ? 'selected' : ''}>${optLabel}</option>`;
-        });
-        // 项目资源字体
+        html += `<option value="">无</option>`;
         if (projectFonts.length > 0) {
           html += `<optgroup label="项目字体">`;
           projectFonts.forEach(f => {
@@ -1360,11 +1801,24 @@ function renderWidgetProps() {
           });
           html += `</optgroup>`;
         }
-        // 自定义字体选项放在底部
-        if (isCustom) {
+        html += `</select></div>`;
+      } else if (prop === 'pixmap') {
+        // 图片选择：项目资源图片列表
+        const projectImages = (AppState.project.resources && AppState.project.resources.images) || [];
+        const currentVal = rawVal || '';
+        html += `<div class="form-group"><label class="form-label">${label}</label>`;
+        html += `<select class="form-select" data-prop="pixmap">`;
+        html += `<option value="">无</option>`;
+        if (projectImages.length > 0) {
+          html += `<optgroup label="项目图片">`;
+          projectImages.forEach(img => {
+            html += `<option value="${escapeAttr(img.path)}" ${currentVal === img.path ? 'selected' : ''}>${escapeHtml(img.name)}</option>`;
+          });
+          html += `</optgroup>`;
+        }
+        if (currentVal && !projectImages.some(img => img.path === currentVal)) {
           html += `<option value="${escapeAttr(currentVal)}" selected>${escapeHtml(currentVal)}</option>`;
         }
-        html += `<option value="__custom__">其他字体...</option>`;
         html += `</select></div>`;
       } else {
         html += `<div class="form-group"><label class="form-label">${label}</label><select class="form-select" data-prop="${prop}">`;
@@ -1385,7 +1839,95 @@ function renderWidgetProps() {
     }
   });
 
+  // 动态添加事件属性（可添加/删除的事件列表）
+  const supportedEvents = WIDGET_EVENTS[w.type] || [];
+  if (supportedEvents.length > 0) {
+    html += `<div class="form-group" style="margin-top:10px;margin-bottom:4px;display:flex;align-items:center;justify-content:space-between;">`;
+    html += `<label class="form-label" style="font-weight:600;color:#22d3ee;font-size:12px;margin:0;">⚡ 事件绑定</label>`;
+    html += `<button type="button" id="add-event-btn" style="background:#22d3ee22;color:#22d3ee;border:1px solid #22d3ee44;border-radius:4px;padding:2px 8px;font-size:11px;cursor:pointer;">+ 添加事件</button>`;
+    html += `</div>`;
+
+    const events = w.events || [];
+    events.forEach((evt, idx) => {
+      html += `<div class="form-group event-item" style="display:flex;gap:4px;align-items:center;">`;
+      // 事件类型下拉
+      html += `<select class="form-select event-type-select" data-event-idx="${idx}" style="flex:1;font-size:11px;padding:4px 6px;">`;
+      supportedEvents.forEach(ep => {
+        const meta = PROP_META[ep];
+        if (!meta) return;
+        html += `<option value="${ep}" ${evt.type === ep ? 'selected' : ''}>${meta.label}</option>`;
+      });
+      html += `</select>`;
+      // 回调函数名输入
+      html += `<input type="text" class="form-input event-cb-input" data-event-idx="${idx}" placeholder="回调函数名" value="${escapeAttr(evt.callback || '')}" style="flex:1;font-size:11px;padding:4px 6px;" />`;
+      // 删除按钮
+      html += `<button type="button" class="remove-event-btn" data-event-idx="${idx}" style="background:none;color:#ef4444;border:none;cursor:pointer;font-size:14px;padding:2px 4px;">✕</button>`;
+      html += `</div>`;
+    });
+
+    if (events.length === 0) {
+      html += `<div style="font-size:11px;color:var(--text-muted);padding:4px 0;">点击"添加事件"为控件绑定事件回调</div>`;
+    }
+  }
+
   widgetPropContent.innerHTML = html;
+
+  // 绑定事件添加/删除/修改
+  const addEventBtn = document.getElementById('add-event-btn');
+  if (addEventBtn) {
+    addEventBtn.addEventListener('click', () => {
+      const wgt = AppState.getWidget(AppState.selectedWidgetId);
+      if (!wgt) return;
+      const supportedEvts = WIDGET_EVENTS[wgt.type] || [];
+      const newEvents = [...(wgt.events || []), { type: supportedEvts[0] || 'onPressed', callback: '' }];
+      AppState.updateWidget(AppState.selectedWidgetId, { events: newEvents });
+    });
+  }
+
+  widgetPropContent.querySelectorAll('.remove-event-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const wgt = AppState.getWidget(AppState.selectedWidgetId);
+      if (!wgt) return;
+      const idx = parseInt(btn.dataset.eventIdx);
+      const newEvents = [...(wgt.events || [])];
+      newEvents.splice(idx, 1);
+      AppState.updateWidget(AppState.selectedWidgetId, { events: newEvents });
+    });
+  });
+
+  widgetPropContent.querySelectorAll('.event-type-select').forEach(sel => {
+    sel.addEventListener('change', () => {
+      const wgt = AppState.getWidget(AppState.selectedWidgetId);
+      if (!wgt) return;
+      const idx = parseInt(sel.dataset.eventIdx);
+      const newEvents = [...(wgt.events || [])];
+      newEvents[idx] = { ...newEvents[idx], type: sel.value };
+      // 直接更新数据，不重建面板
+      wgt.events = newEvents;
+      AppState.save();
+    });
+  });
+
+  widgetPropContent.querySelectorAll('.event-cb-input').forEach(input => {
+    input.addEventListener('input', () => {
+      const wgt = AppState.getWidget(AppState.selectedWidgetId);
+      if (!wgt) return;
+      const idx = parseInt(input.dataset.eventIdx);
+      const newEvents = [...(wgt.events || [])];
+      newEvents[idx] = { ...newEvents[idx], callback: input.value };
+      // 直接更新数据，不重建面板
+      wgt.events = newEvents;
+      AppState.save();
+    });
+    input.addEventListener('blur', () => {
+      const wgt = AppState.getWidget(AppState.selectedWidgetId);
+      if (!wgt) return;
+      const idx = parseInt(input.dataset.eventIdx);
+      const newEvents = [...(wgt.events || [])];
+      newEvents[idx] = { ...newEvents[idx], callback: input.value };
+      AppState.updateWidget(AppState.selectedWidgetId, { events: newEvents });
+    });
+  });
 
   // 绑定事件
   widgetPropContent.querySelectorAll('[data-prop]').forEach(input => {
@@ -1401,71 +1943,87 @@ function renderWidgetProps() {
       return;
     }
 
-    input.addEventListener('input', () => {
-      let val;
-      if (input.type === 'number') val = parseFloat(input.value) || 0;
-      else if (input.type === 'select-one') val = input.value;
-      else val = input.value;
+    // parentId 不需要 input 事件（由 change 事件处理），其他属性绑定 input 事件
+    if (prop !== 'parentId') {
+      input.addEventListener('input', () => {
+        let val;
+        if (input.type === 'number') val = parseFloat(input.value) || 0;
+        else if (input.type === 'select-one') val = input.value;
+        else val = input.value;
 
-      // 直接更新控件数据，不触发属性面板重建（避免输入框丢失焦点）
-      const w = AppState.getWidget(AppState.selectedWidgetId);
-      if (w) {
-        w[prop] = val;
-        // 只刷新画布和图层，不重建属性面板
-        renderCanvas();
-        renderLayerList();
-        renderStatus();
-        AppState.save();
-      }
+        // 直接更新控件数据，不触发属性面板重建（避免输入框丢失焦点）
+        const w = AppState.getWidget(AppState.selectedWidgetId);
+        if (w) {
+          w[prop] = val;
+          // 只刷新画布和图层，不重建属性面板
+          renderCanvas();
+          renderLayerList();
+          renderStatus();
+          AppState.save();
+        }
 
-      // 同步颜色输入
-      if (isColor) {
-        const txt = widgetPropContent.querySelector(`[data-prop="${prop}"]:not([data-clr])`);
-        if (txt && /^#[0-9a-f]{6}$/i.test(val)) txt.value = val;
-      } else if (widgetPropContent.querySelector(`[data-prop="${prop}"][data-clr]`)) {
-        const clr = widgetPropContent.querySelector(`[data-prop="${prop}"][data-clr]`);
-        if (/^#[0-9a-f]{6}$/i.test(val)) clr.value = val;
-      }
-    });
+        // 同步颜色输入
+        if (isColor) {
+          const txt = widgetPropContent.querySelector(`[data-prop="${prop}"]:not([data-clr])`);
+          if (txt && /^#[0-9a-f]{6}$/i.test(val)) txt.value = val;
+        } else if (widgetPropContent.querySelector(`[data-prop="${prop}"][data-clr]`)) {
+          const clr = widgetPropContent.querySelector(`[data-prop="${prop}"][data-clr]`);
+          if (/^#[0-9a-f]{6}$/i.test(val)) clr.value = val;
+        }
+      });
 
-    // 失焦时完整刷新（同步最终值）
-    input.addEventListener('blur', () => {
-      let val;
-      if (input.type === 'number') val = parseFloat(input.value) || 0;
-      else if (input.type === 'select-one') val = input.value;
-      else val = input.value;
-      AppState.updateWidget(AppState.selectedWidgetId, { [prop]: val });
-    });
+      // 失焦时完整刷新（同步最终值）- parentId 由 change 事件处理，跳过
+      input.addEventListener('blur', () => {
+        let val;
+        if (input.type === 'number') val = parseFloat(input.value) || 0;
+        else if (input.type === 'select-one') val = input.value;
+        else val = input.value;
+        AppState.updateWidget(AppState.selectedWidgetId, { [prop]: val });
+      });
+    }
 
     // select 用 change
     if (input.tagName === 'SELECT') {
       input.addEventListener('change', async () => {
         let val = input.value;
 
-        // 字体选择中的"其他字体..."：打开文件选择器
-        if (prop === 'fontFamily' && val === '__custom__') {
-          try {
-            const wgt = AppState.getWidget(AppState.selectedWidgetId);
-            const previousFont = wgt ? wgt.fontFamily : '';
-            // 使用 Tauri 文件对话框选择字体文件
-            const selected = await open({
-              title: '选择字体文件',
-              filters: [{ name: '字体文件', extensions: ['ttf', 'otf', 'ttc', 'woff', 'woff2'] }],
-              multiple: false
-            });
-            if (selected) {
-              // 保存完整路径
-              AppState.updateWidget(AppState.selectedWidgetId, { fontFamily: selected });
-              renderWidgetProps();
+        // parentId 变更：转换位置（绝对 ↔ 相对），并约束子控件在父控件区域内
+        if (prop === 'parentId') {
+          const w = AppState.getWidget(AppState.selectedWidgetId);
+          const page = AppState.getCurrentPage();
+          if (w && page) {
+            if (val && val !== '') {
+              // 设置父对象：将当前绝对位置转换为相对于新父对象的相对位置
+              const parent = page.widgets.find(p => p.id === val);
+              if (parent) {
+                const parentAbs = getWidgetAbsPos(parent, page);
+                // 新相对位置 = 当前绝对位置 - 父对象绝对位置
+                let relX = w.x - parentAbs.x;
+                let relY = w.y - parentAbs.y;
+                // 子控件继承父控件的 zOrder，确保作为同一层级组
+                const newZOrder = (parent.zOrder != null ? parent.zOrder : 0);
+                AppState.updateWidget(AppState.selectedWidgetId, { parentId: val, x: relX, y: relY, zOrder: newZOrder });
+              }
             } else {
-              // 用户取消，保留上次选择
-              renderWidgetProps();
+              // 移除父对象：将相对位置转换为绝对位置
+              if (w.parentId) {
+                const oldParent = page.widgets.find(p => p.id === w.parentId);
+                if (oldParent) {
+                  const parentAbs = getWidgetAbsPos(oldParent, page);
+                  // 新绝对位置 = 当前相对位置 + 父对象绝对位置
+                  const absX = w.x + parentAbs.x;
+                  const absY = w.y + parentAbs.y;
+                  AppState.updateWidget(AppState.selectedWidgetId, { parentId: '', x: absX, y: absY });
+                } else {
+                  AppState.updateWidget(AppState.selectedWidgetId, { parentId: '' });
+                }
+              }
             }
-          } catch (err) {
-            console.error('选择字体文件失败:', err);
-            // 出错也恢复
-            renderWidgetProps();
           }
+          renderCanvas();
+          renderLayerList();
+          renderStatus();
+          AppState.save();
           return;
         }
 
@@ -1476,8 +2034,9 @@ function renderWidgetProps() {
   });
 }
 
-// ============ 图层列表：树形结构（页面为父节点，控件为子节点）============
+// ============ 图层列表：树形结构（页面 → 父控件 → 子控件）============
 const expandedPages = new Set();
+const expandedWidgets = new Set();
 
 function renderLayerList() {
   layerList.innerHTML = '';
@@ -1552,15 +2111,43 @@ function renderLayerList() {
 
     pageNode.appendChild(pageRow);
 
-    // 控件子节点（仅当展开时显示）
+    // 控件子节点（仅当展开时显示）—— 树形结构
     if (hasWidgets && isExpanded) {
       const children = document.createElement('div');
       children.className = 'tree-children';
 
-      page.widgets.forEach((w) => {
+      // 递归渲染控件树：只渲染顶级控件（无 parentId 的），子控件嵌套在父控件下
+      const widgetMap = new Map();
+      page.widgets.forEach(w => widgetMap.set(w.id, w));
+
+      function renderWidgetNode(w, container, depth) {
         const typeInfo = SGL_WIDGET_TYPES.find(t => t.type === w.type);
+        const hasChildren = page.widgets.some(cw => cw.parentId === w.id);
+        const isWidgetExpanded = expandedWidgets.has(w.id);
+
+        // 每个控件节点用一个 wrapper 包裹（行 + 子节点容器）
+        const nodeWrapper = document.createElement('div');
+        nodeWrapper.className = 'tree-node';
+
         const widgetRow = document.createElement('div');
         widgetRow.className = 'tree-row tree-widget-row' + (AppState.selectedWidgetIds.has(w.id) ? ' active' : '');
+
+        // 箭头（有子控件时显示）
+        const wArrow = document.createElement('span');
+        wArrow.className = 'tree-arrow' + (isWidgetExpanded ? ' open' : '');
+        if (!hasChildren) wArrow.style.visibility = 'hidden';
+        wArrow.textContent = '▶';
+        wArrow.style.fontSize = '8px';
+        wArrow.style.marginRight = '2px';
+        if (hasChildren) {
+          wArrow.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (expandedWidgets.has(w.id)) expandedWidgets.delete(w.id);
+            else expandedWidgets.add(w.id);
+            renderLayerList();
+          });
+        }
+        widgetRow.appendChild(wArrow);
 
         // 控件类型小图标
         const wIcon = document.createElement('span');
@@ -1579,10 +2166,32 @@ function renderLayerList() {
           if (AppState.currentPageId !== page.id) {
             AppState.setCurrentPage(page.id);
           }
-          AppState.selectWidget(w.id, e.ctrlKey || e.metaKey);
+          // 点击已选中的控件取消选中，点击未选中的控件选中
+          if (AppState.selectedWidgetIds.has(w.id)) {
+            AppState.selectWidget(null);
+          } else {
+            AppState.selectWidget(w.id, e.ctrlKey || e.metaKey);
+          }
         });
 
-        children.appendChild(widgetRow);
+        nodeWrapper.appendChild(widgetRow);
+
+        // 渲染子控件（嵌套在当前节点的 wrapper 内）
+        if (hasChildren && isWidgetExpanded) {
+          const childContainer = document.createElement('div');
+          childContainer.className = 'tree-children';
+          page.widgets.filter(cw => cw.parentId === w.id).forEach(cw => {
+            renderWidgetNode(cw, childContainer, depth + 1);
+          });
+          nodeWrapper.appendChild(childContainer);
+        }
+
+        container.appendChild(nodeWrapper);
+      }
+
+      // 只渲染顶级控件（parentId 为空或指向不存在的控件）
+      page.widgets.filter(w => !w.parentId || !widgetMap.has(w.parentId)).forEach(w => {
+        renderWidgetNode(w, children, 0);
       });
 
       pageNode.appendChild(children);
@@ -1598,6 +2207,7 @@ function renderProjectPanel() {
   el('prop-project-name', AppState.project.name);
   el('prop-screen-w', AppState.project.screen_width);
   el('prop-screen-h', AppState.project.screen_height);
+  el('prop-screen-shape', AppState.project.screen_shape || 'rect');
   el('prop-color-depth', AppState.project.color_depth);
 
   const page = AppState.getCurrentPage();
@@ -1605,6 +2215,26 @@ function renderProjectPanel() {
     el('prop-page-name', page.name);
     el('prop-page-bgcolor', page.bg_color || '#1e1e2e');
     el('prop-page-bgcolor-text', page.bg_color || '#1e1e2e');
+    el('prop-page-alpha', (page.alpha != null && page.alpha !== undefined) ? page.alpha : 255);
+
+    // 填充背景图片下拉框
+    const pixmapSelect = document.getElementById('prop-page-pixmap');
+    if (pixmapSelect) {
+      const projectImages = (AppState.project.resources && AppState.project.resources.images) || [];
+      const currentPixmap = page.pixmap || '';
+      let optionsHtml = '<option value="">无</option>';
+      if (projectImages.length > 0) {
+        optionsHtml += '<optgroup label="项目图片">';
+        projectImages.forEach(img => {
+          optionsHtml += `<option value="${escapeAttr(img.path)}" ${currentPixmap === img.path ? 'selected' : ''}>${escapeHtml(img.name)}</option>`;
+        });
+        optionsHtml += '</optgroup>';
+      }
+      if (currentPixmap && !projectImages.some(img => img.path === currentPixmap)) {
+        optionsHtml += `<option value="${escapeAttr(currentPixmap)}" selected>${escapeHtml(currentPixmap)}</option>`;
+      }
+      pixmapSelect.innerHTML = optionsHtml;
+    }
   }
 }
 
@@ -1854,8 +2484,37 @@ document.addEventListener('mouseup', (e) => {
 
 // 项目属性
 document.getElementById('prop-project-name').addEventListener('change', e => { AppState.project.name = e.target.value; AppState.save(); renderStatus(); });
-document.getElementById('prop-screen-w').addEventListener('change', e => { AppState.updateProject({ screen_width: parseInt(e.target.value) || 480 }); });
-document.getElementById('prop-screen-h').addEventListener('change', e => { AppState.updateProject({ screen_height: parseInt(e.target.value) || 320 }); });
+document.getElementById('prop-screen-w').addEventListener('change', e => {
+  const w = parseInt(e.target.value) || 480;
+  AppState.updateProject({ screen_width: w });
+  // 圆形时同步高度
+  if (AppState.project.screen_shape === 'circle') {
+    document.getElementById('prop-screen-h').value = w;
+    AppState.updateProject({ screen_height: w });
+  }
+});
+document.getElementById('prop-screen-h').addEventListener('change', e => {
+  const h = parseInt(e.target.value) || 320;
+  AppState.updateProject({ screen_height: h });
+  // 圆形时同步宽度
+  if (AppState.project.screen_shape === 'circle') {
+    document.getElementById('prop-screen-w').value = h;
+    AppState.updateProject({ screen_width: h });
+  }
+});
+document.getElementById('prop-screen-shape').addEventListener('change', e => {
+  AppState.project.screen_shape = e.target.value;
+  // 切换为圆形时，宽度和高度自动同步为相同的值（取最大值）
+  if (e.target.value === 'circle') {
+    const size = Math.max(AppState.project.screen_width, AppState.project.screen_height);
+    document.getElementById('prop-screen-w').value = size;
+    document.getElementById('prop-screen-h').value = size;
+    AppState.updateProject({ screen_width: size, screen_height: size });
+  } else {
+    AppState.save();
+    renderCanvas();
+  }
+});
 document.getElementById('prop-color-depth').addEventListener('change', e => { AppState.project.color_depth = e.target.value; AppState.save(); });
 
 // 页面属性
@@ -1872,6 +2531,14 @@ document.getElementById('prop-page-bgcolor-text').addEventListener('change', e =
   if (page && /^#[0-9a-f]{6}$/i.test(e.target.value)) {
     page.bg_color = e.target.value; document.getElementById('prop-page-bgcolor').value = e.target.value; AppState.save(); renderCanvas();
   }
+});
+document.getElementById('prop-page-pixmap').addEventListener('change', e => {
+  const page = AppState.getCurrentPage();
+  if (page) { page.pixmap = e.target.value; AppState.save(); renderCanvas(); }
+});
+document.getElementById('prop-page-alpha').addEventListener('change', e => {
+  const page = AppState.getCurrentPage();
+  if (page) { page.alpha = parseInt(e.target.value) || 0; AppState.save(); renderCanvas(); }
 });
 
 // 保存与导出
@@ -1903,25 +2570,88 @@ document.getElementById('btn-save').addEventListener('click', async () => {
   }
 });
 
-document.getElementById('btn-export').addEventListener('click', async () => {
+// ============ 编译相关按钮 ============
+
+// 确保项目已保存，返回项目路径
+async function ensureProjectSaved() {
   if (!AppState.projectPath) {
-    showToast('请先保存项目，再导出代码', 'error');
-    logMessage('导出失败: 请先保存项目', 'warn');
-    return;
+    showToast('请先保存项目', 'error');
+    logMessage('操作失败: 项目未保存', 'warn');
+    return null;
   }
+  // 自动保存
+  const result = await AppState.saveProject();
+  if (!result.ok) {
+    showToast('保存项目失败: ' + result.msg, 'error');
+    return null;
+  }
+  return AppState.projectPath;
+}
+
+document.getElementById('btn-export-code').addEventListener('click', async () => {
+  const projectPath = await ensureProjectSaved();
+  if (!projectPath) return;
   try {
     logMessage('正在导出代码...', 'info');
-    const result = await AppState.exportCode();
-    if (result.ok) {
-      showToast('代码已导出到: ' + result.path.split(/[/\\]/).pop(), 'success');
-      logMessage('代码已导出: ' + result.path, 'success');
-    } else {
-      showToast('导出失败: ' + result.msg, 'error');
-      logMessage('导出失败: ' + result.msg, 'error');
-    }
+    const result = await invoke('export_code_to_project', { project: AppState.project, projectPath });
+    showToast('代码已导出', 'success');
+    logMessage(result, 'success');
   } catch (e) {
     showToast('导出失败: ' + e, 'error');
     logMessage('导出失败: ' + e, 'error');
+  }
+});
+
+document.getElementById('btn-build-run').addEventListener('click', async () => {
+  const projectPath = await ensureProjectSaved();
+  if (!projectPath) return;
+  try {
+    // 先检查工具链
+    const check = await invoke('check_toolchain', { projectPath });
+
+    if (!check.gcc_found) {
+      showToast('未找到 gcc，请安装 MinGW 并添加到系统 PATH', 'error');
+      logMessage('运行失败: 未找到 gcc，请安装 MinGW 并将 bin 目录添加到系统环境变量 PATH 中', 'error');
+      return;
+    }
+    if (!check.cmake_found) {
+      showToast('未找到 cmake，请安装 CMake 并添加到系统 PATH', 'error');
+      logMessage('运行失败: 未找到 cmake', 'error');
+      return;
+    }
+
+    // 如果 sgl-port 项目不存在，先克隆
+    if (!check.sgl_port_exists) {
+      if (!check.git_found) {
+        showToast('未找到 git，请安装 Git', 'error');
+        logMessage('运行失败: 未找到 git，无法自动克隆 sgl-port 项目', 'error');
+        return;
+      }
+      logMessage('正在克隆 sgl-port-windows-vscode 项目...', 'info');
+      showToast('正在克隆 sgl-port 项目，请稍候...', 'info');
+      try {
+        const cloneResult = await invoke('clone_sgl_port', { projectPath });
+        logMessage(cloneResult, 'success');
+      } catch (e) {
+        showToast('克隆失败: ' + e, 'error');
+        logMessage('克隆失败: ' + e, 'error');
+        return;
+      }
+    }
+
+    // 编译
+    logMessage('正在编译项目...', 'info');
+    showToast('正在编译，请稍候...', 'info');
+    const buildResult = await invoke('build_project', { project: AppState.project, projectPath });
+    logMessage(buildResult, 'success');
+
+    // 运行模拟器
+    const runResult = await invoke('run_simulator', { projectPath });
+    showToast(runResult, 'success');
+    logMessage(runResult, 'success');
+  } catch (e) {
+    showToast('运行失败: ' + e, 'error');
+    logMessage('运行失败: ' + e, 'error');
   }
 });
 
@@ -1943,6 +2673,23 @@ document.addEventListener('keydown', (e) => {
   if ((e.key === 'Delete' || e.key === 'Backspace') && AppState.selectedWidgetIds.size > 0 && !inInput) {
     e.preventDefault();
     AppState.removeSelectedWidgets();
+  }
+  // 方向键移动选中控件
+  if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key) && AppState.selectedWidgetIds.size > 0 && !inInput) {
+    e.preventDefault();
+    const step = e.shiftKey ? 10 : 1;
+    AppState.beginBatch();
+    AppState.selectedWidgetIds.forEach(id => {
+      const w = AppState.getWidget(id);
+      if (w && !w.locked) {
+        let nx = w.x, ny = w.y;
+        if (e.key === 'ArrowUp') ny -= step;
+        if (e.key === 'ArrowDown') ny += step;
+        if (e.key === 'ArrowLeft') nx -= step;
+        if (e.key === 'ArrowRight') nx += step;
+        AppState.moveWidget(id, nx, ny);
+      }
+    });
   }
   if (e.key === 'Escape') AppState.selectWidget(null);
   if (e.ctrlKey && e.key === 'a') {
@@ -2103,6 +2850,20 @@ contextMenu.addEventListener('click', (e) => {
     .map(id => page.widgets.find(w => w.id === id))
     .filter(Boolean);
 
+  // 如果没有选中控件，检查是否右键点击了某个控件
+  if (selectedWidgets.length === 0) {
+    // 右键菜单的坐标在 canvas 坐标系中，需要从 e.clientX/Y 计算
+    const rect = canvas.getBoundingClientRect();
+    const menuX = (parseFloat(contextMenu.style.left) - rect.left) / AppState.zoom;
+    const menuY = (parseFloat(contextMenu.style.top) - rect.top) / AppState.zoom;
+    const clickedWidget = [...page.widgets].reverse().find(w =>
+      menuX >= w.x && menuX <= w.x + w.width && menuY >= w.y && menuY <= w.y + w.height
+    );
+    if (clickedWidget) {
+      selectedWidgets.push(clickedWidget);
+    }
+  }
+
   if (selectedWidgets.length === 0) return;
 
   switch (action) {
@@ -2166,6 +2927,104 @@ contextMenu.addEventListener('click', (e) => {
       AppState.notify();
       break;
     }
+    case 'z-order-top':
+    case 'z-order-up':
+    case 'z-order-down':
+    case 'z-order-bottom': {
+      // 层级调整：调整选中控件所在组的 zOrder（改变所有根祖先的 zOrder）
+      const widgetMap = new Map();
+      page.widgets.forEach(w => widgetMap.set(w.id, w));
+
+      // 找到所有根祖先（组标识）
+      const rootSet = new Set();
+      selectedWidgets.forEach(w => {
+        let current = w;
+        while (current.parentId && widgetMap.has(current.parentId)) {
+          current = widgetMap.get(current.parentId);
+        }
+        rootSet.add(current.id);
+      });
+
+      // 收集所有组的 zOrder
+      const groupZOrders = new Map();
+      page.widgets.forEach(w => {
+        let current = w;
+        while (current.parentId && widgetMap.has(current.parentId)) {
+          current = widgetMap.get(current.parentId);
+        }
+        groupZOrders.set(current.id, current.zOrder != null ? current.zOrder : 0);
+      });
+
+      const maxZ = Math.max(...groupZOrders.values());
+      const minZ = Math.min(...groupZOrders.values());
+
+      if (action === 'z-order-top') {
+        // 置顶：所有选中组的 zOrder = max + 1
+        rootSet.forEach(id => {
+          const root = widgetMap.get(id);
+          if (root) root.zOrder = maxZ + 1;
+        });
+      } else if (action === 'z-order-bottom') {
+        // 置底：所有选中组的 zOrder = min - 1
+        rootSet.forEach(id => {
+          const root = widgetMap.get(id);
+          if (root) root.zOrder = minZ - 1;
+        });
+      } else if (action === 'z-order-up') {
+        // 上移一层：找到 zOrder 比当前组大的最小 zOrder，与其交换
+        rootSet.forEach(id => {
+          const root = widgetMap.get(id);
+          if (!root) return;
+          const currentZ = root.zOrder != null ? root.zOrder : 0;
+          // 找到 zOrder 比 currentZ 大的其他组的最小 zOrder
+          let nextZ = null;
+          groupZOrders.forEach((z, gid) => {
+            if (z > currentZ && (nextZ === null || z < nextZ)) {
+              nextZ = z;
+            }
+          });
+          if (nextZ !== null) {
+            // 交换：当前组和 zOrder=nextZ 的组交换
+            root.zOrder = nextZ;
+            groupZOrders.forEach((z, gid) => {
+              if (z === nextZ) {
+                const otherRoot = widgetMap.get(gid);
+                if (otherRoot && !rootSet.has(gid)) {
+                  otherRoot.zOrder = currentZ;
+                }
+              }
+            });
+          }
+        });
+      } else if (action === 'z-order-down') {
+        // 下移一层：找到 zOrder 比当前组小的最大 zOrder，与其交换
+        rootSet.forEach(id => {
+          const root = widgetMap.get(id);
+          if (!root) return;
+          const currentZ = root.zOrder != null ? root.zOrder : 0;
+          // 找到 zOrder 比 currentZ 小的其他组的最大 zOrder
+          let prevZ = null;
+          groupZOrders.forEach((z, gid) => {
+            if (z < currentZ && (prevZ === null || z > prevZ)) {
+              prevZ = z;
+            }
+          });
+          if (prevZ !== null) {
+            root.zOrder = prevZ;
+            groupZOrders.forEach((z, gid) => {
+              if (z === prevZ) {
+                const otherRoot = widgetMap.get(gid);
+                if (otherRoot && !rootSet.has(gid)) {
+                  otherRoot.zOrder = currentZ;
+                }
+              }
+            });
+          }
+        });
+      }
+      AppState.notify();
+      break;
+    }
     case 'copy': {
       clipboardWidgets = [];
       AppState.selectedWidgetIds.forEach(id => {
@@ -2201,6 +3060,23 @@ contextMenu.addEventListener('click', (e) => {
       break;
     }
     case 'delete': {
+      // 检查是否有子控件
+      const children = [];
+      selectedWidgets.forEach(w => {
+        const childList = page.widgets.filter(cw => cw.parentId === w.id);
+        if (childList.length > 0) {
+          children.push(...childList);
+        }
+      });
+
+      if (children.length > 0) {
+        // 有子控件，显示确认对话框
+        const msg = `删除选中的 ${selectedWidgets.length} 个控件时，发现有 ${children.length} 个子控件也会被删除。\n\n确定要删除吗？`;
+        if (!confirm(msg)) {
+          break;
+        }
+      }
+
       AppState.removeSelectedWidgets();
       break;
     }
@@ -2214,6 +3090,7 @@ AppState.subscribe(renderAll);
 
 function renderAll() {
   renderPageTabs();
+  renderPageTabsMini();
   renderCanvas();
   renderLayerList();
   renderResourceList();

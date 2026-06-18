@@ -775,13 +775,31 @@ function drawWidget(w, parentEl) {
   el.dataset.id = w.id;
   el.style.left = (absPos.x * z) + 'px';
   el.style.top = (absPos.y * z) + 'px';
-  el.style.width = (w.width * z) + 'px';
-  el.style.height = (w.height * z) + 'px';
   el.style.boxSizing = 'border-box';
   el.style.position = 'absolute';
   el.style.cursor = 'move';
   el.style.overflow = 'visible'; // 父控件需要 overflow:visible 以显示子控件
   el.style.transition = 'border-color 0.1s';
+
+  // Circle 控件：圆的大小由 radius 决定，半径 = radius，直径 = radius * 2
+  // 如果 radius 未设置（undefined）或为 0，使用 min(width, height) 作为直径
+  if (w.type === 'circle') {
+    const circleDiameter = (w.radius != null && w.radius > 0) ? w.radius * 2 : Math.min(w.width, w.height);
+    el.style.width = (circleDiameter * z) + 'px';
+    el.style.height = (circleDiameter * z) + 'px';
+  } else if (w.type === 'ring') {
+    // Ring 控件：圆环大小由 radiusOut 决定，直径 = radiusOut * 2
+    const ringDiameter = (w.radiusOut != null && w.radiusOut > 0) ? w.radiusOut * 2 : Math.min(w.width, w.height);
+    el.style.width = (ringDiameter * z) + 'px';
+    el.style.height = (ringDiameter * z) + 'px';
+  } else if (w.type === 'arc') {
+    // Arc 控件：元素尺寸使用 widget 的宽高，圆弧居中绘制
+    el.style.width = (w.width * z) + 'px';
+    el.style.height = (w.height * z) + 'px';
+  } else {
+    el.style.width = (w.width * z) + 'px';
+    el.style.height = (w.height * z) + 'px';
+  }
 
   // 选中状态：子控件和父控件的选中样式不同
   const isLocked = w.locked;
@@ -913,13 +931,11 @@ function renderWidgetVisual(el, w) {
 
   switch (w.type) {
     case 'rect': {
-      el.style.background = p('bgColor', 'transparent');
       const borderAlphaVal = p('borderAlpha', 255);
-      const borderColor = p('borderColor', 'transparent');
-      const borderWidth = p('borderWidth', 0) * z;
+      const borderColor = p('borderColor', '#000000');
+      const borderWidth = p('borderWidth', 2) * z;
       // 边框透明度需要用 rgba 格式实现
       if (borderAlphaVal < 255 && borderColor && borderColor !== 'transparent') {
-        // 将 hex 颜色转为 rgba
         const hex2rgba = (hex, alpha) => {
           const r = parseInt(hex.slice(1, 3), 16);
           const g = parseInt(hex.slice(3, 5), 16);
@@ -930,50 +946,78 @@ function renderWidgetVisual(el, w) {
       } else {
         el.style.border = `${borderWidth}px solid ${borderColor}`;
       }
-      el.style.borderRadius = (p('radius', 0) * z) + 'px';
-      el.style.opacity = alphaCss;
-      const rectCol = p('color', '#8b5cf6');
+      const radius = p('radius', 0) * z;
+      el.style.borderRadius = radius + 'px';
+      const rectCol = p('color', '#FFFFFF');
       const mainAlphaVal = p('mainAlpha', 255);
       const mainAlphaCss = mainAlphaVal < 255 ? (mainAlphaVal / 255) : 1;
-      const radius = p('radius', 0) * z;
 
       // 处理图片（pixmap）——value 存的是图片路径
       const pixmap = p('pixmap', '');
       if (pixmap) {
-        // pixmap 存的是完整路径，直接使用
         let imgPath = pixmap;
-        // 转换为 file:// URL
         if (imgPath && !imgPath.startsWith('file://') && !imgPath.startsWith('http')) {
           imgPath = 'file:///' + imgPath.replace(/\\/g, '/');
         }
-        // 图片层 - 直接显示图片，不叠加颜色
         const imgEl = document.createElement('div');
         imgEl.style.cssText = `position:absolute;inset:0;background-image:url('${imgPath}');background-size:cover;background-position:center;border-radius:${radius}px;opacity:${mainAlphaCss};`;
         el.appendChild(imgEl);
       } else if (rectCol && rectCol !== 'transparent') {
-        const inner = document.createElement('div');
-        inner.style.cssText = `position:absolute;inset:0;opacity:${mainAlphaCss};background:${rectCol};border-radius:${radius}px;`;
-        el.appendChild(inner);
+        // SGL: color 是填充色，直接设置为背景，支持透明度
+        if (mainAlphaVal < 255) {
+          const hex2rgba = (hex, alpha) => {
+            const r = parseInt(hex.slice(1, 3), 16);
+            const g = parseInt(hex.slice(3, 5), 16);
+            const b = parseInt(hex.slice(5, 7), 16);
+            return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+          };
+          el.style.background = hex2rgba(rectCol, mainAlphaCss);
+        } else {
+          el.style.background = rectCol;
+        }
+      } else {
+        el.style.background = 'transparent';
       }
       break;
     }
 
     case 'circle': {
-      const r = Math.min(w.width, w.height) / 2;
-      const circleCol = p('color', '#8b5cf6');
-      el.style.background = circleCol;
-      el.style.border = `${p('borderWidth', 0) * z}px solid ${p('borderColor', 'transparent')}`;
+      const circleCol = p('color', '#FFFFFF');
+      const borderW = p('borderWidth', 2) * z;
+      const borderC = p('borderColor', '#000000');
       el.style.borderRadius = '50%';
-      el.style.opacity = alphaCss;
+      // SGL: color 是填充色，border 是描边
+      if (circleCol && circleCol !== 'transparent') {
+        if (alphaCss < 1) {
+          const hex2rgba = (hex, alpha) => {
+            const r = parseInt(hex.slice(1, 3), 16);
+            const g = parseInt(hex.slice(3, 5), 16);
+            const b = parseInt(hex.slice(5, 7), 16);
+            return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+          };
+          el.style.background = hex2rgba(circleCol, alphaCss);
+        } else {
+          el.style.background = circleCol;
+        }
+      } else {
+        el.style.background = 'transparent';
+      }
+      el.style.border = `${borderW}px solid ${borderC}`;
       const xOff = p('xOffset', 0) * z;
       const yOff = p('yOffset', 0) * z;
       if (xOff || yOff) {
         el.style.transform = `translate(${xOff}px, ${yOff}px)`;
       }
-      if (circleCol && circleCol !== 'transparent') {
-        const inner = document.createElement('div');
-        inner.style.cssText = 'position:absolute;inset:0;opacity:0.3;border-radius:50%;background:' + circleCol + ';';
-        el.appendChild(inner);
+      // 处理图片（pixmap）
+      const pixmap = p('pixmap', '');
+      if (pixmap) {
+        let imgPath = pixmap;
+        if (imgPath && !imgPath.startsWith('file://') && !imgPath.startsWith('http')) {
+          imgPath = 'file:///' + imgPath.replace(/\\/g, '/');
+        }
+        const imgEl = document.createElement('div');
+        imgEl.style.cssText = `position:absolute;inset:0;background-image:url('${imgPath}');background-size:cover;background-position:center;border-radius:50%;`;
+        el.appendChild(imgEl);
       }
       break;
     }
@@ -984,9 +1028,33 @@ function renderWidgetVisual(el, w) {
       el.style.borderRadius = '0';
       el.style.opacity = alphaCss;
       const lineEl = document.createElement('div');
-      const lineH = Math.max(2, p('borderWidth', 2)) * z;
-      const lineCol = p('color', '#8b5cf6');
-      lineEl.style.cssText = `position:absolute;left:0;top:50%;transform:translateY(-50%);width:100%;height:${lineH}px;background:${lineCol};border-radius:${lineH / 2}px;`;
+      const lineH = Math.max(1, p('lineWidth', 1)) * z;
+      const lineCol = p('color', '#000000');
+      // line 控件的 x1/y1 就是控件位置，x2/y2 默认由 x1+width/y1+height 计算
+      const absX1 = w.x1 != null ? w.x1 : w.x;
+      const absY1 = w.y1 != null ? w.y1 : w.y;
+      const absX2 = w.x2 != null ? w.x2 : (w.x + w.width);
+      const absY2 = w.y2 != null ? w.y2 : (w.y + w.height);
+      
+      // 转换为相对于控件容器的位置
+      const relX1 = absX1 - w.x;
+      const relY1 = absY1 - w.y;
+      const relX2 = absX2 - w.x;
+      const relY2 = absY2 - w.y;
+      // 斜线的实际长度（勾股定理）
+      const lineLen = Math.sqrt(Math.pow(relX2 - relX1, 2) + Math.pow(relY2 - relY1, 2));
+      const minX = Math.min(relX1, relX2);
+      const minY = Math.min(relY1, relY2);
+      
+      // 使用斜线的实际长度作为宽度
+      lineEl.style.cssText = `position:absolute;left:${minX * z}px;top:${minY * z}px;width:${Math.max(lineLen * z, 1)}px;height:${lineH}px;background:${lineCol};border-radius:${lineH / 2}px;transform-origin:left top;`;
+      
+      // 如果是斜线，使用旋转
+      if (relY1 !== relY2 && Math.abs(relX2 - relX1) > 0) {
+        const angle = Math.atan2(relY2 - relY1, relX2 - relX1) * 180 / Math.PI;
+        lineEl.style.transform = `rotate(${angle}deg)`;
+      }
+      
       if (p('dashed', false)) {
         const dLen = p('dashLen', 10);
         const gLen = p('gapLen', 5);
@@ -997,28 +1065,153 @@ function renderWidgetVisual(el, w) {
     }
 
     case 'ring': {
+      // SGL ring: width = ring 宽度，radius_out = min(w, h) / 2，radius_in = radius_out - width
+      const ringColor = p('color', '#FFFFFF');
+      // 外径由控件宽高决定
+      const radiusOutVal = (w.radiusOut != null && w.radiusOut > 0) ? w.radiusOut : Math.min(w.width, w.height) / 2;
+      // 内径 = 外径 - width (默认 width = 2)
+      const ringWidth = (w.radiusOut != null && w.radiusIn != null) ? (w.radiusOut - w.radiusIn) : 2;
+      const ringW = ringWidth * z;
+      // 元素尺寸：外径 * 2（如果用户显式设置了 radiusOut，使用该值；否则使用控件宽高）
+      if (w.radiusOut != null && w.radiusOut > 0) {
+        el.style.width = (w.radiusOut * 2 * z) + 'px';
+        el.style.height = (w.radiusOut * 2 * z) + 'px';
+      }
       el.style.background = 'transparent';
-      el.style.border = `${p('borderWidth', 4) * z}px solid ${p('color', '#8b5cf6')}`;
+      if (ringColor && ringColor !== 'transparent') {
+        if (alphaCss < 1) {
+          const hex2rgba = (hex, alpha) => {
+            const r = parseInt(hex.slice(1, 3), 16);
+            const g = parseInt(hex.slice(3, 5), 16);
+            const b = parseInt(hex.slice(5, 7), 16);
+            return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+          };
+          el.style.border = `${ringW}px solid ${hex2rgba(ringColor, alphaCss)}`;
+        } else {
+          el.style.border = `${ringW}px solid ${ringColor}`;
+        }
+      } else {
+        el.style.border = `${ringW}px solid transparent`;
+      }
       el.style.borderRadius = '50%';
-      el.style.opacity = alphaCss;
-      el.style.boxShadow = 'inset 0 0 ' + ((Math.min(w.width, w.height) / 2 - p('borderWidth', 4)) * z) + 'px rgba(0,0,0,0.9)';
       break;
     }
 
     case 'arc': {
-      el.style.background = 'transparent';
-      el.style.border = `${p('borderWidth', 4) * z}px solid ${p('color', '#8b5cf6')}`;
-      el.style.borderRadius = '50%';
+      let arcRadiusInVal, arcRadiusOutVal;
+      const arcDiameter = Math.min(w.width, w.height);
+      // SGL: radius_out=-1 表示自动计算为 width/2，radius_in=-1 表示 radius_out - 2
+      if (w.radiusOut == null || w.radiusOut <= 0) {
+        arcRadiusOutVal = Math.round(arcDiameter / 2);
+      } else {
+        arcRadiusOutVal = w.radiusOut;
+      }
+      if (w.radiusIn == null || w.radiusIn <= 0) {
+        arcRadiusInVal = arcRadiusOutVal - 2;
+      } else {
+        arcRadiusInVal = (w.radiusIn < arcRadiusOutVal) ? w.radiusIn : arcRadiusOutVal - 2;
+      }
+      const arcMode = Number(p('mode', 0));
+      const startAngle = Number(p('startAngle', 0));
+      const endAngle = Number(p('endAngle', 360));
+      // SGL: color = SGL_THEME_BG_COLOR (黑色)，bg_color = SGL_THEME_COLOR (白色)
+      const arcColor = p('color', '#000000');
+      const bgColor = p('bgColor', '#FFFFFF');
+
+      let arcAngle = endAngle - startAngle;
+      while (arcAngle < 0) arcAngle += 360;
+      while (arcAngle > 360) arcAngle -= 360;
+
+      const elemW = w.width * z;
+      const elemH = w.height * z;
+      const cx = elemW / 2;
+      const cy = elemH / 2;
+      const rOut = arcRadiusOutVal * z;
+      const rIn = arcRadiusInVal * z;
+
+      el.style.width = elemW + 'px';
+      el.style.height = elemH + 'px';
       el.style.opacity = alphaCss;
-      el.style.clipPath = 'polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%)';
+      el.style.background = 'transparent';
+      el.style.border = 'none';
+      el.style.mask = '';
+      el.style.webkitMask = '';
+
+      // 0度=6点钟方向，顺时针为正。SVG 0度=3点钟方向，顺时针为正。
+      // 转换：SVG角度 = 我们的度数 + 90
+      let svgContent = '';
+      const isFullCircle = (startAngle === 0 && endAngle === 360) || arcAngle >= 360;
+
+      if (isFullCircle) {
+        const rMid = (rOut + rIn) / 2;
+        const strokeW = rOut - rIn;
+        svgContent += `<circle cx="${cx}" cy="${cy}" r="${rMid}" fill="none" stroke="${arcColor}" stroke-width="${strokeW}" />`;
+      } else {
+        const largeArc = arcAngle > 180 ? 1 : 0;
+        const a1 = (startAngle + 90) * Math.PI / 180;
+        const a2 = (endAngle + 90) * Math.PI / 180;
+        const x1Out = cx + rOut * Math.cos(a1);
+        const y1Out = cy + rOut * Math.sin(a1);
+        const x2Out = cx + rOut * Math.cos(a2);
+        const y2Out = cy + rOut * Math.sin(a2);
+        const x1In = cx + rIn * Math.cos(a1);
+        const y1In = cy + rIn * Math.sin(a1);
+        const x2In = cx + rIn * Math.cos(a2);
+        const y2In = cy + rIn * Math.sin(a2);
+
+        if (arcMode === 0 || arcMode === 2) {
+          const pathD = `M ${x1Out} ${y1Out} A ${rOut} ${rOut} 0 ${largeArc} 1 ${x2Out} ${y2Out} L ${x2In} ${y2In} A ${rIn} ${rIn} 0 ${largeArc} 0 ${x1In} ${y1In} Z`;
+          svgContent += `<path d="${pathD}" fill="${arcColor}" />`;
+        } else if (arcMode === 1 || arcMode === 3) {
+          const rMid = (rOut + rIn) / 2;
+          const strokeW = rOut - rIn;
+          svgContent += `<circle cx="${cx}" cy="${cy}" r="${rMid}" fill="none" stroke="${bgColor}" stroke-width="${strokeW}" />`;
+          const pathD = `M ${x1Out} ${y1Out} A ${rOut} ${rOut} 0 ${largeArc} 1 ${x2Out} ${y2Out} L ${x2In} ${y2In} A ${rIn} ${rIn} 0 ${largeArc} 0 ${x1In} ${y1In} Z`;
+          svgContent += `<path d="${pathD}" fill="${arcColor}" />`;
+        }
+      }
+
+      el.innerHTML = `<svg width="${elemW}" height="${elemH}" style="position:absolute;top:0;left:0;">${svgContent}</svg>`;
       break;
     }
 
     case 'polygon': {
-      el.style.background = p('color', '#8b5cf6');
-      el.style.border = `${p('borderWidth', 2) * z}px solid ${p('borderColor', 'transparent')}`;
+      el.style.background = p('fillColor', '#8b5cf6');
+      el.style.border = `${p('borderWidth', 2) * z}px solid ${p('borderColor', '#7c3aed')}`;
       el.style.opacity = alphaCss;
-      el.style.clipPath = 'polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%)';
+      el.style.clipPath = 'none';
+      
+      const vertices = p('vertices', '0,0;50,100;100,0');
+      const coords = vertices.split(';').map(p => p.trim()).filter(p => p);
+      if (coords.length >= 3) {
+        const clipPoints = coords.map(c => {
+          const [x, y] = c.split(',').map(v => parseInt(v.trim()) || 0);
+          return `${(x / w.width * 100)}% ${(y / w.height * 100)}%`;
+        }).join(', ');
+        el.style.clipPath = `polygon(${clipPoints})`;
+      } else {
+        el.style.clipPath = 'polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%)';
+      }
+      
+      const text = p('text', '');
+      if (text) {
+        const textSpan = document.createElement('span');
+        textSpan.textContent = text;
+        textSpan.style.cssText = `
+          position:absolute;
+          top:50%;left:50%;
+          transform:translate(-50%,-50%);
+          color:${p('textColor', '#ffffff')};
+          font-size:${(p('fontSize', 14) * z)}px;
+          font-family:${getCssFontStack(p('fontFamily', 'simsun.ttc'))};
+          pointer-events:none;
+          overflow:hidden;
+          text-overflow:ellipsis;
+          white-space:nowrap;
+          max-width:90%;
+        `;
+        el.appendChild(textSpan);
+      }
       break;
     }
 
@@ -1765,6 +1958,7 @@ function renderWidgetProps() {
   // 根据 properties 列表 + PROP_META 动态渲染属性（跳过 locked，已在上面显示）
   let inFontSection = false;
   let inEventSection = false;
+  
   propList.forEach(prop => {
     if (prop === 'locked') return;
     const meta = PROP_META[prop];
@@ -1775,6 +1969,11 @@ function renderWidgetProps() {
     if (isFontProp && !inFontSection) {
       inFontSection = true;
       html += `<div class="form-group" style="margin-top:10px;margin-bottom:4px;"><label class="form-label" style="font-weight:600;color:var(--accent);font-size:12px;">🔤 字体设置</label></div>`;
+    }
+
+    // 虚线长度和间隔：只在虚线模式下显示
+    if ((prop === 'dashLen' || prop === 'gapLen') && !w.dashed) {
+      return;
     }
 
     const rawVal = w[prop];
@@ -1832,10 +2031,47 @@ function renderWidgetProps() {
     } else if (meta.type === 'text' || prop === 'text') {
       html += `<div class="form-group"><label class="form-label">${label}</label><input type="text" class="form-input" data-prop="${prop}" value="${escapeAttr(rawVal || '')}" /></div>`;
     } else {
-      // number
-      const minStr = meta.min != null ? ` min="${meta.min}"` : '';
-      const maxStr = meta.max != null ? ` max="${meta.max}"` : '';
-      html += `<div class="form-group"><label class="form-label">${label}</label><input type="number" class="form-input" data-prop="${prop}" value="${rawVal != null ? rawVal : 0}"${minStr}${maxStr} /></div>`;
+      // number - 坐标对并排显示（x1+y1, x2+y2）
+      if ((prop === 'x1' || prop === 'x2') && propList.includes(prop)) {
+        const pairProp = prop === 'x1' ? 'y1' : 'y2';
+        const pairMeta = PROP_META[pairProp];
+        const minStr = meta.min != null ? ` min="${meta.min}"` : '';
+        const maxStr = meta.max != null ? ` max="${meta.max}"` : '';
+        const pairMinStr = pairMeta.min != null ? ` min="${pairMeta.min}"` : '';
+        const pairMaxStr = pairMeta.max != null ? ` max="${pairMeta.max}"` : '';
+        // line 控件：x1/y1 显示当前控件位置，x2/y2 显示当前终点坐标
+        let xVal, yVal;
+        if (w.type === 'line') {
+          if (prop === 'x1') {
+            xVal = w.x1 != null ? w.x1 : w.x;
+            yVal = w.y1 != null ? w.y1 : w.y;
+          } else {
+            xVal = w.x2 != null ? w.x2 : (w.x + w.width);
+            yVal = w.y2 != null ? w.y2 : (w.y + w.height);
+          }
+        } else {
+          xVal = rawVal != null ? rawVal : 0;
+          yVal = w[pairProp] != null ? w[pairProp] : 0;
+        }
+        
+        html += `<div class="form-group" style="display:flex;flex-direction:column;">`;
+        html += `<div style="display:flex;gap:8px;">`;
+        html += `<div style="flex:1;display:flex;flex-direction:column;gap:2px;">`;
+        html += `<label style="font-size:10px;color:#94a3b8;">${prop === 'x1' ? 'X1' : 'X2'}</label>`;
+        html += `<input type="number" class="form-input" data-prop="${prop}" value="${xVal}"${minStr}${maxStr} placeholder="${label}" />`;
+        html += `</div>`;
+        html += `<div style="flex:1;display:flex;flex-direction:column;gap:2px;">`;
+        html += `<label style="font-size:10px;color:#94a3b8;">${prop === 'x1' ? 'Y1' : 'Y2'}</label>`;
+        html += `<input type="number" class="form-input" data-prop="${pairProp}" value="${yVal}"${pairMinStr}${pairMaxStr} placeholder="${pairMeta.label}" />`;
+        html += `</div>`;
+        html += `</div></div>`;
+      } else if (prop === 'y1' || prop === 'y2') {
+        // y1 和 y2 已经在 x1/x2 的并排显示中处理过了，跳过单独显示
+      } else {
+        const minStr = meta.min != null ? ` min="${meta.min}"` : '';
+        const maxStr = meta.max != null ? ` max="${meta.max}"` : '';
+        html += `<div class="form-group"><label class="form-label">${label}</label><input type="number" class="form-input" data-prop="${prop}" value="${rawVal != null ? rawVal : 0}"${minStr}${maxStr} /></div>`;
+      }
     }
   });
 
@@ -1948,18 +2184,163 @@ function renderWidgetProps() {
       input.addEventListener('input', () => {
         let val;
         if (input.type === 'number') val = parseFloat(input.value) || 0;
-        else if (input.type === 'select-one') val = input.value;
+        else if (input.type === 'select-one') {
+          const strVal = input.value;
+          if (strVal === 'true') val = true;
+          else if (strVal === 'false') val = false;
+          else val = strVal;
+        }
         else val = input.value;
 
         // 直接更新控件数据，不触发属性面板重建（避免输入框丢失焦点）
         const w = AppState.getWidget(AppState.selectedWidgetId);
         if (w) {
           w[prop] = val;
+          
+          // 当修改 alpha 属性时，同时更新 borderAlpha 和 mainAlpha
+          if (prop === 'alpha' && w.type === 'rect') {
+            w.borderAlpha = val;
+            w.mainAlpha = val;
+          }
+          
+          // Circle 控件：宽高同步修改，并根据 radius 更新圆的实际大小
+          if (w.type === 'circle' && (prop === 'width' || prop === 'height')) {
+            const newVal = Math.max(20, Math.round(parseFloat(input.value) || 20));
+            if (w.radius != null && w.radius > 0) {
+              // radius > 0 时，圆的大小由 radius 决定，width/height 跟随 radius * 2
+              w.radius = Math.round(newVal / 2);
+              w.width = newVal;
+              w.height = newVal;
+            } else {
+              // radius = 0 时，使用 min(width, height) 作为直径，保持宽高相等
+              w.width = newVal;
+              w.height = newVal;
+            }
+          }
+
+          // Ring 控件：宽高同步修改
+          if (w.type === 'ring' && (prop === 'width' || prop === 'height')) {
+            const newVal = Math.max(20, Math.round(parseFloat(input.value) || 20));
+            const newRadiusOut = Math.round(newVal / 2);
+            const ringWidth = (w.radiusOut || 30) - (w.radiusIn || 28);
+            w.radiusOut = newRadiusOut;
+            w.radiusIn = Math.max(0, newRadiusOut - ringWidth);
+            w.width = newVal;
+            w.height = newVal;
+          }
+
+          // Ring 控件：修改外半径时的联动逻辑（只更新值，联动检查在 blur 事件中执行）
+          if (w.type === 'ring' && prop === 'radiusOut') {
+            const newRadiusOut = Math.max(1, Math.round(parseFloat(input.value) || 30));
+            w.radiusOut = newRadiusOut;
+            w.width = newRadiusOut * 2;
+            w.height = newRadiusOut * 2;
+          }
+
+          // Ring 控件：修改内半径时，外半径保持不变（内半径必须小于外半径）
+          if (w.type === 'ring' && prop === 'radiusIn') {
+            const maxRadiusIn = (w.radiusOut || Math.round(Math.min(w.width, w.height) / 2)) - 1;
+            const newRadiusIn = Math.max(0, Math.min(maxRadiusIn, Math.round(parseFloat(input.value) || 28)));
+            w.radiusIn = newRadiusIn;
+          }
+
+          // Arc 控件：宽高同步修改
+          if (w.type === 'arc' && (prop === 'width' || prop === 'height')) {
+            const newVal = Math.max(20, Math.round(parseFloat(input.value) || 20));
+            const newRadiusOut = Math.round(newVal / 2);
+            const arcWidth = (w.radiusOut || 30) - (w.radiusIn || 28);
+            w.radiusOut = newRadiusOut;
+            w.radiusIn = Math.max(0, newRadiusOut - arcWidth);
+            w.width = newVal;
+            w.height = newVal;
+          }
+
+          // Arc 控件：修改外半径时的联动逻辑
+          if (w.type === 'arc' && prop === 'radiusOut') {
+            const newRadiusOut = Math.max(1, Math.round(parseFloat(input.value) || 30));
+            const arcWidth = (w.radiusOut || 30) - (w.radiusIn || 28);
+            w.radiusOut = newRadiusOut;
+            w.radiusIn = Math.max(0, newRadiusOut - arcWidth);
+            w.width = newRadiusOut * 2;
+            w.height = newRadiusOut * 2;
+          }
+
+          // Arc 控件：修改内半径时，外半径保持不变（内半径必须小于外半径）
+          if (w.type === 'arc' && prop === 'radiusIn') {
+            const maxRadiusIn = (w.radiusOut || Math.round(Math.min(w.width, w.height) / 2)) - 1;
+            const newRadiusIn = Math.max(0, Math.min(maxRadiusIn, Math.round(parseFloat(input.value) || 28)));
+            w.radiusIn = newRadiusIn;
+          }
+
+          // Line 控件：修改线宽后同步控件尺寸
+          if (w.type === 'line' && prop === 'lineWidth') {
+            AppState.syncLineBounds(w);
+          }
+
+          // Line 控件：x1/y1 就是控件位置，x2/y2 决定控件宽高
+          if (w.type === 'line' && (prop === 'x1' || prop === 'y1' || prop === 'x2' || prop === 'y2')) {
+            const curX1 = w.x1 != null ? w.x1 : w.x;
+            const curY1 = w.y1 != null ? w.y1 : w.y;
+            const newX1 = prop === 'x1' ? val : curX1;
+            const newY1 = prop === 'y1' ? val : curY1;
+            const newX2 = prop === 'x2' ? val : (w.x2 != null ? w.x2 : w.x + w.width);
+            const newY2 = prop === 'y2' ? val : (w.y2 != null ? w.y2 : w.y + w.height);
+            // x1/y1 同步更新控件位置
+            w.x1 = newX1;
+            w.y1 = newY1;
+            w.x = newX1;
+            w.y = newY1;
+            // x2/y2 同步更新控件宽高（直线时宽高等于线宽）
+            w.x2 = newX2;
+            w.y2 = newY2;
+            AppState.syncLineBounds(w);
+            // 同步更新属性面板中的 x/y/width/height 输入框
+            const xInput = widgetPropContent.querySelector('[data-prop="x"]');
+            const yInput = widgetPropContent.querySelector('[data-prop="y"]');
+            const widthInput = widgetPropContent.querySelector('[data-prop="width"]');
+            const heightInput = widgetPropContent.querySelector('[data-prop="height"]');
+            if (xInput) xInput.value = w.x;
+            if (yInput) yInput.value = w.y;
+            if (widthInput) widthInput.value = w.width;
+            if (heightInput) heightInput.value = w.height;
+          }
+
+          // Line 控件：修改 x/y/width/height 时同步更新 x1/y1/x2/y2
+          if (w.type === 'line' && (prop === 'x' || prop === 'y' || prop === 'width' || prop === 'height')) {
+            if (prop === 'x' || prop === 'y') {
+              if (w.x1 != null) w.x1 = w.x;
+              if (w.y1 != null) w.y1 = w.y;
+            }
+            if (prop === 'width' || prop === 'height' || prop === 'x' || prop === 'y') {
+              if (w.x2 != null) w.x2 = w.x + w.width;
+              if (w.y2 != null) w.y2 = w.y + w.height;
+            }
+            AppState.syncLineBounds(w);
+            // 同步更新属性面板中的 X1/Y1/X2/Y2 输入框
+            const x1Input = widgetPropContent.querySelector('[data-prop="x1"]');
+            const y1Input = widgetPropContent.querySelector('[data-prop="y1"]');
+            const x2Input = widgetPropContent.querySelector('[data-prop="x2"]');
+            const y2Input = widgetPropContent.querySelector('[data-prop="y2"]');
+            const widthInput2 = widgetPropContent.querySelector('[data-prop="width"]');
+            const heightInput2 = widgetPropContent.querySelector('[data-prop="height"]');
+            if (x1Input) x1Input.value = w.x1 != null ? w.x1 : w.x;
+            if (y1Input) y1Input.value = w.y1 != null ? w.y1 : w.y;
+            if (x2Input) x2Input.value = w.x2 != null ? w.x2 : w.x + w.width;
+            if (y2Input) y2Input.value = w.y2 != null ? w.y2 : w.y + w.height;
+            if (widthInput2) widthInput2.value = w.width;
+            if (heightInput2) heightInput2.value = w.height;
+          }
+
           // 只刷新画布和图层，不重建属性面板
           renderCanvas();
           renderLayerList();
           renderStatus();
           AppState.save();
+          
+          // 如果是 dashed 属性变化，需要重新渲染属性面板以显示/隐藏虚线参数
+          if (prop === 'dashed') {
+            renderWidgetProps();
+          }
         }
 
         // 同步颜色输入
@@ -1976,8 +2357,40 @@ function renderWidgetProps() {
       input.addEventListener('blur', () => {
         let val;
         if (input.type === 'number') val = parseFloat(input.value) || 0;
-        else if (input.type === 'select-one') val = input.value;
+        else if (input.type === 'select-one') {
+          const strVal = input.value;
+          if (strVal === 'true') val = true;
+          else if (strVal === 'false') val = false;
+          else val = strVal;
+        }
         else val = input.value;
+        
+        // 当修改 alpha 属性时，同时更新 borderAlpha 和 mainAlpha
+        if (prop === 'alpha') {
+          const w = AppState.getWidget(AppState.selectedWidgetId);
+          if (w && w.type === 'rect') {
+            AppState.updateWidget(AppState.selectedWidgetId, { alpha: val, borderAlpha: val, mainAlpha: val });
+            return;
+          }
+        }
+        
+        // Ring 控件：修改外半径后，检查并确保内半径小于外半径
+        if (prop === 'radiusOut') {
+          const w = AppState.getWidget(AppState.selectedWidgetId);
+          if (w && w.type === 'ring') {
+            const newRadiusOut = Math.max(1, Math.round(val));
+            let updates = { radiusOut: newRadiusOut };
+            // 确保内半径小于外半径
+            if (w.radiusIn != null && w.radiusIn >= newRadiusOut) {
+              updates.radiusIn = newRadiusOut - 1;
+            }
+            updates.width = newRadiusOut * 2;
+            updates.height = newRadiusOut * 2;
+            AppState.updateWidget(AppState.selectedWidgetId, updates);
+            return;
+          }
+        }
+        
         AppState.updateWidget(AppState.selectedWidgetId, { [prop]: val });
       });
     }
@@ -1986,6 +2399,9 @@ function renderWidgetProps() {
     if (input.tagName === 'SELECT') {
       input.addEventListener('change', async () => {
         let val = input.value;
+        // 布尔值转换
+        if (val === 'true') val = true;
+        else if (val === 'false') val = false;
 
         // parentId 变更：转换位置（绝对 ↔ 相对），并约束子控件在父控件区域内
         if (prop === 'parentId') {
@@ -2028,7 +2444,25 @@ function renderWidgetProps() {
         }
 
         if (!isNaN(parseFloat(val)) && isFinite(val)) val = parseFloat(val);
+        
+        // dashed 切换到虚线时，确保 dashLen/gapLen 有默认值
+        if (prop === 'dashed' && val === true) {
+          const w = AppState.getWidget(AppState.selectedWidgetId);
+          if (w) {
+            if (w.dashLen == null) w.dashLen = 10;
+            if (w.gapLen == null) w.gapLen = 5;
+          }
+        }
+        
         AppState.updateWidget(AppState.selectedWidgetId, { [prop]: val });
+        
+        // dashed 属性变化时重新渲染属性面板（显示/隐藏虚线参数）
+        if (prop === 'dashed') {
+          const w = AppState.getWidget(AppState.selectedWidgetId);
+          if (w) {
+            renderWidgetProps(w);
+          }
+        }
       });
     }
   });
@@ -2213,8 +2647,8 @@ function renderProjectPanel() {
   const page = AppState.getCurrentPage();
   if (page) {
     el('prop-page-name', page.name);
-    el('prop-page-bgcolor', page.bg_color || '#1e1e2e');
-    el('prop-page-bgcolor-text', page.bg_color || '#1e1e2e');
+    el('prop-page-bgcolor', page.bg_color || '#FFFFFF');
+    el('prop-page-bgcolor-text', page.bg_color || '#FFFFFF');
     el('prop-page-alpha', (page.alpha != null && page.alpha !== undefined) ? page.alpha : 255);
 
     // 填充背景图片下拉框

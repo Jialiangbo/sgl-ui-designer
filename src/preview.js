@@ -142,19 +142,14 @@ function render() {
 function renderPreviewWidget(el, w, z) {
   switch (w.type) {
     case 'rect':
-      el.style.background = w.bgColor || 'transparent';
-      el.style.border = `${(w.borderWidth || 0) * z}px solid ${w.borderColor || 'transparent'}`;
+      el.style.background = w.color || '#FFFFFF';
+      el.style.border = `${(w.borderWidth != null ? w.borderWidth : 2) * z}px solid ${w.borderColor || '#000000'}`;
       el.style.borderRadius = ((w.radius || 0) * z) + 'px';
-      if (w.color && w.color !== 'transparent') {
-        const inner = document.createElement('div');
-        inner.style.cssText = 'position:absolute;inset:0;opacity:0.3;background:' + w.color + ';border-radius:' + ((w.radius || 0) * z) + 'px;pointer-events:none;';
-        el.appendChild(inner);
-      }
       break;
 
     case 'circle':
-      el.style.background = w.color || 'transparent';
-      el.style.border = `${(w.borderWidth || 0) * z}px solid ${w.borderColor || 'transparent'}`;
+      el.style.background = w.color || '#FFFFFF';
+      el.style.border = `${(w.borderWidth != null ? w.borderWidth : 2) * z}px solid ${w.borderColor || '#000000'}`;
       el.style.borderRadius = '50%';
       if (w.xOffset || w.yOffset) {
         el.style.transform = `translate(${(w.xOffset || 0) * z}px, ${(w.yOffset || 0) * z}px)`;
@@ -163,33 +158,177 @@ function renderPreviewWidget(el, w, z) {
 
     case 'line': {
       el.style.background = 'transparent';
-      const lineH = Math.max(2, w.borderWidth || 2) * z;
+      const p = (prop, def) => w[prop] != null ? w[prop] : def;
+      const lineH = Math.max(1, p('lineWidth', 1)) * z;
+      const lineCol = p('color', '#000000');
+
+      // line 控件的 x1/y1 就是控件位置，x2/y2 默认由 x1+width/y1+height 计算
+      const absX1 = w.x1 != null ? w.x1 : w.x;
+      const absY1 = w.y1 != null ? w.y1 : w.y;
+      const absX2 = w.x2 != null ? w.x2 : (w.x + w.width);
+      const absY2 = w.y2 != null ? w.y2 : (w.y + w.height);
+
+      // 转换为相对于控件容器的位置
+      const relX1 = absX1 - w.x;
+      const relY1 = absY1 - w.y;
+      const relX2 = absX2 - w.x;
+      const relY2 = absY2 - w.y;
+      const lineLen = Math.sqrt(Math.pow(relX2 - relX1, 2) + Math.pow(relY2 - relY1, 2));
+      const minX = Math.min(relX1, relX2);
+      const minY = Math.min(relY1, relY2);
+
       const lineEl = document.createElement('div');
-      lineEl.style.cssText = `position:absolute;left:0;top:50%;transform:translateY(-50%);width:100%;height:${lineH}px;background:${w.color || '#8b5cf6'};border-radius:${lineH / 2}px;`;
+      lineEl.style.cssText = `position:absolute;left:${minX * z}px;top:${minY * z}px;width:${Math.max(lineLen * z, 1)}px;height:${lineH}px;background:${lineCol};border-radius:${lineH / 2}px;transform-origin:left top;`;
+
+      // 处理斜线
+      if (relY1 !== relY2 && Math.abs(relX2 - relX1) > 0) {
+        const angle = Math.atan2(relY2 - relY1, relX2 - relX1) * 180 / Math.PI;
+        lineEl.style.transform = `rotate(${angle}deg)`;
+      }
+
+      // 处理虚线
+      if (w.dashed) {
+        const dLen = w.dashLen || 10;
+        const gLen = w.gapLen || 5;
+        lineEl.style.background = `repeating-linear-gradient(90deg, ${lineCol} 0, ${lineCol} ${dLen * z}px, transparent ${dLen * z}px, transparent ${(dLen + gLen) * z}px)`;
+      }
+
       el.appendChild(lineEl);
       break;
     }
 
     case 'ring': {
       el.style.background = 'transparent';
-      el.style.border = `${(w.borderWidth || 4) * z}px solid ${w.color || '#8b5cf6'}`;
+      let radiusInVal, radiusOutVal;
+      const ringDiameter = Math.min(w.width, w.height);
+      if (w.radiusOut != null && w.radiusOut > 0) {
+        radiusOutVal = w.radiusOut;
+      } else {
+        radiusOutVal = ringDiameter / 2;
+      }
+      if (w.radiusIn != null && w.radiusIn > 0 && w.radiusIn < radiusOutVal) {
+        radiusInVal = w.radiusIn;
+      } else {
+        radiusInVal = radiusOutVal - 2;
+      }
+      const ringWidth = radiusOutVal - radiusInVal;
+      // 如果显式设置了 radiusOut，调整元素尺寸
+      if (w.radiusOut != null && w.radiusOut > 0) {
+        el.style.width = (w.radiusOut * 2 * z) + 'px';
+        el.style.height = (w.radiusOut * 2 * z) + 'px';
+      }
+      el.style.border = `${ringWidth * z}px solid ${w.color || '#FFFFFF'}`;
       el.style.borderRadius = '50%';
-      el.style.boxShadow = 'inset 0 0 ' + ((Math.min(w.width, w.height) / 2 - (w.borderWidth || 4)) * z) + 'px rgba(0,0,0,0.9)';
       break;
     }
 
     case 'arc': {
+      let arcRadiusInVal, arcRadiusOutVal;
+      const arcDiameter = Math.min(w.width, w.height);
+      if (w.radiusOut == null || w.radiusOut <= 0) {
+        arcRadiusOutVal = Math.round(arcDiameter / 2);
+      } else {
+        arcRadiusOutVal = w.radiusOut;
+      }
+      if (w.radiusIn == null || w.radiusIn <= 0) {
+        arcRadiusInVal = arcRadiusOutVal - 2;
+      } else {
+        arcRadiusInVal = (w.radiusIn < arcRadiusOutVal) ? w.radiusIn : arcRadiusOutVal - 2;
+      }
+      const arcMode = Number(w.mode || 0);
+      const startAngle = Number(w.startAngle != null ? w.startAngle : 0);
+      const endAngle = Number(w.endAngle != null ? w.endAngle : 360);
+      const arcColor = w.color || '#000000';
+      const bgColor = w.bgColor || '#FFFFFF';
+
+      let arcAngle = endAngle - startAngle;
+      while (arcAngle < 0) arcAngle += 360;
+      while (arcAngle > 360) arcAngle -= 360;
+
+      const elemW = w.width * z;
+      const elemH = w.height * z;
+      const cx = elemW / 2;
+      const cy = elemH / 2;
+      const rOut = arcRadiusOutVal * z;
+      const rIn = arcRadiusInVal * z;
+
+      el.style.width = elemW + 'px';
+      el.style.height = elemH + 'px';
       el.style.background = 'transparent';
-      el.style.border = `${(w.borderWidth || 4) * z}px solid ${w.color || '#8b5cf6'}`;
-      el.style.borderRadius = '50%';
-      el.style.clipPath = 'polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%)';
+      el.style.border = 'none';
+      el.style.mask = '';
+      el.style.webkitMask = '';
+
+      // 0度=6点钟方向，顺时针为正。SVG 0度=3点钟方向。SVG角度 = 我们的度数 + 90
+      let svgContent = '';
+      const isFullCircle = (startAngle === 0 && endAngle === 360) || arcAngle >= 360;
+
+      if (isFullCircle) {
+        const rMid = (rOut + rIn) / 2;
+        const strokeW = rOut - rIn;
+        svgContent += `<circle cx="${cx}" cy="${cy}" r="${rMid}" fill="none" stroke="${arcColor}" stroke-width="${strokeW}" />`;
+      } else {
+        const largeArc = arcAngle > 180 ? 1 : 0;
+        const a1 = (startAngle + 90) * Math.PI / 180;
+        const a2 = (endAngle + 90) * Math.PI / 180;
+        const x1Out = cx + rOut * Math.cos(a1);
+        const y1Out = cy + rOut * Math.sin(a1);
+        const x2Out = cx + rOut * Math.cos(a2);
+        const y2Out = cy + rOut * Math.sin(a2);
+        const x1In = cx + rIn * Math.cos(a1);
+        const y1In = cy + rIn * Math.sin(a1);
+        const x2In = cx + rIn * Math.cos(a2);
+        const y2In = cy + rIn * Math.sin(a2);
+
+        if (arcMode === 0 || arcMode === 2) {
+          const pathD = `M ${x1Out} ${y1Out} A ${rOut} ${rOut} 0 ${largeArc} 1 ${x2Out} ${y2Out} L ${x2In} ${y2In} A ${rIn} ${rIn} 0 ${largeArc} 0 ${x1In} ${y1In} Z`;
+          svgContent += `<path d="${pathD}" fill="${arcColor}" />`;
+        } else if (arcMode === 1 || arcMode === 3) {
+          const rMid = (rOut + rIn) / 2;
+          const strokeW = rOut - rIn;
+          svgContent += `<circle cx="${cx}" cy="${cy}" r="${rMid}" fill="none" stroke="${bgColor}" stroke-width="${strokeW}" />`;
+          const pathD = `M ${x1Out} ${y1Out} A ${rOut} ${rOut} 0 ${largeArc} 1 ${x2Out} ${y2Out} L ${x2In} ${y2In} A ${rIn} ${rIn} 0 ${largeArc} 0 ${x1In} ${y1In} Z`;
+          svgContent += `<path d="${pathD}" fill="${arcColor}" />`;
+        }
+      }
+
+      el.innerHTML = `<svg width="${elemW}" height="${elemH}" style="position:absolute;top:0;left:0;">${svgContent}</svg>`;
       break;
     }
 
     case 'polygon': {
-      el.style.background = w.color || '#8b5cf6';
-      el.style.border = `${(w.borderWidth || 2) * z}px solid ${w.borderColor || 'transparent'}`;
-      el.style.clipPath = 'polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%)';
+      el.style.background = w.fillColor || '#8b5cf6';
+      el.style.border = `${(w.borderWidth || 2) * z}px solid ${w.borderColor || '#7c3aed'}`;
+      
+      const vertices = w.vertices || '0,0;50,100;100,0';
+      const coords = vertices.split(';').map(p => p.trim()).filter(p => p);
+      if (coords.length >= 3) {
+        const clipPoints = coords.map(c => {
+          const [x, y] = c.split(',').map(v => parseInt(v.trim()) || 0);
+          return `${(x / w.width * 100)}% ${(y / w.height * 100)}%`;
+        }).join(', ');
+        el.style.clipPath = `polygon(${clipPoints})`;
+      } else {
+        el.style.clipPath = 'polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%)';
+      }
+      
+      if (w.text) {
+        const textSpan = document.createElement('span');
+        textSpan.textContent = w.text;
+        textSpan.style.cssText = `
+          position:absolute;
+          top:50%;left:50%;
+          transform:translate(-50%,-50%);
+          color:${w.textColor || '#ffffff'};
+          font-size:${((w.fontSize || 14) * z)}px;
+          pointer-events:none;
+          overflow:hidden;
+          text-overflow:ellipsis;
+          white-space:nowrap;
+          max-width:90%;
+        `;
+        el.appendChild(textSpan);
+      }
       break;
     }
 

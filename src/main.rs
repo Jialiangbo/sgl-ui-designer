@@ -1,6 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct Widget {
@@ -13,39 +13,220 @@ struct Widget {
     height: i32,
     text: Option<String>,
     color: Option<String>,
+    #[serde(rename = "bgColor")]
     bg_color: Option<String>,
+    #[serde(rename = "borderColor")]
     border_color: Option<String>,
+    #[serde(rename = "borderWidth")]
     border_width: Option<i32>,
+    #[serde(rename = "borderAlpha")]
+    border_alpha: Option<i32>,
+    #[serde(rename = "mainAlpha")]
+    main_alpha: Option<i32>,
     radius: Option<i32>,
     alpha: Option<i32>,
+    pixmap: Option<String>,
+    #[serde(rename = "fontSize")]
     font_size: Option<i32>,
+    #[serde(rename = "fontFamily")]
     font_family: Option<String>,
+    #[serde(rename = "fontBpp")]
     font_bpp: Option<i32>,
     align: Option<String>,
     value: Option<i32>,
+    #[serde(default, deserialize_with = "deserialize_bool_or_string")]
     status: Option<bool>,
     src: Option<String>,
     direct: Option<i32>,
+    #[serde(rename = "fillColor")]
     fill_color: Option<String>,
+    #[serde(rename = "trackColor")]
     track_color: Option<String>,
+    #[serde(rename = "knobColor")]
     knob_color: Option<String>,
+    #[serde(rename = "textColor")]
     text_color: Option<String>,
+    #[serde(rename = "knobRadius")]
     knob_radius: Option<i32>,
+    #[serde(rename = "knobMargin")]
     knob_margin: Option<i32>,
+    #[serde(rename = "textOffsetX")]
     text_offset_x: Option<i32>,
+    #[serde(rename = "textOffsetY")]
     text_offset_y: Option<i32>,
+    #[serde(rename = "textRotation")]
     text_rotation: Option<i32>,
+    #[serde(default, deserialize_with = "deserialize_bool_or_string")]
     dashed: Option<bool>,
+    #[serde(default, rename = "dashLen")]
     dash_len: Option<i32>,
+    #[serde(default, rename = "gapLen")]
     gap_len: Option<i32>,
+    #[serde(rename = "fillGap")]
     fill_gap: Option<i32>,
+    #[serde(rename = "fillRadius")]
     fill_radius: Option<i32>,
     thickness: Option<i32>,
+    #[serde(rename = "xOffset")]
     x_offset: Option<i32>,
+    #[serde(rename = "yOffset")]
     y_offset: Option<i32>,
+    #[serde(rename = "radiusIn")]
+    radius_in: Option<i32>,
+    #[serde(rename = "radiusOut")]
+    radius_out: Option<i32>,
+    #[serde(rename = "eventCb")]
     event_cb: Option<String>,
     #[serde(rename = "parentId", default)]
     parent_id: Option<String>,
+    #[serde(default)]
+    x1: Option<i32>,
+    #[serde(default)]
+    y1: Option<i32>,
+    #[serde(default)]
+    x2: Option<i32>,
+    #[serde(default)]
+    y2: Option<i32>,
+    #[serde(rename = "lineWidth", default)]
+    line_width: Option<i32>,
+}
+
+// 兼容前端传来的字符串布尔值（"true"/"false"）
+fn deserialize_bool_or_string<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::Error;
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum BoolOrString {
+        Bool(bool),
+        String(String),
+    }
+
+    match Option::<BoolOrString>::deserialize(deserializer)? {
+        None => Ok(None),
+        Some(BoolOrString::Bool(b)) => Ok(Some(b)),
+        Some(BoolOrString::String(s)) => {
+            let lower = s.to_lowercase();
+            if lower == "true" {
+                Ok(Some(true))
+            } else if lower == "false" {
+                Ok(Some(false))
+            } else {
+                Err(D::Error::custom(format!("expected boolean string: {}", s)))
+            }
+        }
+    }
+}
+
+// 控件默认值定义
+struct WidgetDefaults {
+    color: &'static str,
+    border_color: &'static str,
+    border_width: i32,
+    border_alpha: i32,
+    main_alpha: i32,
+    radius: i32,
+    alpha: i32,
+    pixmap: &'static str,
+    text: &'static str,
+    text_color: &'static str,
+    bg_color: &'static str,
+    font_size: i32,
+    font_family: &'static str,
+    align: &'static str,
+    status: bool,
+    dashed: bool,
+    dash_len: i32,
+    gap_len: i32,
+    value: i32,
+    fill_color: &'static str,
+    track_color: &'static str,
+    knob_color: &'static str,
+    knob_radius: i32,
+    knob_margin: i32,
+    x_offset: i32,
+    y_offset: i32,
+    text_offset_x: i32,
+    text_offset_y: i32,
+    text_rotation: i32,
+    direct: i32,
+    border_width_i16: i32,
+    radius_u16: i32,
+    thickness: i32,
+    fill_gap: i32,
+    fill_radius: i32,
+}
+
+fn get_widget_defaults(t: &str) -> Option<WidgetDefaults> {
+    match t {
+        "rect" => Some(WidgetDefaults {
+            color: "#FFFFFF", border_color: "#000000", border_width: 2, border_alpha: 255,
+            main_alpha: 255, radius: 0, alpha: 255, pixmap: "", text: "", text_color: "",
+            bg_color: "", font_size: 0, font_family: "", align: "", status: false, dashed: false,
+            dash_len: 0, gap_len: 0, value: 0, fill_color: "", track_color: "", knob_color: "",
+            knob_radius: 0, knob_margin: 0, x_offset: 0, y_offset: 0, text_offset_x: 0,
+            text_offset_y: 0, text_rotation: 0, direct: 0, border_width_i16: 0, radius_u16: 0,
+            thickness: 0, fill_gap: 0, fill_radius: 0,
+        }),
+        "circle" => Some(WidgetDefaults {
+            color: "#FFFFFF", border_color: "#000000", border_width: 2, border_alpha: 255,
+            main_alpha: 255, radius: 0, alpha: 255, pixmap: "", text: "", text_color: "",
+            bg_color: "", font_size: 0, font_family: "", align: "", status: false,
+            dashed: false, dash_len: 0, gap_len: 0, value: 0, fill_color: "", track_color: "",
+            knob_color: "", knob_radius: 0, knob_margin: 0, x_offset: 0, y_offset: 0,
+            text_offset_x: 0, text_offset_y: 0, text_rotation: 0, direct: 0,
+            border_width_i16: 0, radius_u16: 0, thickness: 0, fill_gap: 0, fill_radius: 0,
+        }),
+        "line" => Some(WidgetDefaults {
+            color: "#8b5cf6", border_color: "", border_width: 2, border_alpha: 255,
+            main_alpha: 255, radius: 0, alpha: 255, pixmap: "", text: "", text_color: "",
+            bg_color: "", font_size: 0, font_family: "", align: "", status: false, dashed: false,
+            dash_len: 10, gap_len: 5, value: 0, fill_color: "", track_color: "", knob_color: "",
+            knob_radius: 0, knob_margin: 0, x_offset: 0, y_offset: 0, text_offset_x: 0,
+            text_offset_y: 0, text_rotation: 0, direct: 0, border_width_i16: 0, radius_u16: 0,
+            thickness: 0, fill_gap: 0, fill_radius: 0,
+        }),
+        "button" => Some(WidgetDefaults {
+            color: "#8b5cf6", border_color: "#7c3aed", border_width: 1, border_alpha: 255,
+            main_alpha: 255, radius: 8, alpha: 255, pixmap: "", text: "按钮", text_color: "#ffffff",
+            bg_color: "#8b5cf6", font_size: 14, font_family: "simsun.ttc", align: "CENTER",
+            status: false, dashed: false, dash_len: 0, gap_len: 0, value: 0, fill_color: "",
+            track_color: "", knob_color: "", knob_radius: 0, knob_margin: 0, x_offset: 0,
+            y_offset: 0, text_offset_x: 0, text_offset_y: 0, text_rotation: 0, direct: 0,
+            border_width_i16: 0, radius_u16: 0, thickness: 0, fill_gap: 0, fill_radius: 0,
+        }),
+        "label" => Some(WidgetDefaults {
+            color: "", border_color: "", border_width: 0, border_alpha: 255,
+            main_alpha: 255, radius: 0, alpha: 255, pixmap: "", text: "标签文本",
+            text_color: "#e4e4e7", bg_color: "transparent", font_size: 14,
+            font_family: "simsun.ttc", align: "LEFT", status: false, dashed: false,
+            dash_len: 0, gap_len: 0, value: 0, fill_color: "", track_color: "", knob_color: "",
+            knob_radius: 0, knob_margin: 0, x_offset: 0, y_offset: 0, text_offset_x: 0,
+            text_offset_y: 0, text_rotation: 0, direct: 0, border_width_i16: 0, radius_u16: 0,
+            thickness: 0, fill_gap: 0, fill_radius: 0,
+        }),
+        "textbox" => Some(WidgetDefaults {
+            color: "", border_color: "#3d3d5c", border_width: 2, border_alpha: 255,
+            main_alpha: 255, radius: 6, alpha: 255, pixmap: "", text: "", text_color: "#e4e4e7",
+            bg_color: "#1e1e2e", font_size: 14, font_family: "simsun.ttc", align: "",
+            status: false, dashed: false, dash_len: 0, gap_len: 0, value: 0, fill_color: "",
+            track_color: "", knob_color: "", knob_radius: 0, knob_margin: 0, x_offset: 0,
+            y_offset: 0, text_offset_x: 0, text_offset_y: 0, text_rotation: 0, direct: 0,
+            border_width_i16: 0, radius_u16: 0, thickness: 0, fill_gap: 0, fill_radius: 0,
+        }),
+        "switch" => Some(WidgetDefaults {
+            color: "#8b5cf6", border_color: "#3d3d5c", border_width: 1, border_alpha: 255,
+            main_alpha: 255, radius: 15, alpha: 255, pixmap: "", text: "", text_color: "",
+            bg_color: "#313149", font_size: 0, font_family: "", align: "", status: false,
+            dashed: false, dash_len: 0, gap_len: 0, value: 0, fill_color: "", track_color: "",
+            knob_color: "#ffffff", knob_radius: 10, knob_margin: 2, x_offset: 0, y_offset: 0,
+            text_offset_x: 0, text_offset_y: 0, text_rotation: 0, direct: 0,
+            border_width_i16: 0, radius_u16: 0, thickness: 0, fill_gap: 0, fill_radius: 0,
+        }),
+        _ => None,
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -233,7 +414,7 @@ fn generate_code(project: Project) -> String {
         // 页面背景：优先使用图片，否则使用颜色
         if let Some(ref pixmap) = page.pixmap {
             if !pixmap.is_empty() {
-                code.push_str(&format!("    sgl_page_set_pixmap(page_{}, {});\n", page_id, pixmap));
+                code.push_str(&format!("    sgl_page_set_pixmap(page_{}, \"{}\");\n", page_id, pixmap));
             } else if !page.bg_color.is_empty() {
                 code.push_str(&format!("    sgl_page_set_color(page_{}, {});\n", page_id, sgl_color(&page.bg_color)));
             }
@@ -350,29 +531,79 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
 
     match t.as_str() {
         "rect" => {
-            cclr!("sgl_rect_set_color", w.color);
-            cclr!("sgl_rect_set_border_color", w.border_color);
-            c!( "sgl_rect_set_border_width", w.border_width.map(|v| v as u8));
-            c!( "sgl_rect_set_radius", w.radius.map(|v| v as u8));
-            c!( "sgl_rect_set_alpha", w.alpha.map(|v| v as u8));
+            // rect: 图片和背景色二选一
+            if let Some(ref pixmap) = w.pixmap {
+                if !pixmap.is_empty() {
+                    code.push_str(&format!("    sgl_rect_set_pixmap({}, \"{}\");\n", obj, pixmap.replace('"', "\\\"")));
+                } else if let Some(ref c) = w.color {
+                    if !c.is_empty() {
+                        code.push_str(&format!("    sgl_rect_set_color({}, {});\n", obj, sgl_color(c)));
+                    }
+                }
+            } else if let Some(ref c) = w.color {
+                if !c.is_empty() {
+                    code.push_str(&format!("    sgl_rect_set_color({}, {});\n", obj, sgl_color(c)));
+                }
+            }
+            if let Some(ref bc) = w.border_color {
+                if !bc.is_empty() {
+                    code.push_str(&format!("    sgl_rect_set_border_color({}, {});\n", obj, sgl_color(bc)));
+                }
+            }
+            if let Some(bw) = w.border_width {
+                code.push_str(&format!("    sgl_rect_set_border_width({}, {});\n", obj, bw as i32));
+            }
+            if let Some(ba) = w.border_alpha {
+                code.push_str(&format!("    sgl_rect_set_border_alpha({}, {});\n", obj, ba as i32));
+            }
+            if let Some(r) = w.radius {
+                code.push_str(&format!("    sgl_rect_set_radius({}, {});\n", obj, r as i32));
+            }
+            if let Some(ma) = w.main_alpha {
+                code.push_str(&format!("    sgl_rect_set_main_alpha({}, {});\n", obj, ma as i32));
+            }
+            if let Some(a) = w.alpha {
+                code.push_str(&format!("    sgl_rect_set_alpha({}, {});\n", obj, a as i32));
+            }
         }
         "circle" => {
-            cclr!("sgl_circle_set_color", w.color);
+            // 颜色或图片二选一
+            if let Some(ref pixmap) = w.pixmap {
+                if !pixmap.is_empty() {
+                    code.push_str(&format!("    sgl_circle_set_pixmap({}, \"{}\");\n", obj, pixmap.replace('"', "\\\"")));
+                } else if let Some(ref c) = w.color {
+                    if !c.is_empty() {
+                        code.push_str(&format!("    sgl_circle_set_color({}, {});\n", obj, sgl_color(c)));
+                    }
+                }
+            } else if let Some(ref c) = w.color {
+                if !c.is_empty() {
+                    code.push_str(&format!("    sgl_circle_set_color({}, {});\n", obj, sgl_color(c)));
+                }
+            }
             cclr!("sgl_circle_set_border_color", w.border_color);
             c!( "sgl_circle_set_border_width", w.border_width.map(|v| v as u8));
+            c!( "sgl_circle_set_radius", w.radius.map(|v| v as u16));
             c!( "sgl_circle_set_alpha", w.alpha.map(|v| v as u8));
             c!( "sgl_circle_set_x_offset", w.x_offset.map(|v| v as i8));
             c!( "sgl_circle_set_y_offset", w.y_offset.map(|v| v as i8));
         }
         "line" => {
             cclr!("sgl_line_set_color", w.color);
-            c!( "sgl_line_set_width", w.border_width.map(|v| v as u8));
+            c!( "sgl_line_set_width", w.line_width.map(|v| v as u8).or_else(|| w.border_width.map(|v| v as u8)));
             c!( "sgl_line_set_alpha", w.alpha.map(|v| v as u8));
             c!( "sgl_line_set_dashed", w.dashed.map(|v| v as u8));
-            if let Some(dl) = w.dash_len {
+            if w.dashed == Some(true) {
+                let dl = w.dash_len.unwrap_or(10);
                 let gl = w.gap_len.unwrap_or(5);
                 code.push_str(&format!("    sgl_line_set_dash_pattern({}, {}, {});\n", obj, dl, gl));
             }
+            // line 控件的 x1/y1 就是控件位置，x2/y2 默认由 x1+width/y1+height 计算
+            let abs_x1 = w.x1.unwrap_or(w.x);
+            let abs_y1 = w.y1.unwrap_or(w.y);
+            let abs_x2 = w.x2.unwrap_or(w.x + w.width);
+            let abs_y2 = w.y2.unwrap_or(w.y + w.height);
+            code.push_str(&format!("    sgl_line_set_pos({}, {}, {}, {}, {});\n", obj, abs_x1, abs_y1, abs_x2, abs_y2));
         }
         "button" => {
             cstr!("sgl_button_set_text", w.text);
@@ -499,6 +730,9 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
         }
         "ring" => {
             cclr!("sgl_ring_set_color", w.color);
+            if let (Some(r_in), Some(r_out)) = (w.radius_in, w.radius_out) {
+                code.push_str(&format!("    sgl_ring_set_radius({}, {}, {});\n", obj, r_in, r_out));
+            }
             c!( "sgl_ring_set_alpha", w.alpha.map(|v| v as u8));
         }
         "checkbox" => {

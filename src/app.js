@@ -83,6 +83,25 @@ export const AppState = {
     if (!this.project.resources) {
       this.project.resources = { fonts: [], images: [] };
     }
+    // 兼容旧项目：为 ring 控件补充缺失的 radiusIn/radiusOut
+    // 兼容旧项目：将布尔值字段从字符串转换为真正的布尔值
+    this.project.pages.forEach(p => {
+      p.widgets.forEach(w => {
+        if (w.type === 'ring') {
+          const diameter = Math.min(w.width || 60, w.height || 60);
+          if (w.radiusOut == null) w.radiusOut = Math.round(diameter / 2);
+          if (w.radiusIn == null) w.radiusIn = w.radiusOut - 2;
+        }
+        // 兼容旧项目：将 dashed 的字符串值转换为布尔值
+        if (w.dashed === 'true') w.dashed = true;
+        else if (w.dashed === 'false') w.dashed = false;
+        // 兼容旧项目：将其他布尔值字段从字符串转换为布尔值
+        if (w.status === 'true') w.status = true;
+        else if (w.status === 'false') w.status = false;
+        if (w.locked === 'true') w.locked = true;
+        else if (w.locked === 'false') w.locked = false;
+      });
+    });
     if (this.project.pages.length === 0) {
       this.addPage('主页面');
     }
@@ -118,7 +137,7 @@ export const AppState = {
       name: name || '新页面',
       width: this.project.screen_width,
       height: this.project.screen_height,
-      bg_color: '#1e1e2e',
+      bg_color: '#FFFFFF',
       pixmap: '',
       alpha: 255,
       widgets: []
@@ -155,6 +174,21 @@ export const AppState = {
     if (page) { page.name = name; this.notify(); }
   },
 
+  // ============ line 控件尺寸同步 ============
+  // 直线时：高度/宽度等于线宽；斜线时：宽高为端点差值
+  syncLineBounds(w) {
+    if (w.type !== 'line') return;
+    const lineWidth = w.lineWidth != null ? w.lineWidth : 1;
+    const x1 = w.x1 != null ? w.x1 : w.x;
+    const y1 = w.y1 != null ? w.y1 : w.y;
+    const x2 = w.x2 != null ? w.x2 : w.x + w.width;
+    const y2 = w.y2 != null ? w.y2 : w.y + w.height;
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    w.width = dx === 0 ? lineWidth : Math.abs(dx);
+    w.height = dy === 0 ? lineWidth : Math.abs(dy);
+  },
+
   // ============ 组件操作 ============
   addWidget(type, x, y, w, h) {
     const page = this.getCurrentPage();
@@ -187,6 +221,40 @@ export const AppState = {
       zOrder: maxZ + 1,
       ...defaults
     };
+    // ring 控件：根据宽高计算内外径
+    if (type === 'ring') {
+      const diameter = Math.min(widget.width, widget.height);
+      widget.radiusOut = Math.round(diameter / 2);
+      widget.radiusIn = widget.radiusOut - 2;
+      // 同步宽高为直径
+      widget.width = widget.radiusOut * 2;
+      widget.height = widget.radiusOut * 2;
+    }
+    // circle 控件：根据宽高计算 radius
+    if (type === 'circle') {
+      const diameter = Math.min(widget.width, widget.height);
+      widget.radius = Math.round(diameter / 2);
+      widget.width = widget.radius * 2;
+      widget.height = widget.radius * 2;
+    }
+    // line 控件：x1/y1 为控件位置，初始为水平直线（y2 = y1），高度等于线宽
+    if (type === 'line') {
+      widget.x1 = widget.x;
+      widget.y1 = widget.y;
+      widget.x2 = widget.x + widget.width;
+      widget.y2 = widget.y;
+      const lineWidth = widget.lineWidth != null ? widget.lineWidth : 1;
+      widget.height = lineWidth;
+    }
+    // arc 控件：根据宽高计算内外径
+    if (type === 'arc') {
+      const diameter = Math.min(widget.width, widget.height);
+      widget.radiusOut = Math.round(diameter / 2);
+      widget.radiusIn = widget.radiusOut - 2;
+      // 同步宽高为直径
+      widget.width = widget.radiusOut * 2;
+      widget.height = widget.radiusOut * 2;
+    }
     page.widgets.push(widget);
     this.selectedWidgetIds.clear();
     this.selectedWidgetIds.add(id);
@@ -217,14 +285,64 @@ export const AppState = {
 
   moveWidget(id, x, y) {
     const w = this.getWidget(id);
-    if (w) { w.x = Math.round(x); w.y = Math.round(y); this.notify(); }
+    if (w) {
+      const dx = Math.round(x) - w.x;
+      const dy = Math.round(y) - w.y;
+      w.x = Math.round(x);
+      w.y = Math.round(y);
+      // line 控件：同步更新起点和终点坐标
+      if (w.type === 'line') {
+        if (w.x1 != null) w.x1 += dx;
+        if (w.y1 != null) w.y1 += dy;
+        if (w.x2 != null) w.x2 += dx;
+        if (w.y2 != null) w.y2 += dy;
+      }
+      this.notify();
+    }
   },
 
   resizeWidget(id, x, y, w0, h0) {
     const w = this.getWidget(id);
     if (w) {
       w.x = Math.round(x); w.y = Math.round(y);
-      w.width = Math.max(20, Math.round(w0)); w.height = Math.max(20, Math.round(h0));
+      let nw = Math.max(20, Math.round(w0));
+      let nh = Math.max(20, Math.round(h0));
+      if (w.type === 'circle') {
+        // circle 控件：圆的大小由 radius 决定
+        // 如果 radius > 0，更新 radius 为直径的一半
+        // 如果 radius = 0，使用 min(width, height) 作为直径
+        if (w.radius != null && w.radius > 0) {
+          const newDiameter = Math.max(nw, nh);
+          w.radius = Math.round(newDiameter / 2);
+          w.width = newDiameter;
+          w.height = newDiameter;
+        } else {
+          nw = nh = Math.max(nw, nh);
+          w.width = nw;
+          w.height = nh;
+        }
+      } else if (w.type === 'ring') {
+        // ring 控件：圆环大小由 radiusOut 决定
+        // 如果用户还没设置过 radiusOut，则按宽高计算内外径
+        // 如果已经设置过，则保持内外径不变
+        const newDiameter = Math.max(nw, nh);
+        if (w.radiusOut == null) {
+          w.radiusOut = Math.round(newDiameter / 2);
+          w.radiusIn = w.radiusOut - 2;
+        }
+        w.width = newDiameter;
+        w.height = newDiameter;
+      } else if (w.type === 'line') {
+        const lineWidth = w.lineWidth != null ? w.lineWidth : 1;
+        w.x1 = w.x; w.y1 = w.y;
+        // line 控件：终点坐标 = 起点坐标 + 宽高
+        w.x2 = w.x1 + Math.max(lineWidth, Math.round(w0));
+        w.y2 = w.y1 + Math.max(lineWidth, Math.round(h0));
+        this.syncLineBounds(w);
+      } else {
+        w.width = nw;
+        w.height = nh;
+      }
       this.notify();
     }
   },
@@ -375,6 +493,12 @@ export const AppState = {
         const p = JSON.parse(proj);
         if (p && p.pages) {
           this.project = p;
+          // 兼容处理：将所有布尔值字段从字符串转换为真正的布尔值
+          this.project.pages.forEach(page => {
+            page.widgets.forEach(w => {
+              this._fixBooleanFields(w);
+            });
+          });
           this.currentPageId = localStorage.getItem('sgl_current') || null;
           try {
             const sel = JSON.parse(localStorage.getItem('sgl_selected') || '[]');
@@ -385,6 +509,24 @@ export const AppState = {
         }
       }
     } catch (e) {}
+  },
+  
+  // 递归修复所有布尔值字段，将字符串转换为布尔值
+  _fixBooleanFields(obj) {
+    if (obj === null || obj === undefined) return;
+    if (typeof obj !== 'object') return;
+    if (Array.isArray(obj)) {
+      obj.forEach(item => this._fixBooleanFields(item));
+      return;
+    }
+    // 修复布尔值字段
+    const boolFields = ['dashed', 'status', 'locked', 'autoRefresh', 'autoScale', 'showYLabels', 'charging', 'showPercentage'];
+    boolFields.forEach(field => {
+      if (obj[field] === 'true') obj[field] = true;
+      else if (obj[field] === 'false') obj[field] = false;
+    });
+    // 递归处理子对象
+    Object.values(obj).forEach(val => this._fixBooleanFields(val));
   },
 
   reset() {

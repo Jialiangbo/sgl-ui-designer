@@ -1073,6 +1073,9 @@ body {
   line-height: 1.6;
   color: var(--text-primary);
   white-space: pre;
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
 }
 
 /* ============ 状态栏 ============ */

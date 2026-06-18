@@ -6,6 +6,7 @@ export default defineConfig({
   build: {
     outDir: '../dist',
     emptyOutDir: true,
+    minify: 'esbuild',
     rollupOptions: {
       input: {
         index: __dirname + '/src/index.html',

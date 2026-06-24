@@ -1,7 +1,7 @@
 // ============ SGL UI Designer - 全局状态管理 ============
-import { SGL_WIDGET_TYPES, createWidgetDefaults, generateSGLCode } from './sgl_api.js';
+import { SGL_WIDGET_TYPES, WIDGET_DEFAULTS, createWidgetDefaults, generateSGLCode, validateProjectFonts } from './sgl_api.js';
 import { invoke } from '@tauri-apps/api/core';
-import { open, save } from '@tauri-apps/plugin-dialog';
+import { open, save, message } from '@tauri-apps/plugin-dialog';
 
 export const AppState = {
   project: {
@@ -105,8 +105,8 @@ export const AppState = {
     if (this.project.pages.length === 0) {
       this.addPage('主页面');
     }
-    if (!this.currentPageId && this.project.pages.length > 0) {
-      this.currentPageId = this.project.pages[0].id;
+    if (!this.currentPageId || !this.project.pages.some(p => p.id === this.currentPageId)) {
+      this.currentPageId = this.project.pages.length > 0 ? this.project.pages[0].id : null;
     }
   },
 
@@ -139,6 +139,7 @@ export const AppState = {
       height: this.project.screen_height,
       bg_color: '#FFFFFF',
       pixmap: '',
+      pixmapFormat: 'RGB565',
       alpha: 255,
       widgets: []
     };
@@ -214,6 +215,7 @@ export const AppState = {
     });
     const widget = {
       id,
+      name: id,
       x: Math.round(x),
       y: Math.round(y),
       width: Math.round(w),
@@ -417,9 +419,50 @@ export const AppState = {
       // 代码保存在项目文件同目录下
       const projectDir = this.projectPath.replace(/[/\\][^/\\]*$/, '');
       const codePath = projectDir + '/ui_' + this.project.name + '.c';
-      await invoke('export_code', { path: codePath, project: this.project });
+      const code = generateSGLCode(this.project);
+      await invoke('export_code', { path: codePath, code, project: this.project });
       return { ok: true, path: codePath };
     } catch (e) {
+      return { ok: false, msg: String(e) };
+    }
+  },
+
+  // ============ 导出代码到项目目录（设计器和代码预览共用） ============
+  async exportCodeToProject(actionName = '导出代码') {
+    // 检查并提示字体缺失
+    const issues = validateProjectFonts(this.project);
+    if (issues.length > 0) {
+      const summary = `检测到 ${issues.length} 个文本控件缺少字体资源`;
+      const detail = issues.map(item =>
+        `• ${item.page} / ${item.widget}: ${item.reason} (${item.fontFamily || '无'})`
+      ).join('\n');
+      showToast(summary, 'warn');
+      try {
+        await message(`${summary}，请在右侧资源面板添加字体文件后再操作。\n\n${detail}`, { title: '字体资源缺失', kind: 'warning' });
+      } catch (e) {
+        console.warn('显示字体缺失提示失败:', e);
+      }
+    }
+
+    if (!this.projectPath) {
+      showToast('请先保存项目', 'error');
+      return { ok: false, msg: '项目未保存' };
+    }
+
+    // 自动保存
+    const saveResult = await this.saveProject();
+    if (!saveResult.ok) {
+      showToast('保存项目失败: ' + saveResult.msg, 'error');
+      return { ok: false, msg: saveResult.msg };
+    }
+
+    try {
+      const code = generateSGLCode(this.project);
+      const result = await invoke('export_code_to_project', { project: this.project, projectPath: this.projectPath, code });
+      showToast('代码已导出', 'success');
+      return { ok: true, msg: result };
+    } catch (e) {
+      showToast('导出失败: ' + e, 'error');
       return { ok: false, msg: String(e) };
     }
   },
@@ -462,6 +505,7 @@ export const AppState = {
       if (!filePath) return { ok: false, msg: '取消打开' };
       const project = await invoke('load_project', { path: filePath });
       if (project && project.pages) {
+        this._migrateWidgetDefaults(project);
         this.project = project;
         this.projectPath = filePath;
         this.currentPageId = this.project.pages.length > 0 ? this.project.pages[0].id : null;
@@ -499,6 +543,7 @@ export const AppState = {
               this._fixBooleanFields(w);
             });
           });
+          this._migrateWidgetDefaults(this.project);
           this.currentPageId = localStorage.getItem('sgl_current') || null;
           try {
             const sel = JSON.parse(localStorage.getItem('sgl_selected') || '[]');
@@ -527,6 +572,23 @@ export const AppState = {
     });
     // 递归处理子对象
     Object.values(obj).forEach(val => this._fixBooleanFields(val));
+  },
+
+  // 加载旧项目时，把缺失的控件默认属性补回来，避免新 API 调用缺失
+  _migrateWidgetDefaults(project) {
+    if (!project || !project.pages) return;
+    project.pages.forEach(page => {
+      if (!page.widgets) return;
+      page.widgets.forEach(w => {
+        const defaults = WIDGET_DEFAULTS[w.type];
+        if (!defaults) return;
+        Object.keys(defaults).forEach(key => {
+          if (w[key] === undefined) {
+            w[key] = JSON.parse(JSON.stringify(defaults[key]));
+          }
+        });
+      });
+    });
   },
 
   reset() {

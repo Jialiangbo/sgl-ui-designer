@@ -1,10 +1,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde::{Deserialize, Deserializer, Serialize};
+use base64::Engine;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct Widget {
     id: String,
+    #[serde(default)]
+    name: Option<String>,
     #[serde(rename = "type")]
     widget_type: String,
     x: i32,
@@ -13,7 +16,7 @@ struct Widget {
     height: i32,
     text: Option<String>,
     color: Option<String>,
-    #[serde(rename = "bgColor")]
+    #[serde(default, rename = "bgColor")]
     bg_color: Option<String>,
     #[serde(rename = "borderColor")]
     border_color: Option<String>,
@@ -26,6 +29,8 @@ struct Widget {
     radius: Option<i32>,
     alpha: Option<i32>,
     pixmap: Option<String>,
+    #[serde(rename = "pixmapFormat", default)]
+    pixmap_format: Option<String>,
     #[serde(rename = "fontSize")]
     font_size: Option<i32>,
     #[serde(rename = "fontFamily")]
@@ -46,6 +51,8 @@ struct Widget {
     knob_color: Option<String>,
     #[serde(rename = "textColor")]
     text_color: Option<String>,
+    #[serde(rename = "onColor")]
+    on_color: Option<String>,
     #[serde(rename = "knobRadius")]
     knob_radius: Option<i32>,
     #[serde(rename = "knobMargin")]
@@ -75,6 +82,10 @@ struct Widget {
     radius_in: Option<i32>,
     #[serde(rename = "radiusOut")]
     radius_out: Option<i32>,
+    #[serde(rename = "startAngle")]
+    start_angle: Option<i32>,
+    #[serde(rename = "endAngle")]
+    end_angle: Option<i32>,
     #[serde(rename = "eventCb")]
     event_cb: Option<String>,
     #[serde(rename = "parentId", default)]
@@ -89,6 +100,8 @@ struct Widget {
     y2: Option<i32>,
     #[serde(rename = "lineWidth", default)]
     line_width: Option<i32>,
+    #[serde(default)]
+    vertices: Option<String>,
 }
 
 // 兼容前端传来的字符串布尔值（"true"/"false"）
@@ -189,9 +202,9 @@ fn get_widget_defaults(t: &str) -> Option<WidgetDefaults> {
             thickness: 0, fill_gap: 0, fill_radius: 0,
         }),
         "button" => Some(WidgetDefaults {
-            color: "#8b5cf6", border_color: "#7c3aed", border_width: 1, border_alpha: 255,
-            main_alpha: 255, radius: 8, alpha: 255, pixmap: "", text: "按钮", text_color: "#ffffff",
-            bg_color: "#8b5cf6", font_size: 14, font_family: "simsun.ttc", align: "CENTER",
+            color: "#ffffff", border_color: "#000000", border_width: 2, border_alpha: 255,
+            main_alpha: 255, radius: 0, alpha: 255, pixmap: "", text: "按钮", text_color: "#000000",
+            bg_color: "", font_size: 14, font_family: "simsun.ttc", align: "CENTER",
             status: false, dashed: false, dash_len: 0, gap_len: 0, value: 0, fill_color: "",
             track_color: "", knob_color: "", knob_radius: 0, knob_margin: 0, x_offset: 0,
             y_offset: 0, text_offset_x: 0, text_offset_y: 0, text_rotation: 0, direct: 0,
@@ -221,7 +234,7 @@ fn get_widget_defaults(t: &str) -> Option<WidgetDefaults> {
             main_alpha: 255, radius: 15, alpha: 255, pixmap: "", text: "", text_color: "",
             bg_color: "#313149", font_size: 0, font_family: "", align: "", status: false,
             dashed: false, dash_len: 0, gap_len: 0, value: 0, fill_color: "", track_color: "",
-            knob_color: "#ffffff", knob_radius: 10, knob_margin: 2, x_offset: 0, y_offset: 0,
+            knob_color: "#ffffff", knob_radius: 255, knob_margin: 2, x_offset: 0, y_offset: 0,
             text_offset_x: 0, text_offset_y: 0, text_rotation: 0, direct: 0,
             border_width_i16: 0, radius_u16: 0, thickness: 0, fill_gap: 0, fill_radius: 0,
         }),
@@ -238,6 +251,8 @@ struct Page {
     bg_color: String,
     #[serde(default)]
     pixmap: Option<String>,
+    #[serde(default, rename = "pixmapFormat")]
+    pixmap_format: Option<String>,
     #[serde(default)]
     alpha: Option<u8>,
     widgets: Vec<Widget>,
@@ -283,6 +298,23 @@ fn sanitize_id(s: &str) -> String {
         .collect()
 }
 
+// 根据图片路径和格式生成合法的 C 变量名（用于 sgl_pixmap_t* 引用）
+fn pixmap_var_name(pixmap_path: &str, format: &str) -> String {
+    let normalized = pixmap_path.replace('\\', "/");
+    let base = normalized.rsplit('/').next().unwrap_or(pixmap_path);
+    let stem = base.rsplit_once('.').map(|(s, _)| s).unwrap_or(base);
+    let sanitized: String = stem
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })
+        .collect();
+    let sanitized = if sanitized.starts_with(|c: char| c.is_numeric()) {
+        format!("_{}", sanitized)
+    } else {
+        sanitized
+    };
+    format!("pixmap_{}_{}", sanitized, format.replace('-', "_"))
+}
+
 fn sgl_color(hex: &str) -> String {
     if hex.is_empty() || !hex.starts_with('#') || hex.len() != 7 {
         return "SGL_COLOR_BLACK".to_string();
@@ -316,11 +348,10 @@ fn resolve_font_path(family: &str) -> Option<String> {
     Some(family.to_string())
 }
 
-fn collect_fonts(project: &Project) -> Vec<(String, String, i32, i32)> {
-    // (font_name, font_path, size, bpp)
-    use std::collections::HashSet;
-    let mut fonts: Vec<(String, String, i32, i32)> = Vec::new();
-    let mut seen = HashSet::new();
+fn collect_fonts(project: &Project) -> Vec<(String, String, i32, i32, String)> {
+    // (font_name, font_path, size, bpp, symbols)
+    use std::collections::{HashMap, HashSet};
+    let mut map: HashMap<(String, i32, i32), (String, HashSet<char>)> = HashMap::new();
     for page in &project.pages {
         for w in &page.widgets {
             if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
@@ -331,16 +362,30 @@ fn collect_fonts(project: &Project) -> Vec<(String, String, i32, i32)> {
                 if font_name == "default" {
                     continue;
                 }
-                let key = (font_name.clone(), sz, bpp);
-                if seen.insert(key.clone()) {
-                    // 解析字体文件路径
-                    let font_path = resolve_font_path(fam).unwrap_or_else(|| fam.clone());
-                    fonts.push((font_name, font_path, sz, bpp));
+                // 解析字体文件路径
+                let font_path = resolve_font_path(fam).unwrap_or_else(|| fam.clone());
+                let entry = map
+                    .entry((font_name.clone(), sz, bpp))
+                    .or_insert((font_path, HashSet::new()));
+                // 收集该控件使用的文本字符
+                if let Some(ref text) = w.text {
+                    for ch in text.chars() {
+                        // 跳过控制字符，但保留普通空格
+                        if !ch.is_control() || ch == ' ' {
+                            entry.1.insert(ch);
+                        }
+                    }
                 }
             }
         }
     }
-    fonts
+    map.into_iter()
+        .map(|((name, sz, bpp), (path, set))| {
+            let symbols: String = set.into_iter().collect();
+            (name, path, sz, bpp, symbols)
+        })
+        .filter(|(_, _, _, _, symbols)| !symbols.is_empty())
+        .collect()
 }
 
 fn font_id_from_family(family: &str, size: i32, bpp: i32) -> String {
@@ -353,11 +398,364 @@ fn font_id_from_family(family: &str, size: i32, bpp: i32) -> String {
 
 fn font_filename(family: &str, size: i32, bpp: i32) -> String {
     let clean: String = family.chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect();
-    format!("font_{}_{}_bpp{}.c", clean, size, bpp)
+    format!("sgl_font_{}_{}_bpp{}.c", clean, size, bpp)
+}
+
+/// 确保 sgl-port 的 CMakeLists.txt 会自动收集 demo/fonts/*.c 字模源文件
+/// 返回是否修改了文件
+fn ensure_cmake_fonts_glob(cmake_path: &std::path::Path) -> Result<bool, String> {
+    if !cmake_path.exists() {
+        return Ok(false);
+    }
+    let content = std::fs::read_to_string(cmake_path)
+        .map_err(|e| format!("读取 CMakeLists.txt 失败: {}", e))?;
+
+    // 已包含 demo/fonts 字模源文件收集逻辑则跳过
+    if content.contains("DEMO_FONT_SOURCES") || content.contains("${DEMO_DIR}/fonts/*.c") {
+        return Ok(false);
+    }
+
+    // 在 set(DEMO_SOURCES ...) 结束后的位置插入
+    if let Some(start) = content.find("set(DEMO_SOURCES") {
+        if let Some(end) = content[start..].find("\n)") {
+            let pos = start + end + 2;
+            let insert = "\n# Auto-generated: include font bitmap sources\nfile(GLOB DEMO_FONT_SOURCES ${DEMO_DIR}/fonts/*.c)\nlist(APPEND DEMO_SOURCES ${DEMO_FONT_SOURCES})\n";
+            let new_content = format!("{}{}{}", &content[..pos], insert, &content[pos..]);
+            std::fs::write(cmake_path, new_content)
+                .map_err(|e| format!("写入 CMakeLists.txt 失败: {}", e))?;
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn run_font_conv(
+    conv: &str,
+    name: &str,
+    path: &str,
+    sz: i32,
+    bpp: i32,
+    symbols: &str,
+    fonts_dir: &std::path::Path,
+) -> Result<(), String> {
+    // 字体文件名不能包含中文或特殊字符
+    if has_non_ascii(name) {
+        return Err(format!("字体文件名不能包含中文或特殊字符: {}", name));
+    }
+
+    // 使用清理后的字体文件名，避免空格等特殊字符导致 sgl_font_conv 解析失败
+    let clean_name: String = name
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '_' })
+        .collect();
+
+    // 将原始字体文件复制到 fonts_dir 并使用清理后的文件名
+    let src_path = std::path::Path::new(path);
+    let temp_font_path = fonts_dir.join(&clean_name);
+    if src_path != temp_font_path.as_path() {
+        std::fs::copy(src_path, &temp_font_path)
+            .map_err(|e| format!("复制字体文件 {} 失败: {}", path, e))?;
+    }
+
+    let out_file = fonts_dir.join(format!("sgl_font_{}_{}_bpp{}.c", clean_name, sz, bpp));
+    let out_str = out_file.to_string_lossy().to_string();
+    let font_arg = temp_font_path.to_string_lossy().to_string();
+
+    let mut cmd = std::process::Command::new(conv);
+    cmd.arg("--font").arg(&font_arg)
+        .arg("--size").arg(sz.to_string())
+        .arg("--bpp").arg(bpp.to_string())
+        .arg("--output").arg(&out_str);
+
+    if !symbols.is_empty() {
+        let symbols_file = fonts_dir.join(format!("symbols_{}_{}_bpp{}.txt", clean_name, sz, bpp));
+        std::fs::write(&symbols_file, symbols)
+            .map_err(|e| format!("写入 symbols 文件失败: {}", e))?;
+        cmd.arg("--symbols-file").arg(&symbols_file);
+    }
+
+    let output = cmd.output().map_err(|e| format!("调用 sgl_font_conv 失败: {}", e))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Err(format!(
+            "sgl_font_conv 返回非零状态 {:?}\nstdout: {}\nstderr: {}",
+            output.status.code(), stdout, stderr
+        ))
+    }
+}
+
+// ============ 图片取模 / pixmap 生成 ============
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum PixmapFormat {
+    RGB332,
+    ARGB2222,
+    RGB565,
+    ARGB4444,
+    RGB888,
+    ARGB8888,
+}
+
+impl PixmapFormat {
+    fn from_str(s: &str) -> Self {
+        match s {
+            "RGB332" => Self::RGB332,
+            "ARGB2222" => Self::ARGB2222,
+            "RGB565" => Self::RGB565,
+            "ARGB4444" => Self::ARGB4444,
+            "RGB888" => Self::RGB888,
+            "ARGB8888" => Self::ARGB8888,
+            _ => Self::RGB565,
+        }
+    }
+
+    fn sgl_name(&self) -> &'static str {
+        match self {
+            Self::RGB332 => "SGL_PIXMAP_FMT_RGB332",
+            Self::ARGB2222 => "SGL_PIXMAP_FMT_ARGB2222",
+            Self::RGB565 => "SGL_PIXMAP_FMT_RGB565",
+            Self::ARGB4444 => "SGL_PIXMAP_FMT_ARGB4444",
+            Self::RGB888 => "SGL_PIXMAP_FMT_RGB888",
+            Self::ARGB8888 => "SGL_PIXMAP_FMT_ARGB8888",
+        }
+    }
+
+    fn bytes_per_pixel(&self) -> usize {
+        match self {
+            Self::RGB332 | Self::ARGB2222 => 1,
+            Self::RGB565 | Self::ARGB4444 => 2,
+            Self::RGB888 => 3,
+            Self::ARGB8888 => 4,
+        }
+    }
+
+    fn has_alpha(&self) -> bool {
+        matches!(self, Self::ARGB2222 | Self::ARGB4444 | Self::ARGB8888)
+    }
+
+    fn encode(&self, r: u8, g: u8, b: u8, a: u8) -> Vec<u8> {
+        match self {
+            Self::RGB332 => vec![((r & 0xE0) | ((g >> 3) & 0x1C) | ((b >> 6) & 0x03))],
+            Self::ARGB2222 => vec![((a >> 6) << 6) | ((r >> 6) << 4) | ((g >> 6) << 2) | (b >> 6)],
+            Self::RGB565 => {
+                let v = (((r as u16) & 0xF8) << 8) | (((g as u16) & 0xFC) << 3) | ((b as u16) >> 3);
+                vec![(v & 0xFF) as u8, ((v >> 8) & 0xFF) as u8]
+            }
+            Self::ARGB4444 => {
+                let v = (((a as u16) & 0xF0) << 8) | (((r as u16) & 0xF0) << 4) | ((g as u16) & 0xF0) | ((b as u16) >> 4);
+                vec![(v & 0xFF) as u8, ((v >> 8) & 0xFF) as u8]
+            }
+            Self::RGB888 => vec![b, g, r],
+            Self::ARGB8888 => vec![b, g, r, a],
+        }
+    }
+}
+
+fn convert_image_to_pixmap(path: &str, fmt: PixmapFormat) -> Result<(u32, u32, Vec<u8>), String> {
+    let img = image::open(path).map_err(|e| format!("无法打开图片 {}: {}", path, e))?;
+    let rgba = img.to_rgba8();
+    let (w, h) = rgba.dimensions();
+    let mut bytes = Vec::with_capacity((w * h) as usize * fmt.bytes_per_pixel());
+    for pix in rgba.pixels() {
+        let [r, g, b, a] = pix.0;
+        // 非 Alpha 格式：将透明/半透明像素按黑色背景合成，避免导出后透明区域残留异常颜色
+        let (r, g, b, a) = if fmt.has_alpha() {
+            (r, g, b, a)
+        } else {
+            let a = a as u32;
+            let r = ((r as u32 * a) / 255) as u8;
+            let g = ((g as u32 * a) / 255) as u8;
+            let b = ((b as u32 * a) / 255) as u8;
+            (r, g, b, 255)
+        };
+        bytes.extend_from_slice(&fmt.encode(r, g, b, a));
+    }
+    Ok((w, h, bytes))
+}
+
+fn parse_hex_color(hex: &str) -> Option<(u8, u8, u8)> {
+    let hex = hex.trim_start_matches('#');
+    if hex.len() != 6 {
+        return None;
+    }
+    let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+    let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+    let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+    Some((r, g, b))
 }
 
 #[tauri::command]
-fn generate_code(project: Project) -> String {
+fn get_opaque_image_data_url(path: String, fill_color: String) -> Result<String, String> {
+    let img = image::open(&path).map_err(|e| format!("无法打开图片 {}: {}", path, e))?;
+    let rgba = img.to_rgba8();
+    let (w, h) = rgba.dimensions();
+    let (fr, fg, fb) = parse_hex_color(&fill_color).unwrap_or((0, 0, 0));
+
+    let mut output = image::RgbaImage::new(w, h);
+    for (x, y, pix) in rgba.enumerate_pixels() {
+        let [r, g, b, a] = pix.0;
+        let alpha = a as f32 / 255.0;
+        let inv_alpha = 1.0 - alpha;
+        let nr = (r as f32 * alpha + fr as f32 * inv_alpha) as u8;
+        let ng = (g as f32 * alpha + fg as f32 * inv_alpha) as u8;
+        let nb = (b as f32 * alpha + fb as f32 * inv_alpha) as u8;
+        output.put_pixel(x, y, image::Rgba([nr, ng, nb, 255]));
+    }
+
+    let mut png_bytes = Vec::new();
+    let encoder = image::codecs::png::PngEncoder::new(&mut png_bytes);
+    output.write_with_encoder(encoder).map_err(|e| format!("PNG 编码失败: {}", e))?;
+    let base64 = base64::engine::general_purpose::STANDARD.encode(&png_bytes);
+    Ok(format!("data:image/png;base64,{}", base64))
+}
+
+fn collect_pixmaps(project: &Project) -> Vec<(String, PixmapFormat)> {
+    let mut used: Vec<(String, PixmapFormat)> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for page in &project.pages {
+        if let Some(ref p) = page.pixmap {
+            if !p.is_empty() {
+                let fmt = PixmapFormat::from_str(page.pixmap_format.as_deref().unwrap_or("RGB565"));
+                if seen.insert((p.clone(), fmt)) {
+                    used.push((p.clone(), fmt));
+                }
+            }
+        }
+        for w in &page.widgets {
+            if let Some(ref p) = w.pixmap {
+                if !p.is_empty() {
+                    let fmt = PixmapFormat::from_str(w.pixmap_format.as_deref().unwrap_or("RGB565"));
+                    if seen.insert((p.clone(), fmt)) {
+                        used.push((p.clone(), fmt));
+                    }
+                }
+            }
+        }
+    }
+
+    used
+}
+
+fn has_non_ascii(s: &str) -> bool {
+    s.chars().any(|c| !c.is_ascii())
+}
+
+fn pixmap_filename(path: &str, fmt: &PixmapFormat) -> String {
+    let var = pixmap_var_name(path, &fmt.sgl_name().replace("SGL_PIXMAP_FMT_", ""));
+    format!("{}.c", var)
+}
+
+fn generate_pixmap_includes(project: &Project) -> Result<String, String> {
+    let used = collect_pixmaps(project);
+    if used.is_empty() {
+        return Ok(String::new());
+    }
+
+    let mut out = String::new();
+    out.push_str("/* ============================================\n");
+    out.push_str(" * 图片取模数据\n");
+    out.push_str(" * ============================================ */\n");
+
+    for (path, fmt) in &used {
+        let name = std::path::Path::new(path)
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.clone());
+        if has_non_ascii(&name) {
+            return Err(format!("图片文件名不能包含中文或特殊字符: {}", name));
+        }
+        out.push_str(&format!(
+            "#include \"pixmaps/{}\"\n",
+            pixmap_filename(path, fmt)
+        ));
+    }
+    out.push('\n');
+    Ok(out)
+}
+
+fn generate_pixmap_files(project: &Project, pixmaps_dir: &std::path::Path) -> Result<(), String> {
+    // 建立文件名 -> 资源绝对路径 的映射，用于兼容保存后 widget.pixmap 仍为旧路径的情况
+    let mut image_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for img in &project.resources.images {
+        let name = std::path::Path::new(&img.path)
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| img.path.clone());
+        image_map.insert(name, img.path.clone());
+    }
+
+    // 解析实际用于读取的图片路径
+    let resolve_path = |p: &str| -> Option<String> {
+        if p.is_empty() { return None; }
+        let path = std::path::Path::new(p);
+        if path.is_absolute() && path.exists() {
+            return Some(p.to_string());
+        }
+        if path.exists() {
+            return Some(path.canonicalize().unwrap_or(path.to_path_buf()).to_string_lossy().to_string());
+        }
+        let name = path.file_name().map(|s| s.to_string_lossy().to_string())?;
+        image_map.get(&name).cloned()
+    };
+
+    let used = collect_pixmaps(project);
+    if used.is_empty() {
+        return Ok(());
+    }
+
+    std::fs::create_dir_all(pixmaps_dir)
+        .map_err(|e| format!("创建 pixmaps 目录失败: {}", e))?;
+
+    for (path, fmt) in &used {
+        let name = std::path::Path::new(path)
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.clone());
+        if has_non_ascii(&name) {
+            return Err(format!("图片文件名不能包含中文或特殊字符: {}", name));
+        }
+
+        let var = pixmap_var_name(path, &fmt.sgl_name().replace("SGL_PIXMAP_FMT_", ""));
+        let resolved = resolve_path(path)
+            .ok_or_else(|| format!("图片取模失败: 无法解析图片路径 {}", path))?;
+        let (w, h, bytes) = convert_image_to_pixmap(&resolved, *fmt)
+            .map_err(|e| format!("图片取模失败 {}: {}", path, e))?;
+
+        let out_file = pixmaps_dir.join(pixmap_filename(path, fmt));
+        let mut out = String::new();
+        out.push_str("/* ============================================\n");
+        out.push_str(" * 图片取模数据\n");
+        out.push_str(" * ============================================ */\n");
+        out.push_str(&format!("static const uint8_t {}_data[] = {{\n    ", var));
+        for (i, b) in bytes.iter().enumerate() {
+            out.push_str(&format!("0x{:02X},", b));
+            if (i + 1) % 16 == 0 {
+                out.push_str("\n    ");
+            } else {
+                out.push(' ');
+            }
+        }
+        if bytes.len() % 16 != 0 {
+            out.push('\n');
+        }
+        out.push_str("};\n");
+        out.push_str(&format!(
+            "const sgl_pixmap_t {} = {{ .width = {}, .height = {}, .format = {}, .bitmap = {{ .array = {}_data }} }};\n",
+            var, w, h, fmt.sgl_name(), var
+        ));
+        std::fs::write(&out_file, out)
+            .map_err(|e| format!("写入图片取模文件 {} 失败: {}", out_file.to_string_lossy(), e))?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+fn generate_code(project: Project) -> Result<String, String> {
     let fonts = collect_fonts(&project);
     let mut code = String::new();
     code.push_str("/* ============================================\n");
@@ -371,16 +769,22 @@ fn generate_code(project: Project) -> String {
         code.push_str("\n/* ============================================\n");
         code.push_str(" * 字体字模声明\n");
         code.push_str(" * 在导出目录的 fonts/ 子目录中运行以下命令生成字模文件：\n");
-        for (name, path, sz, bpp) in &fonts {
+        for (name, path, sz, bpp, _symbols) in &fonts {
             code.push_str(&format!(" *   sgl_font_conv.exe --font {} --size {} --bpp {} --output fonts/{}\n",
                 path, sz, bpp, font_filename(name, *sz, *bpp)));
         }
         code.push_str(" * ============================================ */\n");
-        for (name, _path, sz, bpp) in &fonts {
-            code.push_str(&format!("#include \"fonts/{}\"\n", font_filename(name, *sz, *bpp)));
+        for (name, _path, sz, bpp, _symbols) in &fonts {
+            code.push_str(&format!("extern const sgl_font_t {};\n", font_id_from_family(name, *sz, *bpp)));
         }
     }
     code.push('\n');
+
+    // 生成图片取模 include
+    let pixmap_includes = generate_pixmap_includes(&project)?;
+    if !pixmap_includes.is_empty() {
+        code.push_str(&pixmap_includes);
+    }
 
     // 收集所有事件回调函数名，生成前向声明
     let mut event_cbs: Vec<String> = Vec::new();
@@ -414,7 +818,8 @@ fn generate_code(project: Project) -> String {
         // 页面背景：优先使用图片，否则使用颜色
         if let Some(ref pixmap) = page.pixmap {
             if !pixmap.is_empty() {
-                code.push_str(&format!("    sgl_page_set_pixmap(page_{}, \"{}\");\n", page_id, pixmap));
+                let fmt = page.pixmap_format.as_deref().unwrap_or("RGB565");
+                code.push_str(&format!("    sgl_page_set_pixmap(page_{}, &{});\n", page_id, pixmap_var_name(pixmap, fmt)));
             } else if !page.bg_color.is_empty() {
                 code.push_str(&format!("    sgl_page_set_color(page_{}, {});\n", page_id, sgl_color(&page.bg_color)));
             }
@@ -456,7 +861,7 @@ fn generate_code(project: Project) -> String {
         code.push_str(&format!("    ui_page_{}_create();\n", page_id));
     }
     code.push_str("}\n");
-    code
+    Ok(code)
 }
 
 fn get_create_fn(t: &str) -> &'static str {
@@ -534,7 +939,8 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             // rect: 图片和背景色二选一
             if let Some(ref pixmap) = w.pixmap {
                 if !pixmap.is_empty() {
-                    code.push_str(&format!("    sgl_rect_set_pixmap({}, \"{}\");\n", obj, pixmap.replace('"', "\\\"")));
+                    let fmt = w.pixmap_format.as_deref().unwrap_or("RGB565");
+                    code.push_str(&format!("    sgl_rect_set_pixmap({}, &{});\n", obj, pixmap_var_name(pixmap, fmt)));
                 } else if let Some(ref c) = w.color {
                     if !c.is_empty() {
                         code.push_str(&format!("    sgl_rect_set_color({}, {});\n", obj, sgl_color(c)));
@@ -570,7 +976,8 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             // 颜色或图片二选一
             if let Some(ref pixmap) = w.pixmap {
                 if !pixmap.is_empty() {
-                    code.push_str(&format!("    sgl_circle_set_pixmap({}, \"{}\");\n", obj, pixmap.replace('"', "\\\"")));
+                    let fmt = w.pixmap_format.as_deref().unwrap_or("RGB565");
+                    code.push_str(&format!("    sgl_circle_set_pixmap({}, &{});\n", obj, pixmap_var_name(pixmap, fmt)));
                 } else if let Some(ref c) = w.color {
                     if !c.is_empty() {
                         code.push_str(&format!("    sgl_circle_set_color({}, {});\n", obj, sgl_color(c)));
@@ -620,6 +1027,12 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             if let Some(a) = &w.align {
                 code.push_str(&format!("    sgl_button_set_text_align({}, SGL_ALIGN_{});\n", obj, a));
             }
+            if let Some(pix) = &w.pixmap {
+                if !pix.is_empty() {
+                    let fmt = w.pixmap_format.as_deref().unwrap_or("RGB565");
+                    code.push_str(&format!("    sgl_button_set_pixmap({}, &{});\n", obj, pixmap_var_name(pix, fmt)));
+                }
+            }
         }
         "label" => {
             cstr!("sgl_label_set_text", w.text);
@@ -655,7 +1068,7 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             if let Some(s) = w.status {
                 code.push_str(&format!("    sgl_switch_set_status({}, {});\n", obj, if s { "true" } else { "false" }));
             }
-            cclr!("sgl_switch_set_color", w.color);
+            cclr!("sgl_switch_set_color", w.on_color);
             cclr!("sgl_switch_set_bg_color", w.bg_color);
             cclr!("sgl_switch_set_knob_color", w.knob_color);
             cclr!("sgl_switch_set_border_color", w.border_color);
@@ -664,6 +1077,12 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             c!( "sgl_switch_set_knob_radius", w.knob_radius.map(|v| v as u8));
             c!( "sgl_switch_set_knob_margin", w.knob_margin.map(|v| v as u8));
             c!( "sgl_switch_set_alpha", w.alpha.map(|v| v as u8));
+            if let Some(pix) = &w.pixmap {
+                if !pix.is_empty() {
+                    let fmt = w.pixmap_format.as_deref().unwrap_or("RGB565");
+                    code.push_str(&format!("    sgl_switch_set_pixmap({}, &{});\n", obj, pixmap_var_name(pix, fmt)));
+                }
+            }
         }
         "slider" => {
             c!( "sgl_slider_set_value", w.value.map(|v| v as u8));
@@ -826,10 +1245,50 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             c!( "sgl_scope_set_alpha", w.alpha.map(|v| v as u8));
         }
         "polygon" => {
-            cclr!("sgl_polygon_set_fill_color", w.color);
+            cclr!("sgl_polygon_set_fill_color", w.fill_color);
             cclr!("sgl_polygon_set_border_color", w.border_color);
             c!( "sgl_polygon_set_border_width", w.border_width.map(|v| v as u8));
             c!( "sgl_polygon_set_alpha", w.alpha.map(|v| v as u8));
+            if let Some(ref vertices) = w.vertices {
+                let coords: Vec<(i32, i32)> = vertices.split(';')
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                    .filter_map(|s| {
+                        let mut parts = s.split(',');
+                        if let (Some(x), Some(y)) = (parts.next(), parts.next()) {
+                            let x = x.trim().parse::<i32>().ok()?;
+                            let y = y.trim().parse::<i32>().ok()?;
+                            Some((x, y))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                if coords.len() >= 3 {
+                    let pairs = coords.iter()
+                        .map(|(x, y)| format!("{{{}, {}}}", x, y))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    code.push_str(&format!("    sgl_polygon_set_vertex_array({}, (int16_t[][2]){{{}}}, {});\n", obj, pairs, coords.len()));
+                }
+            }
+            if let Some(ref text) = w.text {
+                if !text.is_empty() {
+                    let escaped = text.replace('\\', "\\\\").replace('"', "\\\"");
+                    code.push_str(&format!("    sgl_polygon_set_text({}, \"{}\");\n", obj, escaped));
+                }
+            }
+            cclr!("sgl_polygon_set_text_color", w.text_color);
+            if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
+                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4));
+                code.push_str(&format!("    sgl_polygon_set_font({}, &{});\n", obj, fid));
+            }
+            if let Some(ref pixmap) = w.pixmap {
+                if !pixmap.is_empty() {
+                    let fmt = w.pixmap_format.as_deref().unwrap_or("RGB565");
+                    code.push_str(&format!("    sgl_polygon_set_pixmap({}, &{});\n", obj, pixmap_var_name(pixmap, fmt)));
+                }
+            }
         }
         "numberkbd" => {
             cclr!("sgl_numberkbd_set_color", w.color);
@@ -1002,57 +1461,56 @@ fn load_project(path: String) -> Result<Project, String> {
 }
 
 #[tauri::command]
-fn export_code(path: String, project: Project) -> Result<(), String> {
+fn export_code(path: String, code: String, mut project: Project) -> Result<(), String> {
+    // 如果输出路径在项目目录下，尝试将图片资源相对路径转换为绝对路径
+    if let Some(parent) = std::path::Path::new(&path).parent() {
+        for img in &mut project.resources.images {
+            let p = std::path::Path::new(&img.path);
+            if !p.is_absolute() {
+                let abs = parent.join(p);
+                if abs.exists() {
+                    img.path = abs.to_string_lossy().to_string();
+                }
+            }
+        }
+    }
+
     let fonts = collect_fonts(&project);
-    let code = generate_code(project);
+
     // 创建输出目录
     if let Some(parent) = std::path::Path::new(&path).parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
+
+    // 生成图片取模文件到 pixmaps/ 子目录
+    let out_dir = std::path::Path::new(&path).parent().unwrap_or(std::path::Path::new("."));
+    let pixmaps_dir = out_dir.join("pixmaps");
+    if pixmaps_dir.exists() {
+        let _ = std::fs::remove_dir_all(&pixmaps_dir);
+    }
+    generate_pixmap_files(&project, &pixmaps_dir)?;
+
     std::fs::write(&path, code).map_err(|e| e.to_string())?;
 
-    // 如果有字体配置，尝试调用 sgl_font_conv.exe 生成字模文件
+    // 如果有字体配置，调用 sgl_font_conv.exe 生成字模文件
     if !fonts.is_empty() {
-        let out_dir = std::path::Path::new(&path).parent().unwrap_or(std::path::Path::new("."));
         let fonts_dir = out_dir.join("fonts");
-        let _ = std::fs::create_dir_all(&fonts_dir);
 
-        // 查找 sgl_font_conv.exe：优先在设计器 exe 同目录，其次项目根目录，最后 PATH
+        // 清空旧字模和 symbols 文件，避免残留垃圾
+        if fonts_dir.exists() {
+            let _ = std::fs::remove_dir_all(&fonts_dir);
+        }
+        std::fs::create_dir_all(&fonts_dir)
+            .map_err(|e| format!("创建 fonts 目录失败: {}", e))?;
+
         let conv_path = find_sgl_font_conv();
-
         if let Some(conv) = conv_path {
-            for (name, path, sz, bpp) in &fonts {
-                let out_file = fonts_dir.join(font_filename(name, *sz, *bpp));
-                let out_str = out_file.to_string_lossy().to_string();
-
-                #[cfg(windows)]
-                {
-                    use std::process::Command;
-                    let status = Command::new(&conv)
-                        .arg("--font").arg(path)
-                        .arg("--size").arg(sz.to_string())
-                        .arg("--bpp").arg(bpp.to_string())
-                        .arg("--output").arg(&out_str)
-                        .status();
-                    match status {
-                        Ok(s) if s.success() => {}
-                        Ok(s) => eprintln!("sgl_font_conv 返回非零状态 {:?}", s.code()),
-                        Err(e) => eprintln!("调用 sgl_font_conv 失败: {}", e),
-                    }
-                }
-                #[cfg(not(windows))]
-                {
-                    use std::process::Command;
-                    let _ = Command::new(&conv)
-                        .arg("--font").arg(path)
-                        .arg("--size").arg(sz.to_string())
-                        .arg("--bpp").arg(bpp.to_string())
-                        .arg("--output").arg(&out_str)
-                        .status();
-                }
+            for (name, path, sz, bpp, symbols) in &fonts {
+                run_font_conv(&conv, name, path, *sz, *bpp, symbols, &fonts_dir)
+                    .map_err(|e| format!("生成字模 {} 失败: {}", name, e))?;
             }
         } else {
-            eprintln!("未找到 sgl_font_conv.exe，请确保其在设计器 exe 同目录或 PATH 中");
+            return Err("未找到 sgl_font_conv.exe，请确保其在设计器 exe 同目录或 PATH 中".to_string());
         }
     }
     Ok(())
@@ -1075,18 +1533,57 @@ fn which_command_path(name: &str) -> Option<String> {
     None
 }
 
+fn copy_dir_contents(src: &std::path::Path, dst: &std::path::Path) -> Result<(), String> {
+    std::fs::create_dir_all(dst)
+        .map_err(|e| format!("创建目录 {} 失败: {}", dst.to_string_lossy(), e))?;
+    for entry in std::fs::read_dir(src)
+        .map_err(|e| format!("读取目录 {} 失败: {}", src.to_string_lossy(), e))?
+    {
+        let entry = entry.map_err(|e| format!("读取目录项失败: {}", e))?;
+        let src_path = entry.path();
+        let dst_path = dst.join(src_path.file_name().unwrap_or_default());
+        if src_path.is_dir() {
+            copy_dir_contents(&src_path, &dst_path)?;
+        } else {
+            std::fs::copy(&src_path, &dst_path).map_err(|e| {
+                format!(
+                    "复制 {} 到 {} 失败: {}",
+                    src_path.to_string_lossy(),
+                    dst_path.to_string_lossy(),
+                    e
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
 /// 导出代码到项目目录的 code/ 子文件夹
 #[tauri::command]
-fn export_code_to_project(project: Project, project_path: String) -> Result<String, String> {
+fn export_code_to_project(mut project: Project, project_path: String, code: String) -> Result<String, String> {
     let proj_dir = std::path::Path::new(&project_path)
         .parent()
         .ok_or_else(|| "无法获取项目目录".to_string())?;
     let code_dir = proj_dir.join("code");
     std::fs::create_dir_all(&code_dir).map_err(|e| format!("创建 code 目录失败: {}", e))?;
 
+    // 将图片资源相对路径转换为绝对路径，便于取模
+    for img in &mut project.resources.images {
+        let p = std::path::Path::new(&img.path);
+        if !p.is_absolute() {
+            img.path = proj_dir.join(p).to_string_lossy().to_string();
+        }
+    }
+
     // 生成代码
     let fonts = collect_fonts(&project);
-    let code = generate_code(project);
+
+    // 生成图片取模文件到 code/pixmaps/ 子目录
+    let pixmaps_dir = code_dir.join("pixmaps");
+    if pixmaps_dir.exists() {
+        let _ = std::fs::remove_dir_all(&pixmaps_dir);
+    }
+    generate_pixmap_files(&project, &pixmaps_dir)?;
 
     // 写入 code/ui.c
     let ui_c = code_dir.join("ui.c");
@@ -1095,22 +1592,20 @@ fn export_code_to_project(project: Project, project_path: String) -> Result<Stri
     // 生成字模文件到 code/fonts/ 目录
     if !fonts.is_empty() {
         let fonts_dir = code_dir.join("fonts");
-        let _ = std::fs::create_dir_all(&fonts_dir);
+        if fonts_dir.exists() {
+            let _ = std::fs::remove_dir_all(&fonts_dir);
+        }
+        std::fs::create_dir_all(&fonts_dir)
+            .map_err(|e| format!("创建 fonts 目录失败: {}", e))?;
 
         let conv_path = find_sgl_font_conv();
         if let Some(conv) = conv_path {
-            for (name, path, sz, bpp) in &fonts {
-                let out_file = fonts_dir.join(font_filename(name, *sz, *bpp));
-                let out_str = out_file.to_string_lossy().to_string();
-
-                use std::process::Command;
-                let _ = Command::new(&conv)
-                    .arg("--font").arg(path)
-                    .arg("--size").arg(sz.to_string())
-                    .arg("--bpp").arg(bpp.to_string())
-                    .arg("--output").arg(&out_str)
-                    .status();
+            for (name, path, sz, bpp, symbols) in &fonts {
+                run_font_conv(&conv, name, path, *sz, *bpp, symbols, &fonts_dir)
+                    .map_err(|e| format!("生成字模 {} 失败: {}", name, e))?;
             }
+        } else {
+            return Err("未找到 sgl_font_conv.exe".to_string());
         }
     }
 
@@ -1158,6 +1653,57 @@ fn check_toolchain(project_path: String) -> Result<serde_json::Value, String> {
     Ok(serde_json::Value::Object(result))
 }
 
+/// 将 sgl-port 仓库的 sgl 子模块更新到远程最新 main 分支，实现无感使用
+fn update_sgl_submodules_to_latest(sgl_port_dir: &std::path::Path) -> Result<(), String> {
+    use std::process::Command;
+
+    // 让子模块跟踪 main 分支（仅对 sgl 子模块做此配置）
+    let _ = Command::new("git")
+        .current_dir(sgl_port_dir)
+        .args(&["config", "-f", ".gitmodules", "submodule.sgl.branch", "main"])
+        .output();
+    let _ = Command::new("git")
+        .current_dir(sgl_port_dir)
+        .args(&["submodule", "sync", "--recursive"])
+        .output();
+
+    // 拉取子模块远程最新代码
+    let mut submodule_output = Command::new("git")
+        .current_dir(sgl_port_dir)
+        .args(&["submodule", "update", "--init", "--recursive", "--remote"])
+        .output()
+        .map_err(|e| format!("初始化/更新子模块失败: {}", e))?;
+
+    if !submodule_output.status.success() {
+        let stderr = String::from_utf8_lossy(&submodule_output.stderr);
+        eprintln!("GitHub 子模块更新失败，尝试使用 Gitee 镜像。错误: {}", stderr);
+
+        // 将 .gitmodules 中的 github.com 替换为 gitee.com 并同步配置
+        let gitmodules_path = sgl_port_dir.join(".gitmodules");
+        if let Ok(content) = std::fs::read_to_string(&gitmodules_path) {
+            let updated = content.replace("github.com", "gitee.com");
+            let _ = std::fs::write(&gitmodules_path, updated);
+        }
+        let _ = Command::new("git")
+            .current_dir(sgl_port_dir)
+            .args(&["submodule", "sync", "--recursive"])
+            .output();
+
+        submodule_output = Command::new("git")
+            .current_dir(sgl_port_dir)
+            .args(&["submodule", "update", "--init", "--recursive", "--remote"])
+            .output()
+            .map_err(|e| format!("初始化/更新子模块失败: {}", e))?;
+
+        if !submodule_output.status.success() {
+            let stderr = String::from_utf8_lossy(&submodule_output.stderr);
+            return Err(format!("子模块更新失败: GitHub 和 Gitee 均无法访问。{}", stderr));
+        }
+    }
+
+    Ok(())
+}
+
 /// 克隆 sgl-port-windows-vscode 到项目目录
 #[tauri::command]
 fn clone_sgl_port(project_path: String) -> Result<String, String> {
@@ -1173,38 +1719,38 @@ fn clone_sgl_port(project_path: String) -> Result<String, String> {
 
     use std::process::Command;
 
-    // 如果不存在则克隆
+    // 如果不存在则克隆，GitHub 失败时自动尝试 Gitee 镜像
     if !sgl_port_dir.exists() || !sgl_port_dir.join("CMakelists.txt").exists() {
+        let github_url = "https://github.com/sgl-org/sgl-port-windows-vscode.git";
+        let gitee_url = "https://gitee.com/sgl-org/sgl-port-windows-vscode.git";
+
         let output = Command::new("git")
             .arg("clone")
-            .arg("https://github.com/sgl-org/sgl-port-windows-vscode.git")
+            .arg(github_url)
             .arg(&sgl_port_dir)
             .output()
             .map_err(|e| format!("执行 git clone 失败: {}", e))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("克隆失败: {}", stderr));
+            eprintln!("GitHub 克隆失败，尝试 Gitee 镜像。错误: {}", stderr);
+
+            let output = Command::new("git")
+                .arg("clone")
+                .arg(gitee_url)
+                .arg(&sgl_port_dir)
+                .output()
+                .map_err(|e| format!("执行 git clone 失败: {}", e))?;
+
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(format!("克隆失败: GitHub 和 Gitee 均无法访问。{}", stderr));
+            }
         }
     }
 
-    // 确保子模块已初始化（检查 sgl/source 目录是否有内容）
-    let sgl_source_dir = sgl_port_dir.join("sgl").join("source");
-    let need_init_submodule = !sgl_source_dir.exists()
-        || std::fs::read_dir(&sgl_source_dir).map(|d| d.count() == 0).unwrap_or(true);
-
-    if need_init_submodule {
-        let submodule_output = Command::new("git")
-            .current_dir(&sgl_port_dir)
-            .args(&["submodule", "update", "--init", "--recursive"])
-            .output()
-            .map_err(|e| format!("初始化子模块失败: {}", e))?;
-
-        if !submodule_output.status.success() {
-            let stderr = String::from_utf8_lossy(&submodule_output.stderr);
-            return Err(format!("子模块初始化失败: {}", stderr));
-        }
-    }
+    // 确保子模块已初始化并更新到远程最新 main 分支（用户无感）
+    update_sgl_submodules_to_latest(&sgl_port_dir)?;
 
     // 复制 sgl_config.h
     let config_src = sgl_port_dir.join("demo").join("sgl_config.h");
@@ -1237,25 +1783,28 @@ fn clone_sgl_port(project_path: String) -> Result<String, String> {
 
 /// 复制导出的代码到 sgl-port 项目并编译
 #[tauri::command]
-fn build_project(project: Project, project_path: String) -> Result<String, String> {
+fn build_project(mut project: Project, project_path: String, code: String) -> Result<String, String> {
     let proj_dir = std::path::Path::new(&project_path)
         .parent()
         .ok_or_else(|| "无法获取项目目录".to_string())?;
     let sgl_port_dir = proj_dir.join("sgl-port-windows-vscode");
     let code_dir = proj_dir.join("code");
 
+    // 将图片资源相对路径转换为绝对路径，便于取模
+    for img in &mut project.resources.images {
+        let p = std::path::Path::new(&img.path);
+        if !p.is_absolute() {
+            img.path = proj_dir.join(p).to_string_lossy().to_string();
+        }
+    }
+
     // 检查 sgl-port 项目，不存在则自动克隆
     if !sgl_port_dir.exists() || !sgl_port_dir.join("CMakelists.txt").exists() {
         clone_sgl_port(project_path.clone())?;
     }
 
-    // 确保子模块已初始化
-    let sgl_source_dir = sgl_port_dir.join("sgl").join("source");
-    let need_init = !sgl_source_dir.exists()
-        || std::fs::read_dir(&sgl_source_dir).map(|d| d.count() == 0).unwrap_or(true);
-    if need_init {
-        clone_sgl_port(project_path.clone())?;
-    }
+    // 每次构建都确保 sgl 子模块更新到远程最新 main，避免主仓库子模块指针停留在旧节点
+    update_sgl_submodules_to_latest(&sgl_port_dir)?;
 
     // 清理旧的 demo/bg.c 和 demo/test.c，只使用设计器生成的 ui.c
     let demo_dir = sgl_port_dir.join("demo");
@@ -1273,6 +1822,13 @@ fn build_project(project: Project, project_path: String) -> Result<String, Strin
             let _ = std::fs::write(&cmake_path, &updated);
         }
     }
+    // 确保 CMakeLists.txt 自动收集 demo/fonts 下的字模源文件
+    let _ = ensure_cmake_fonts_glob(&cmake_path);
+
+    // 字模文件可能新增或删除，强制重新 cmake configure 以确保 GLOB 收集最新源文件
+    let build_dir = sgl_port_dir.join("build");
+    let _ = std::fs::remove_file(build_dir.join("CMakeCache.txt"));
+    let _ = std::fs::remove_file(build_dir.join("Makefile"));
 
     // 检查 gcc
     if which_command_path("gcc").is_none() {
@@ -1286,7 +1842,14 @@ fn build_project(project: Project, project_path: String) -> Result<String, Strin
 
     // 先导出代码到 code/ 目录
     let fonts = collect_fonts(&project);
-    let code = generate_code(project.clone());
+
+    // 生成图片取模文件到 code/pixmaps/ 子目录
+    let pixmaps_dir = code_dir.join("pixmaps");
+    if pixmaps_dir.exists() {
+        let _ = std::fs::remove_dir_all(&pixmaps_dir);
+    }
+    generate_pixmap_files(&project, &pixmaps_dir)?;
+
     std::fs::create_dir_all(&code_dir).map_err(|e| format!("创建 code 目录失败: {}", e))?;
     let ui_c = code_dir.join("ui.c");
     std::fs::write(&ui_c, &code).map_err(|e| format!("写入 ui.c 失败: {}", e))?;
@@ -1294,20 +1857,19 @@ fn build_project(project: Project, project_path: String) -> Result<String, Strin
     // 生成字模文件
     if !fonts.is_empty() {
         let fonts_dir = code_dir.join("fonts");
-        let _ = std::fs::create_dir_all(&fonts_dir);
+        if fonts_dir.exists() {
+            let _ = std::fs::remove_dir_all(&fonts_dir);
+        }
+        std::fs::create_dir_all(&fonts_dir)
+            .map_err(|e| format!("创建 fonts 目录失败: {}", e))?;
         let conv_path = find_sgl_font_conv();
         if let Some(conv) = conv_path {
-            for (name, path, sz, bpp) in &fonts {
-                let out_file = fonts_dir.join(font_filename(name, *sz, *bpp));
-                let out_str = out_file.to_string_lossy().to_string();
-                use std::process::Command;
-                let _ = Command::new(&conv)
-                    .arg("--font").arg(path)
-                    .arg("--size").arg(sz.to_string())
-                    .arg("--bpp").arg(bpp.to_string())
-                    .arg("--output").arg(&out_str)
-                    .status();
+            for (name, path, sz, bpp, symbols) in &fonts {
+                run_font_conv(&conv, name, path, *sz, *bpp, symbols, &fonts_dir)
+                    .map_err(|e| format!("生成字模 {} 失败: {}", name, e))?;
             }
+        } else {
+            return Err("未找到 sgl_font_conv.exe".to_string());
         }
     }
 
@@ -1315,6 +1877,27 @@ fn build_project(project: Project, project_path: String) -> Result<String, Strin
     let demo_dir = sgl_port_dir.join("demo");
     let ui_c_dest = demo_dir.join("ui.c");
     std::fs::copy(&ui_c, &ui_c_dest).map_err(|e| format!("复制代码到 sgl-port 失败: {}", e))?;
+
+    // 复制图片取模文件到 demo/pixmaps/
+    let demo_pixmaps_dir = demo_dir.join("pixmaps");
+    if demo_pixmaps_dir.exists() {
+        let _ = std::fs::remove_dir_all(&demo_pixmaps_dir);
+    }
+    if pixmaps_dir.exists() {
+        copy_dir_contents(&pixmaps_dir, &demo_pixmaps_dir)
+            .map_err(|e| format!("复制图片取模文件到 demo 失败: {}", e))?;
+    }
+
+    // 复制字模文件到 demo/fonts/
+    let fonts_dir = code_dir.join("fonts");
+    let demo_fonts_dir = demo_dir.join("fonts");
+    if demo_fonts_dir.exists() {
+        let _ = std::fs::remove_dir_all(&demo_fonts_dir);
+    }
+    if fonts_dir.exists() {
+        copy_dir_contents(&fonts_dir, &demo_fonts_dir)
+            .map_err(|e| format!("复制字模文件到 demo 失败: {}", e))?;
+    }
 
     // 生成干净的 main.c，不引用 gImage_test 等外部资源
     let mut main_content = String::new();
@@ -1445,7 +2028,21 @@ fn build_project(project: Project, project_path: String) -> Result<String, Strin
 
     use std::process::Command;
 
-    // 先尝试直接编译，如果失败则重新 cmake 配置后再编译
+    // 重新 cmake 配置，确保字模源文件 GLOB 最新
+    let cmake_output = Command::new("cmake")
+        .arg("..")
+        .arg("-G").arg("MinGW Makefiles")
+        .current_dir(&build_dir)
+        .output()
+        .map_err(|e| format!("执行 cmake 失败: {}（请确认已安装 CMake）", e))?;
+
+    if !cmake_output.status.success() {
+        let stderr = String::from_utf8_lossy(&cmake_output.stderr);
+        let stdout = String::from_utf8_lossy(&cmake_output.stdout);
+        return Err(format!("cmake 配置失败:\n{}{}", stdout, stderr));
+    }
+
+    // 编译
     let make_output = Command::new("cmake")
         .arg("--build").arg(".")
         .current_dir(&build_dir)
@@ -1453,34 +2050,9 @@ fn build_project(project: Project, project_path: String) -> Result<String, Strin
         .map_err(|e| format!("执行编译失败: {}", e))?;
 
     if !make_output.status.success() {
-        // 编译失败，重新 cmake 配置
-        let _ = std::fs::remove_file(build_dir.join("CMakeCache.txt"));
-        let _ = std::fs::remove_file(build_dir.join("Makefile"));
-        let cmake_output = Command::new("cmake")
-            .arg("..")
-            .arg("-G").arg("MinGW Makefiles")
-            .current_dir(&build_dir)
-            .output()
-            .map_err(|e| format!("执行 cmake 失败: {}（请确认已安装 CMake）", e))?;
-
-        if !cmake_output.status.success() {
-            let stderr = String::from_utf8_lossy(&cmake_output.stderr);
-            let stdout = String::from_utf8_lossy(&cmake_output.stdout);
-            return Err(format!("cmake 配置失败:\n{}{}", stdout, stderr));
-        }
-
-        // 重新编译
-        let make_output2 = Command::new("cmake")
-            .arg("--build").arg(".")
-            .current_dir(&build_dir)
-            .output()
-            .map_err(|e| format!("执行编译失败: {}", e))?;
-
-        if !make_output2.status.success() {
-            let stderr = String::from_utf8_lossy(&make_output2.stderr);
-            let stdout = String::from_utf8_lossy(&make_output2.stdout);
-            return Err(format!("编译失败:\n{}{}", stdout, stderr));
-        }
+        let stderr = String::from_utf8_lossy(&make_output.stderr);
+        let stdout = String::from_utf8_lossy(&make_output.stdout);
+        return Err(format!("编译失败:\n{}{}", stdout, stderr));
     }
 
     Ok("编译成功！".to_string())
@@ -1628,12 +2200,124 @@ fn main() {
             clone_sgl_port,
             build_project,
             run_simulator,
-            append_log
+            append_log,
+            get_opaque_image_data_url
         ])
         .run(tauri::generate_context!());
 
     if let Err(e) = result {
         eprintln!("Error: {}", e);
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_widget(
+        id: &str,
+        widget_type: &str,
+        text: Option<&str>,
+        font_family: Option<&str>,
+        font_size: Option<i32>,
+        font_bpp: Option<i32>,
+    ) -> Widget {
+        Widget {
+            id: id.to_string(),
+            widget_type: widget_type.to_string(),
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 10,
+            text: text.map(|s| s.to_string()),
+            color: None,
+            bg_color: None,
+            border_color: None,
+            border_width: None,
+            border_alpha: None,
+            main_alpha: None,
+            radius: None,
+            alpha: None,
+            pixmap: None,
+            pixmap_format: None,
+            font_size,
+            font_family: font_family.map(|s| s.to_string()),
+            font_bpp,
+            align: None,
+            value: None,
+            status: None,
+            src: None,
+            direct: None,
+            fill_color: None,
+            track_color: None,
+            knob_color: None,
+            text_color: None,
+            on_color: None,
+            knob_radius: None,
+            knob_margin: None,
+            text_offset_x: None,
+            text_offset_y: None,
+            text_rotation: None,
+            dashed: None,
+            dash_len: None,
+            gap_len: None,
+            fill_gap: None,
+            fill_radius: None,
+            thickness: None,
+            x_offset: None,
+            y_offset: None,
+            radius_in: None,
+            radius_out: None,
+            event_cb: None,
+            parent_id: None,
+            x1: None,
+            y1: None,
+            x2: None,
+            y2: None,
+            line_width: None,
+            vertices: None,
+        }
+    }
+
+    #[test]
+    fn test_collect_fonts_gathers_symbols() {
+        let project = Project {
+            name: "test".to_string(),
+            version: "1".to_string(),
+            color_depth: "32bit".to_string(),
+            screen_width: 480,
+            screen_height: 320,
+            pages: vec![Page {
+                id: "page1".to_string(),
+                name: "main".to_string(),
+                width: 480,
+                height: 320,
+                bg_color: "#000000".to_string(),
+                pixmap: None,
+                pixmap_format: None,
+                alpha: None,
+                widgets: vec![
+                    make_widget("btn1", "button", Some("确定"), Some("simsun.ttc"), Some(24), Some(4)),
+                    make_widget("lbl1", "label", Some("取消"), Some("simsun.ttc"), Some(24), Some(4)),
+                ],
+            }],
+            resources: Resources {
+                fonts: vec![],
+                images: vec![],
+            },
+        };
+
+        let fonts = collect_fonts(&project);
+        assert_eq!(fonts.len(), 1);
+        let (name, _path, sz, bpp, symbols) = &fonts[0];
+        assert_eq!(name, "simsun.ttc");
+        assert_eq!(*sz, 24);
+        assert_eq!(*bpp, 4);
+        let set: std::collections::HashSet<char> = symbols.chars().collect();
+        assert!(set.contains(&'确'));
+        assert!(set.contains(&'定'));
+        assert!(set.contains(&'取'));
+        assert!(set.contains(&'消'));
     }
 }

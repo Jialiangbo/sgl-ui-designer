@@ -182,6 +182,17 @@
             <option value="">无</option>
           </select>
         </div>
+        <div class="form-group">
+          <label class="form-label">图片格式</label>
+          <select class="form-select" id="prop-page-pixmap-format">
+            <option value="RGB565" selected>RGB565 (16-bit)</option>
+            <option value="ARGB4444">ARGB4444 (16-bit+透明度)</option>
+            <option value="RGB888">RGB888 (24-bit)</option>
+            <option value="ARGB8888">ARGB8888 (32-bit+透明度)</option>
+            <option value="RGB332">RGB332 (8-bit)</option>
+            <option value="ARGB2222">ARGB2222 (8-bit+透明度)</option>
+          </select>
+        </div>
         <div class="form-group" style="margin-bottom:0;">
           <label class="form-label">填充色</label>
           <div style="display:flex;gap:6px;align-items:center;">
@@ -228,6 +239,7 @@
     <span id="status-size">屏幕: -</span>
     <span id="status-widgets">组件: 0</span>
     <span id="status-selection">未选中</span>
+    <span id="status-font" style="color: var(--error);"></span>
     <span style="margin-left:auto;" id="status-api">API: SGL v2.0</span>
   </div>
 

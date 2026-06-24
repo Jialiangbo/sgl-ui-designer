@@ -1,10 +1,17 @@
 import { AppState, navigate, showToast, initNav, downloadFile, escapeHtml, escapeAttr } from './app.js';
-import { SGL_WIDGET_TYPES, WIDGET_CATEGORIES, PROP_META, WIDGET_EVENTS } from './sgl_api.js';
-import { invoke } from '@tauri-apps/api/core';
-import { open } from '@tauri-apps/plugin-dialog';
+import { SGL_WIDGET_TYPES, WIDGET_CATEGORIES, PROP_META, WIDGET_EVENTS, WIDGET_DEFAULTS, validateProjectFonts } from './sgl_api.js';
+import { getCheckboxIconDataUrl } from './checkbox_icon.js';
+import { invoke, convertFileSrc } from '@tauri-apps/api/core';
+
+import { open, message } from '@tauri-apps/plugin-dialog';
 
 initNav('editor');
 AppState.init();
+
+// 项目加载后预加载所有字体资源
+preloadProjectFonts().then(() => {
+  renderCanvas();
+});
 
 // ============ 全局状态 ============
 let isDragging = false;
@@ -34,14 +41,110 @@ const SGL_FONT_MAP = {
   'notosanscjk.ttf': '"Noto Sans CJK SC", "Source Han Sans CN", sans-serif',
   'default': 'system-ui, -apple-system, "Segoe UI", sans-serif'
 };
+// 已注册到浏览器的字体文件路径 -> 字体族名
+const registeredFontFaces = new Map();
+const FONT_FACE_LOAD_PROMISES = new Map();
+
+// 将本地资源路径转换为 Tauri 可访问的 asset URL（图片/字体通用）
+function toAssetUrl(path) {
+  if (!path) return '';
+  if (path.startsWith('http') || path.startsWith('asset://') || path.startsWith('file://')) return path;
+  return convertFileSrc(path);
+}
+
+function pixmapFormatHasAlpha(fmt) {
+  return /^ARGB/i.test(fmt || 'RGB565');
+}
+
+const opaqueImageCache = new Map();
+
+// 通过 Rust 后端将带透明通道的图片按指定底色合成，生成不带 alpha 的 data URL，用于非 Alpha 格式预览
+async function getOpaqueImageUrl(originalPath, fillColor) {
+  const key = originalPath + '|' + (fillColor || '#000000');
+  if (opaqueImageCache.has(key)) {
+    return opaqueImageCache.get(key);
+  }
+  try {
+    const dataUrl = await invoke('get_opaque_image_data_url', {
+      path: originalPath,
+      fillColor: fillColor || '#000000'
+    });
+    opaqueImageCache.set(key, dataUrl);
+    return dataUrl;
+  } catch (err) {
+    console.error('getOpaqueImageUrl error:', err);
+    return toAssetUrl(originalPath);
+  }
+}
+
+async function registerFontFile(fontPath) {
+  if (!fontPath) return null;
+  if (registeredFontFaces.has(fontPath)) {
+    return registeredFontFaces.get(fontPath);
+  }
+  if (FONT_FACE_LOAD_PROMISES.has(fontPath)) {
+    return FONT_FACE_LOAD_PROMISES.get(fontPath);
+  }
+  const promise = (async () => {
+    try {
+      const fileName = fontPath.replace(/[/\\]/g, '/').split('/').pop();
+      const familyName = `sgl_font_${fileName.replace(/[^\w]/g, '_')}`;
+      // 使用 Tauri 提供的本地文件 URL，避免 file:// 被 WebView 拦截
+      const url = convertFileSrc(fontPath);
+      const fontFace = new FontFace(familyName, `url("${url}")`);
+      await fontFace.load();
+      document.fonts.add(fontFace);
+      registeredFontFaces.set(fontPath, familyName);
+      FONT_FACE_LOAD_PROMISES.delete(fontPath);
+      logMessage(`字体加载成功: ${fileName}`, 'success');
+      return familyName;
+    } catch (err) {
+      logMessage(`字体加载失败: ${fontPath.replace(/[/\\]/g, '/').split('/').pop()}`, 'error');
+      console.warn('字体加载失败:', fontPath, err);
+      FONT_FACE_LOAD_PROMISES.delete(fontPath);
+      return null;
+    }
+  })();
+  FONT_FACE_LOAD_PROMISES.set(fontPath, promise);
+  return promise;
+}
+
+async function preloadProjectFonts() {
+  const resources = AppState.project.resources || { fonts: [] };
+  await Promise.all((resources.fonts || []).map(f => registerFontFile(f.path)));
+}
+
 function getCssFontStack(family) {
   if (!family || family === 'default') return SGL_FONT_MAP['default'];
   if (SGL_FONT_MAP[family]) return SGL_FONT_MAP[family];
   // 自定义字体可能是完整路径，提取文件名来匹配内置映射
   const fileName = family.replace(/[/\\]/g, '/').split('/').pop();
   if (SGL_FONT_MAP[fileName]) return SGL_FONT_MAP[fileName];
-  // 无法匹配的字体：使用文件名作为字体栈
-  return `"${fileName}", ${SGL_FONT_MAP['default']}`;
+  // 自定义字体：统一生成 FontFace 族名，浏览器加载完成后会自动生效
+  const familyName = `sgl_font_${fileName.replace(/[^\w]/g, '_')}`;
+  if (!registeredFontFaces.has(family)) {
+    registerFontFile(family).then((loadedName) => {
+      if (loadedName) renderCanvas();
+    });
+  }
+  return `"${familyName}", ${SGL_FONT_MAP['default']}`;
+}
+
+function hexToRgba(hex, alpha) {
+  if (!hex || !hex.startsWith('#') || hex.length < 7) return `rgba(0,0,0,${alpha})`;
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function mixColors(c1, c2, ratio = 0.5) {
+  const hex1 = (c1 && c1.startsWith('#') && c1.length >= 7) ? c1 : '#000000';
+  const hex2 = (c2 && c2.startsWith('#') && c2.length >= 7) ? c2 : '#000000';
+  const r = Math.round(parseInt(hex1.slice(1, 3), 16) * (1 - ratio) + parseInt(hex2.slice(1, 3), 16) * ratio);
+  const g = Math.round(parseInt(hex1.slice(3, 5), 16) * (1 - ratio) + parseInt(hex2.slice(3, 5), 16) * ratio);
+  const b = Math.round(parseInt(hex1.slice(5, 7), 16) * (1 - ratio) + parseInt(hex2.slice(5, 7), 16) * ratio);
+  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
 }
 
 // ============ DOM 引用 ============
@@ -364,6 +467,7 @@ function renderPageTabsMini() {
 let panOffset = { x: 0, y: 0 };
 let isPanning = false;
 let panStart = { x: 0, y: 0 };
+let lastRenderedPageId = null;
 
 function centerCanvas() {
   const viewport = document.getElementById('canvas-viewport');
@@ -374,8 +478,8 @@ function centerCanvas() {
   const ch = page.height * z;
   const vw = viewport.clientWidth;
   const vh = viewport.clientHeight;
-  panOffset.x = Math.max(40, (vw - cw) / 2);
-  panOffset.y = Math.max(40, (vh - ch) / 2);
+  panOffset.x = (vw - cw) / 2;
+  panOffset.y = (vh - ch) / 2;
 }
 
 // ============ 渲染画布 (WYSIWYG) ============
@@ -399,13 +503,18 @@ function renderCanvas() {
   canvas.style.backgroundPosition = '';
 
   if (page.pixmap) {
-    let imgPath = page.pixmap;
-    if (!imgPath.startsWith('file://') && !imgPath.startsWith('http')) {
-      imgPath = 'file:///' + imgPath.replace(/\\/g, '/');
+    const imgPath = toAssetUrl(page.pixmap);
+    const pagePixmapFormat = page.pixmapFormat || 'RGB565';
+    const pageHasAlpha = pixmapFormatHasAlpha(pagePixmapFormat);
+    // 页面背景图片：非 Alpha 格式时透明区域按黑色填充，与设备渲染一致
+    canvas.style.backgroundColor = page.bg_color || '#1e1e2e';
+    canvas.style.backgroundSize = '100% 100%';
+    canvas.style.backgroundPosition = '0 0';
+    if (pageHasAlpha) {
+      canvas.style.backgroundImage = `url('${imgPath}')`;
+    } else {
+      getOpaqueImageUrl(page.pixmap, '#000000').then(url => { canvas.style.backgroundImage = `url('${url}')`; });
     }
-    canvas.style.backgroundImage = `url('${imgPath}')`;
-    canvas.style.backgroundSize = 'cover';
-    canvas.style.backgroundPosition = 'center';
   } else {
     canvas.style.background = page.bg_color || '#1e1e2e';
   }
@@ -424,7 +533,7 @@ function renderCanvas() {
     canvas.style.top = panOffset.y + 'px';
   }
 
-  canvas.querySelectorAll('.canvas-widget').forEach(el => el.remove());
+  canvas.querySelectorAll('.canvas-widget, .polygon-selection-overlay').forEach(el => el.remove());
   const hint = document.getElementById('canvas-hint');
   if (hint) hint.style.display = page.widgets.length === 0 ? 'flex' : 'none';
 
@@ -804,7 +913,13 @@ function drawWidget(w, parentEl) {
   // 选中状态：子控件和父控件的选中样式不同
   const isLocked = w.locked;
   if (AppState.selectedWidgetIds.has(w.id)) {
-    if (w.parentId) {
+    if (w.type === 'polygon') {
+      // polygon 用独立覆盖层显示选中框，避免被自身 clip-path 裁剪导致看不清
+      const selOverlay = document.createElement('div');
+      selOverlay.className = 'polygon-selection-overlay';
+      selOverlay.style.cssText = `position:absolute;left:${absPos.x * z}px;top:${absPos.y * z}px;width:${el.style.width};height:${el.style.height};pointer-events:none;z-index:10000;outline:2px solid var(--accent);outline-offset:2px;box-sizing:border-box;`;
+      canvas.appendChild(selOverlay);
+    } else if (w.parentId) {
       // 子控件选中：用绿色虚线区别于父控件
       el.classList.add('child-selected');
     } else {
@@ -955,13 +1070,20 @@ function renderWidgetVisual(el, w) {
       // 处理图片（pixmap）——value 存的是图片路径
       const pixmap = p('pixmap', '');
       if (pixmap) {
-        let imgPath = pixmap;
-        if (imgPath && !imgPath.startsWith('file://') && !imgPath.startsWith('http')) {
-          imgPath = 'file:///' + imgPath.replace(/\\/g, '/');
-        }
+        const imgPath = toAssetUrl(pixmap);
+        const pixmapFormat = p('pixmapFormat', 'RGB565');
+        const hasAlpha = pixmapFormatHasAlpha(pixmapFormat);
+        // 支持 Alpha 的格式：图片透明区域与控件底色混合；否则按黑色填充并去掉 alpha 通道
+        el.style.background = '';
+        el.style.backgroundColor = hasAlpha ? rectCol : '#000000';
         const imgEl = document.createElement('div');
-        imgEl.style.cssText = `position:absolute;inset:0;background-image:url('${imgPath}');background-size:cover;background-position:center;border-radius:${radius}px;opacity:${mainAlphaCss};`;
+        imgEl.style.cssText = `position:absolute;inset:0;background-size:100% 100%;background-position:0 0;border-radius:${radius}px;opacity:${mainAlphaCss};`;
         el.appendChild(imgEl);
+        if (hasAlpha) {
+          imgEl.style.backgroundImage = `url('${imgPath}')`;
+        } else {
+          getOpaqueImageUrl(pixmap, '#000000').then(url => { imgEl.style.backgroundImage = `url('${url}')`; });
+        }
       } else if (rectCol && rectCol !== 'transparent') {
         // SGL: color 是填充色，直接设置为背景，支持透明度
         if (mainAlphaVal < 255) {
@@ -982,43 +1104,33 @@ function renderWidgetVisual(el, w) {
     }
 
     case 'circle': {
+      // SGL 圆形半径 = width/2，圆心在控件中心；这里用等宽子元素模拟，宽高均为 width
       const circleCol = p('color', '#FFFFFF');
       const borderW = p('borderWidth', 2) * z;
       const borderC = p('borderColor', '#000000');
-      el.style.borderRadius = '50%';
-      // SGL: color 是填充色，border 是描边
-      if (circleCol && circleCol !== 'transparent') {
-        if (alphaCss < 1) {
-          const hex2rgba = (hex, alpha) => {
-            const r = parseInt(hex.slice(1, 3), 16);
-            const g = parseInt(hex.slice(3, 5), 16);
-            const b = parseInt(hex.slice(5, 7), 16);
-            return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-          };
-          el.style.background = hex2rgba(circleCol, alphaCss);
-        } else {
-          el.style.background = circleCol;
-        }
-      } else {
-        el.style.background = 'transparent';
-      }
-      el.style.border = `${borderW}px solid ${borderC}`;
+      const dia = w.width * z;
       const xOff = p('xOffset', 0) * z;
       const yOff = p('yOffset', 0) * z;
-      if (xOff || yOff) {
-        el.style.transform = `translate(${xOff}px, ${yOff}px)`;
-      }
-      // 处理图片（pixmap）
+      const circleEl = document.createElement('div');
+      circleEl.style.cssText = `position:absolute;left:50%;top:50%;transform:translate(-50%,-50%)${xOff || yOff ? ` translate(${xOff}px, ${yOff}px)` : ''};width:${dia}px;height:${dia}px;border-radius:50%;border:${borderW}px solid ${borderC};box-sizing:border-box;`;
       const pixmap = p('pixmap', '');
       if (pixmap) {
-        let imgPath = pixmap;
-        if (imgPath && !imgPath.startsWith('file://') && !imgPath.startsWith('http')) {
-          imgPath = 'file:///' + imgPath.replace(/\\/g, '/');
+        const imgPath = toAssetUrl(pixmap);
+        const pixmapFormat = p('pixmapFormat', 'RGB565');
+        const hasAlpha = pixmapFormatHasAlpha(pixmapFormat);
+        circleEl.style.backgroundColor = hasAlpha ? circleCol : '#000000';
+        circleEl.style.backgroundSize = '100% 100%';
+        if (hasAlpha) {
+          circleEl.style.backgroundImage = `url('${imgPath}')`;
+        } else {
+          getOpaqueImageUrl(pixmap, '#000000').then(url => { circleEl.style.backgroundImage = `url('${url}')`; });
         }
-        const imgEl = document.createElement('div');
-        imgEl.style.cssText = `position:absolute;inset:0;background-image:url('${imgPath}');background-size:cover;background-position:center;border-radius:50%;`;
-        el.appendChild(imgEl);
+      } else if (circleCol && circleCol !== 'transparent') {
+        circleEl.style.background = alphaCss < 1 ? hexToRgba(circleCol, alphaCss) : circleCol;
+      } else {
+        circleEl.style.background = 'transparent';
       }
+      el.appendChild(circleEl);
       break;
     }
 
@@ -1176,11 +1288,27 @@ function renderWidgetVisual(el, w) {
     }
 
     case 'polygon': {
-      el.style.background = p('fillColor', '#8b5cf6');
+      const pixmap = p('pixmap', '');
+      if (pixmap) {
+        const imgPath = toAssetUrl(pixmap);
+        const pixmapFormat = p('pixmapFormat', 'RGB565');
+        const hasAlpha = pixmapFormatHasAlpha(pixmapFormat);
+        el.style.background = '';
+        el.style.backgroundColor = hasAlpha ? p('fillColor', '#8b5cf6') : '#000000';
+        el.style.backgroundSize = '100% 100%';
+        el.style.backgroundPosition = '0 0';
+        if (hasAlpha) {
+          el.style.backgroundImage = `url('${imgPath}')`;
+        } else {
+          getOpaqueImageUrl(pixmap, '#000000').then(url => { el.style.backgroundImage = `url('${url}')`; });
+        }
+      } else {
+        el.style.background = p('fillColor', '#8b5cf6');
+      }
       el.style.border = `${p('borderWidth', 2) * z}px solid ${p('borderColor', '#7c3aed')}`;
       el.style.opacity = alphaCss;
       el.style.clipPath = 'none';
-      
+
       const vertices = p('vertices', '0,0;50,100;100,0');
       const coords = vertices.split(';').map(p => p.trim()).filter(p => p);
       if (coords.length >= 3) {
@@ -1216,7 +1344,25 @@ function renderWidgetVisual(el, w) {
     }
 
     case 'button': {
-      el.style.background = p('bgColor', '#8b5cf6');
+      const btnPixmap = p('pixmap', '');
+      if (btnPixmap) {
+        const imgPath = toAssetUrl(btnPixmap);
+        const pixmapFormat = p('pixmapFormat', 'RGB565');
+        const hasAlpha = pixmapFormatHasAlpha(pixmapFormat);
+        const btnBg = p('bgColor', p('color', '#8b5cf6'));
+        el.style.background = '';
+        el.style.backgroundSize = '100% 100%';
+        el.style.backgroundPosition = '0 0';
+        // 支持 Alpha 的格式：图片透明区域与控件底色混合；否则按黑色填充并去掉 alpha 通道
+        el.style.backgroundColor = hasAlpha ? btnBg : '#000000';
+        if (hasAlpha) {
+          el.style.backgroundImage = `url('${imgPath}')`;
+        } else {
+          getOpaqueImageUrl(btnPixmap, '#000000').then(url => { el.style.backgroundImage = `url('${url}')`; });
+        }
+      } else {
+        el.style.background = p('bgColor', p('color', '#8b5cf6'));
+      }
       el.style.border = `${p('borderWidth', 1) * z}px solid ${p('borderColor', '#7c3aed')}`;
       el.style.borderRadius = (p('radius', 8) * z) + 'px';
       el.style.opacity = alphaCss;
@@ -1284,67 +1430,118 @@ function renderWidgetVisual(el, w) {
     }
 
     case 'switch': {
-      el.style.background = p('bgColor', '#313149');
-      el.style.border = `${p('borderWidth', 1) * z}px solid ${p('borderColor', '#3d3d5c')}`;
-      el.style.borderRadius = (p('radius', 15) * z) + 'px';
-      el.style.opacity = alphaCss;
-      const knobR = p('knobRadius', 10) * z;
-      const margin = p('knobMargin', 2) * z;
+      const swRadius = p('radius', 15) * z;
+      const swMargin = p('knobMargin', 2) * z;
+      const trackH = w.height * z;
       const trackW = w.width * z;
       const swOn = p('status', false);
-      const pos = swOn ? trackW - knobR - margin : margin;
-      const knob = document.createElement('div');
-      knob.style.cssText = `position:absolute;top:50%;left:${pos}px;transform:translateY(-50%);width:${knobR}px;height:${knobR}px;border-radius:50%;background:${p('knobColor', '#ffffff')};box-shadow:0 1px 3px rgba(0,0,0,0.3);`;
-      el.appendChild(knob);
-      if (swOn) {
-        el.style.background = p('color', '#8b5cf6');
+      const swPixmap = p('pixmap', '');
+
+      // 轨道背景：有图片时直接显示图片，否则根据状态显示开启/关闭颜色
+      if (swPixmap) {
+        const imgPath = toAssetUrl(swPixmap);
+        const pixmapFormat = p('pixmapFormat', 'RGB565');
+        const hasAlpha = pixmapFormatHasAlpha(pixmapFormat);
+        const swBg = swOn ? p('onColor', '#8b5cf6') : p('bgColor', '#313149');
+        el.style.background = '';
+        el.style.backgroundSize = '100% 100%';
+        el.style.backgroundPosition = '0 0';
+        // 支持 Alpha 的格式：图片透明区域与控件底色混合；否则按黑色填充并去掉 alpha 通道
+        el.style.backgroundColor = hasAlpha ? swBg : '#000000';
+        if (hasAlpha) {
+          el.style.backgroundImage = `url('${imgPath}')`;
+        } else {
+          getOpaqueImageUrl(swPixmap, '#000000').then(url => { el.style.backgroundImage = `url('${url}')`; });
+        }
+      } else {
+        el.style.background = swOn ? p('onColor', '#8b5cf6') : p('bgColor', '#313149');
       }
+      el.style.border = `${p('borderWidth', 1) * z}px solid ${p('borderColor', '#3d3d5c')}`;
+      el.style.borderRadius = swRadius + 'px';
+      el.style.opacity = alphaCss;
+
+      // 旋钮：SGL 中 knobRadius 是圆角半径，旋钮尺寸 = 高度 - 2*边距
+      const knobSize = trackH - 2 * swMargin;
+      const maxCorner = Math.max(0, swRadius - swMargin);
+      const knobCorner = Math.min(maxCorner, p('knobRadius', 255) * z);
+      const pos = swOn ? trackW - knobSize - swMargin : swMargin;
+      const knob = document.createElement('div');
+      knob.style.cssText = `position:absolute;top:50%;left:${pos}px;transform:translateY(-50%);width:${knobSize}px;height:${knobSize}px;border-radius:${knobCorner}px;background:${p('knobColor', '#ffffff')};box-shadow:0 1px 3px rgba(0,0,0,0.3);`;
+      el.appendChild(knob);
       break;
     }
 
     case 'checkbox': {
-      el.style.background = p('bgColor', 'transparent');
-      el.style.border = `${p('borderWidth', 1) * z}px solid ${p('borderColor', 'transparent')}`;
+      // SGL checkbox: 使用内置 26x22 图标，图标+文本颜色统一为 color，整体居中
+      const cbCol = p('color', p('onColor', p('textColor', '#000000')));
+      const cbStatus = p('status', false);
+      const cbText = p('text', '');
+      const cbFontSize = p('fontSize', 14) * z;
+      const iconW = 26 * z;
+      const iconH = 22 * z;
+
+      el.style.background = 'transparent';
+      el.style.border = 'none';
       el.style.borderRadius = (p('radius', 0) * z) + 'px';
       el.style.opacity = alphaCss;
-      const cbInner = document.createElement('div');
-      cbInner.style.cssText = 'width:100%;height:100%;display:flex;align-items:center;padding:0 4px;gap:' + (6 * z) + 'px;pointer-events:none;';
-      const box = document.createElement('div');
-      const boxSize = Math.min(w.height * z, 18 * z);
-      const cbCol = p('color', '#8b5cf6');
-      box.style.cssText = `flex-shrink:0;width:${boxSize}px;height:${boxSize}px;border:${p('borderWidth', 1) * z}px solid ${cbCol};border-radius:${p('radius', 4) * z}px;display:flex;align-items:center;justify-content:center;font-size:${boxSize * 0.7}px;`;
-      if (p('status', false)) box.textContent = '✓';
-      box.style.color = cbCol;
-      const cbText = document.createElement('span');
-      cbText.textContent = p('text', '');
-      cbText.style.color = p('textColor', cbCol);
-      cbText.style.fontSize = (p('fontSize', 14) * z) + 'px';
-      cbText.style.fontFamily = getCssFontStack(p('fontFamily', 'simhei.ttf'));
-      cbText.style.overflow = 'hidden';
-      cbText.style.textOverflow = 'ellipsis';
-      cbText.style.whiteSpace = 'nowrap';
-      cbInner.appendChild(box);
-      cbInner.appendChild(cbText);
-      el.appendChild(cbInner);
+      el.style.overflow = 'hidden';
+
+      const inner = document.createElement('div');
+      inner.style.cssText = `display:flex;align-items:center;justify-content:center;gap:${2 * z}px;width:100%;height:100%;padding:0 ${2 * z}px;box-sizing:border-box;pointer-events:none;`;
+
+      const icon = document.createElement('div');
+      icon.style.cssText = `flex-shrink:0;width:${iconW}px;height:${iconH}px;background-image:url('${getCheckboxIconDataUrl(cbStatus, cbCol)}');background-size:contain;background-repeat:no-repeat;background-position:center;image-rendering:pixelated;position:relative;top:${z}px;`;
+      inner.appendChild(icon);
+
+      if (cbText) {
+        const text = document.createElement('span');
+        text.textContent = cbText;
+        text.style.cssText = `color:${cbCol};font-size:${cbFontSize}px;font-family:${getCssFontStack(p('fontFamily', 'simsun.ttc'))};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:1;min-width:0;`;
+        inner.appendChild(text);
+      }
+
+      el.appendChild(inner);
       break;
     }
 
     case 'slider': {
       const isHoriz = p('direct', 0) !== 1;
-      el.style.background = p('trackColor', '#313149');
-      el.style.borderRadius = (p('radius', 4) * z) + 'px';
-      el.style.opacity = alphaCss;
       const slValue = p('value', 50);
-      const fill = document.createElement('div');
+      const wPx = w.width * z;
+      const hPx = w.height * z;
+      const knobR = Math.max(1, (isHoriz ? hPx : wPx) / 2 - z);
+      const thicknessPx = p('thickness', 8) * z;
+      const barThickness = Math.min(thicknessPx, knobR);
+      const radius = Math.min(barThickness / 2, p('radius', 4) * z);
+      el.style.opacity = alphaCss;
+
+      // 轨道背景（未填充部分）
+      const bar = document.createElement('div');
       if (isHoriz) {
-        fill.style.cssText = `position:absolute;left:0;top:0;height:100%;width:${slValue}%;background:${p('fillColor', '#8b5cf6')};border-radius:${p('radius', 4) * z}px;`;
+        bar.style.cssText = `position:absolute;left:${knobR}px;top:${(hPx - barThickness) / 2}px;width:${Math.max(0, wPx - 2 * knobR)}px;height:${barThickness}px;border-radius:${radius}px;background:${p('trackColor', '#313149')};overflow:hidden;`;
       } else {
-        fill.style.cssText = `position:absolute;left:0;bottom:0;width:100%;height:${slValue}%;background:${p('fillColor', '#8b5cf6')};border-radius:${p('radius', 4) * z}px;`;
+        bar.style.cssText = `position:absolute;left:${(wPx - barThickness) / 2}px;top:${knobR}px;width:${barThickness}px;height:${Math.max(0, hPx - 2 * knobR)}px;border-radius:${radius}px;background:${p('trackColor', '#313149')};overflow:hidden;`;
       }
-      el.appendChild(fill);
-      const knobSize = Math.max(12, p('thickness', 8) + 6) * z;
+
+      // 已填充部分
+      const fill = document.createElement('div');
+      fill.style.background = p('fillColor', '#8b5cf6');
+      if (isHoriz) {
+        fill.style.cssText = `position:absolute;left:0;top:0;height:100%;width:${slValue}%;background:${p('fillColor', '#8b5cf6')};`;
+      } else {
+        fill.style.cssText = `position:absolute;left:0;bottom:0;width:100%;height:${slValue}%;background:${p('fillColor', '#8b5cf6')};`;
+      }
+      bar.appendChild(fill);
+      el.appendChild(bar);
+
+      // 滑块圆钮：半径为控件短边的一半减 1，与 SGL 实际渲染一致
+      const knobSize = knobR * 2;
       const knob = document.createElement('div');
-      knob.style.cssText = `position:absolute;${isHoriz ? 'top:50%;left:' + slValue + '%' : 'left:50%;bottom:' + slValue + '%'};transform:translate(-50%,-50%);width:${knobSize}px;height:${knobSize}px;border-radius:50%;background:${p('knobColor', '#ffffff')};box-shadow:0 1px 4px rgba(0,0,0,0.4);border:${z}px solid rgba(0,0,0,0.1);`;
+      if (isHoriz) {
+        knob.style.cssText = `position:absolute;top:50%;left:${knobR + Math.max(0, wPx - 2 * knobR) * slValue / 100}px;transform:translate(-50%,-50%);width:${knobSize}px;height:${knobSize}px;border-radius:50%;background:${p('knobColor', '#ffffff')};`;
+      } else {
+        knob.style.cssText = `position:absolute;left:50%;top:${hPx - knobR - Math.max(0, hPx - 2 * knobR) * slValue / 100}px;transform:translate(-50%,-50%);width:${knobSize}px;height:${knobSize}px;border-radius:50%;background:${p('knobColor', '#ffffff')};`;
+      }
       el.appendChild(knob);
       break;
     }
@@ -1370,34 +1567,164 @@ function renderWidgetVisual(el, w) {
     }
 
     case 'bar': {
-      el.style.background = p('bgColor', '#313149');
+      // SGL bar: direct=0 水平（左 fill，右 track），direct=1 垂直（下 fill，上 track）
+      const barDirect = p('direct', 0);
+      const barValue = p('value', 50);
+      const barFillCol = p('barColor', '#000000');
+      const barTrackCol = p('bgColor', '#FFFFFF');
+      el.style.background = barTrackCol;
       el.style.border = `${p('borderWidth', 1) * z}px solid ${p('borderColor', '#3d3d5c')}`;
-      el.style.borderRadius = (p('radius', 2) * z) + 'px';
+      el.style.borderRadius = (p('radius', 0) * z) + 'px';
       el.style.opacity = alphaCss;
       const fill = document.createElement('div');
-      fill.style.cssText = `position:absolute;left:0;bottom:0;width:100%;height:${p('value', 50)}%;background:${p('color', '#8b5cf6')};`;
+      if (barDirect === 0) {
+        fill.style.cssText = `position:absolute;left:0;top:0;height:100%;width:${barValue}%;background:${barFillCol};border-radius:inherit;`;
+      } else {
+        fill.style.cssText = `position:absolute;left:0;bottom:0;width:100%;height:${barValue}%;background:${barFillCol};border-radius:inherit;`;
+      }
       el.appendChild(fill);
       break;
     }
 
     case 'gauge': {
-      el.style.background = p('bgColor', '#1e1e2e');
-      el.style.border = `${p('borderWidth', 2) * z}px solid ${p('borderColor', '#3d3d5c')}`;
+      // SGL gauge: 圆心中心，半径 = max(radius, width/2-1)，默认角度 30~330 度
+      const gValue = p('value', 0);
+      const startAngle = p('startAngle', 30);
+      const endAngle = p('endAngle', 330);
+      const scaleAngle = p('scaleAngle', 15);
+      const scaleStep = p('scaleStep', 10);
+      const scaleStart = p('scaleStart', 0);
+      const scaleLen = Math.max(p('scaleLength', 0), 4);
+      const arcW = p('arcWidth', 2);
+      const scaleW = p('scaleWidth', 1);
+      const ptrW = p('pointerWidth', 2);
+      const hubR = Math.max((Math.min(w.width, w.height) / 2 - 1 + 8) / 8, p('hubRadius', 0));
+      const bgCol = p('bgColor', '#1e1e2e');
+      const arcCol = p('arcColor', '#FFFFFF');
+      const scaleCol = p('scaleColor', '#FFFFFF');
+      const ptrCol = p('pointerColor', '#FF0000');
+      const textCol = p('textColor', '#FFFFFF');
+      const hubCol = p('hubColor', '#FFFFFF');
+      const borderW = p('borderWidth', 0) * z;
+
+      const wPx = w.width * z;
+      const hPx = w.height * z;
+      const cx = wPx / 2;
+      const cy = hPx / 2;
+      const r = Math.max(p('radius', 0) * z, wPx / 2 - z);
+      const scaleOut = arcW * z + 6 * z;
+      const scaleIn = scaleOut + scaleLen * z;
+      const ptrStart = scaleIn + 4 * z + ptrW * z;
+      const ptrEnd = r - hubR * z - ptrW * z;
+
+      el.style.background = bgCol;
+      el.style.border = `${borderW}px solid ${p('borderColor', '#3d3d5c')}`;
       el.style.borderRadius = '50%';
       el.style.opacity = alphaCss;
-      const centerX = w.width / 2;
-      const centerY = w.height / 2;
-      const radius = Math.min(w.width, w.height) / 2 - p('borderWidth', 2);
-      const gValue = p('value', 50);
-      const percent = gValue / 100;
-      const gCol = p('color', '#8b5cf6');
-      const arc = document.createElement('div');
-      arc.style.cssText = `position:absolute;top:${(centerY - radius) * z}px;left:${(centerX - radius) * z}px;width:${radius * 2 * z}px;height:${radius * 2 * z}px;border:${p('borderWidth', 4) * z}px solid ${gCol};border-radius:50%;border-right-color:transparent;border-bottom-color:transparent;transform:rotate(${-45 + percent * 270}deg);`;
-      el.appendChild(arc);
+
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('width', wPx);
+      svg.setAttribute('height', hPx);
+      svg.style.position = 'absolute';
+      svg.style.top = '0';
+      svg.style.left = '0';
+
+      const deg2rad = d => (d - 90) * Math.PI / 180; // SVG 0度=12点钟，SGL 0度=3点钟，需要-90映射
+      // 背景圆
+      const bgCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      bgCircle.setAttribute('cx', cx);
+      bgCircle.setAttribute('cy', cy);
+      bgCircle.setAttribute('r', r);
+      bgCircle.setAttribute('fill', bgCol);
+      svg.appendChild(bgCircle);
+
+      // 弧线（圆环）
+      const arcR = (r - 1 + r - arcW * z - 1) / 2;
+      const arcStroke = Math.max(1, r - 1 - (r - arcW * z - 1));
+      const arcPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      const arcAng = endAngle - startAngle;
+      const largeArc = arcAng > 180 ? 1 : 0;
+      const x1 = cx + arcR * Math.cos(deg2rad(startAngle));
+      const y1 = cy + arcR * Math.sin(deg2rad(startAngle));
+      const x2 = cx + arcR * Math.cos(deg2rad(endAngle));
+      const y2 = cy + arcR * Math.sin(deg2rad(endAngle));
+      arcPath.setAttribute('d', `M ${x1} ${y1} A ${arcR} ${arcR} 0 ${largeArc} 1 ${x2} ${y2}`);
+      arcPath.setAttribute('fill', 'none');
+      arcPath.setAttribute('stroke', arcCol);
+      arcPath.setAttribute('stroke-width', arcStroke);
+      svg.appendChild(arcPath);
+
+      // 刻度和文字
+      const textInterval = p('textInterval', 3);
+      const scaleWarning = p('scaleWarning', 32767);
+      let scaleMask = scaleStart;
+      let count = 0;
+      for (let angle = startAngle; angle <= endAngle; angle += scaleAngle) {
+        const sc = scaleMask < scaleWarning ? scaleCol : '#FF0000';
+        const rad = deg2rad(angle);
+        const xo = cx + (r - scaleOut) * Math.cos(rad);
+        const yo = cy + (r - scaleOut) * Math.sin(rad);
+        const xi = cx + (r - scaleIn) * Math.cos(rad);
+        const yi = cy + (r - scaleIn) * Math.sin(rad);
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('x1', xo);
+        line.setAttribute('y1', yo);
+        line.setAttribute('x2', xi);
+        line.setAttribute('y2', yi);
+        line.setAttribute('stroke', sc);
+        line.setAttribute('stroke-width', (count & textInterval) === 0 ? scaleW * 2 * z : scaleW * z);
+        svg.appendChild(line);
+
+        if ((count & textInterval) === 0) {
+          const textCr = r - scaleIn - 6 * z;
+          const tx = cx + textCr * Math.cos(rad);
+          const ty = cy + textCr * Math.sin(rad);
+          const txt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          txt.setAttribute('x', tx);
+          txt.setAttribute('y', ty);
+          txt.setAttribute('text-anchor', 'middle');
+          txt.setAttribute('dominant-baseline', 'central');
+          txt.setAttribute('fill', textCol);
+          txt.setAttribute('font-size', Math.max(8 * z, 8));
+          txt.textContent = scaleMask;
+          svg.appendChild(txt);
+        }
+        scaleMask += scaleStep;
+        count++;
+      }
+
+      // 指针
+      const needleAngle = 90 + startAngle + gValue * scaleAngle / scaleStep;
+      const nRad = deg2rad(needleAngle);
+      const nCos = Math.cos(nRad);
+      const nSin = Math.sin(nRad);
+      const px = cx + (r - ptrStart) * nCos;
+      const py = cy + (r - ptrStart) * nSin;
+      const nx = cx + (r - ptrEnd) * nCos;
+      const ny = cy + (r - ptrEnd) * nSin;
+      const needle = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      needle.setAttribute('x1', px);
+      needle.setAttribute('y1', py);
+      needle.setAttribute('x2', nx);
+      needle.setAttribute('y2', ny);
+      needle.setAttribute('stroke', ptrCol);
+      needle.setAttribute('stroke-width', Math.max(1, ptrW * z));
+      svg.appendChild(needle);
+
+      // 中心 hub
+      const hub = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      hub.setAttribute('cx', cx);
+      hub.setAttribute('cy', cy);
+      hub.setAttribute('r', Math.max(1, hubR * z));
+      hub.setAttribute('fill', hubCol);
+      svg.appendChild(hub);
+
       // 中心值
       const valText = document.createElement('div');
-      valText.style.cssText = `position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:${12 * z}px;color:${gCol};pointer-events:none;`;
+      valText.style.cssText = `position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:${Math.max(10 * z, 10)}px;color:${textCol};pointer-events:none;`;
       valText.textContent = gValue;
+
+      el.appendChild(svg);
       el.appendChild(valText);
       break;
     }
@@ -1416,19 +1743,125 @@ function renderWidgetVisual(el, w) {
     }
 
     case 'battery': {
-      el.style.background = p('bgColor', '#313149');
-      el.style.border = `${p('borderWidth', 1) * z}px solid ${p('borderColor', '#3d3d5c')}`;
-      el.style.borderRadius = (p('radius', 4) * z) + 'px';
+      // SGL battery: 支持水平/垂直方向、电池帽位置、分段填充
+      const bLevel = p('level', p('value', 80));
+      const bDir = p('direction', 0); // 0=水平, 1=垂直
+      const bCapPos = p('capPos', 0); // 0=右, 1=左, 2=上
+      const bCapSize = p('capSize', 4) * z;
+      const bNumCells = p('numCells', 6);
+      const bLowCol = p('lowColor', '#FF0000');
+      const bMedCol = p('mediumColor', '#FFA500');
+      const bHighCol = p('highColor', '#00FF00');
+      const bFillCol = bLevel < 20 ? bLowCol : (bLevel < 50 ? bMedCol : bHighCol);
+      const bBorderCol = p('borderColor', '#FFFFFF');
+      const bBorderW = Math.max(1, p('borderWidth', 1)) * z;
+      const bRadius = p('radius', 4) * z;
+      const wPx = w.width * z;
+      const hPx = w.height * z;
+
+      el.style.background = 'transparent';
+      el.style.border = 'none';
+      el.style.borderRadius = '0';
       el.style.opacity = alphaCss;
-      const bValue = p('value', 80);
-      const bCol = p('color', '#22c55e');
-      const fill = document.createElement('div');
-      fill.style.cssText = `position:absolute;left:0;top:0;height:100%;width:${bValue}%;background:${bValue > 20 ? bCol : '#ef4444'};border-radius:${p('radius', 4) * z}px;`;
-      el.appendChild(fill);
+
+      let batteryW, batteryH, batteryX, batteryY, capW, capH, capX, capY;
+      if (bDir === 0) {
+        batteryW = wPx - bCapSize;
+        batteryH = hPx - Math.floor(hPx / 5);
+        capW = bCapSize;
+        capH = batteryH / 3;
+        if (bCapPos === 1) { // 左
+          batteryX = bCapSize;
+          batteryY = (hPx - batteryH) / 2;
+          capX = 0;
+        } else { // 右
+          batteryX = 0;
+          batteryY = (hPx - batteryH) / 2;
+          capX = batteryW;
+        }
+        capY = batteryY + (batteryH - capH) / 2;
+      } else {
+        batteryH = hPx - bCapSize;
+        batteryW = wPx - Math.floor(wPx / 5);
+        capH = bCapSize;
+        capW = batteryW / 3;
+        batteryY = bCapSize;
+        batteryX = (wPx - batteryW) / 2;
+        capX = batteryX + (batteryW - capW) / 2;
+        capY = 0;
+      }
+
+      // 电池主体外壳
+      const shell = document.createElement('div');
+      shell.style.cssText = `position:absolute;left:${batteryX}px;top:${batteryY}px;width:${batteryW}px;height:${batteryH}px;border:${bBorderW}px solid ${bBorderCol};border-radius:${bRadius}px;box-sizing:border-box;overflow:hidden;`;
+
       // 电池帽
       const cap = document.createElement('div');
-      cap.style.cssText = `position:absolute;right:${-3 * z}px;top:50%;transform:translateY(-50%);width:${3 * z}px;height:${50 * z}%;background:${p('borderColor', '#3d3d5c')};border-radius:0 ${p('radius', 4) * z}px ${p('radius', 4) * z}px 0;`;
+      cap.style.cssText = `position:absolute;left:${capX}px;top:${capY}px;width:${capW}px;height:${capH}px;background:${bBorderCol};border-radius:${Math.max(0, bRadius - 1)}px;`;
+
+      // 背景
+      const bg = document.createElement('div');
+      bg.style.cssText = `position:absolute;left:${bBorderW}px;top:${bBorderW}px;right:${bBorderW}px;bottom:${bBorderW}px;background:${p('bgColor', '#1E1E1E')};border-radius:${Math.max(0, bRadius - bBorderW)}px;`;
+      shell.appendChild(bg);
+
+      // 分段填充
+      if (bLevel > 0) {
+        const activeCells = Math.min(bNumCells, Math.max(1, Math.floor((bLevel * bNumCells + 99) / 100)));
+        const padding = 2 * z;
+        const fillX = bBorderW + padding;
+        const fillY = bBorderW + padding;
+        const fillW = batteryW - 2 * bBorderW - 2 * padding;
+        const fillH = batteryH - 2 * bBorderW - 2 * padding;
+        if (bDir === 0) {
+          const minGap = 2 * z;
+          let totalGap = (bNumCells - 1) * minGap;
+          if (totalGap >= fillW) totalGap = (bNumCells - 1) * z;
+          const cellW = Math.max(z, Math.floor((fillW - totalGap) / bNumCells));
+          const usedW = cellW * bNumCells + totalGap;
+          const remainW = fillW - usedW;
+          const cellH = fillH;
+          const startX = bCapPos === 1 ? (fillX + fillW - usedW) : fillX;
+          for (let i = 0; i < activeCells; i++) {
+            let curW = cellW;
+            if (bCapPos === 1 ? (i >= bNumCells - remainW / z) : (i < remainW / z)) curW += z;
+            const cx = bCapPos === 1 ? (startX + (activeCells - 1 - i) * (cellW + (i < activeCells - 1 ? minGap : 0))) : (startX + i * (cellW + minGap));
+            const cell = document.createElement('div');
+            cell.style.cssText = `position:absolute;left:${cx}px;top:${fillY}px;width:${curW}px;height:${cellH}px;background:${bFillCol};border-radius:${Math.max(0, bRadius - bBorderW - padding)}px;`;
+            shell.appendChild(cell);
+          }
+        } else {
+          const minGap = 2 * z;
+          let totalGap = (bNumCells - 1) * minGap;
+          if (totalGap >= fillH) totalGap = (bNumCells - 1) * z;
+          const cellH = Math.max(z, Math.floor((fillH - totalGap) / bNumCells));
+          const usedH = cellH * bNumCells + totalGap;
+          const startY = fillY + fillH - usedH;
+          for (let i = 0; i < activeCells; i++) {
+            const cy = startY + (bNumCells - 1 - i) * (cellH + minGap);
+            const cell = document.createElement('div');
+            cell.style.cssText = `position:absolute;left:${fillX}px;top:${cy}px;width:${fillW}px;height:${cellH}px;background:${bFillCol};border-radius:${Math.max(0, bRadius - bBorderW - padding)}px;`;
+            shell.appendChild(cell);
+          }
+        }
+      }
+
+      // 充电图标（简化闪电）
+      if (p('charging', false)) {
+        const charge = document.createElement('div');
+        charge.style.cssText = `position:absolute;left:${batteryX + batteryW / 2 - 4 * z}px;top:${batteryY + batteryH / 2 - 6 * z}px;width:0;height:0;border-left:${3 * z}px solid transparent;border-right:${3 * z}px solid transparent;border-top:${6 * z}px solid ${p('chargingColor', '#FFFF00')};transform:rotate(15deg);`;
+        shell.appendChild(charge);
+      }
+
+      el.appendChild(shell);
       el.appendChild(cap);
+
+      // 百分比文字
+      if (p('showPercentage', false)) {
+        const pct = document.createElement('div');
+        pct.textContent = bLevel + '%';
+        pct.style.cssText = `position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:${Math.min(12 * z, hPx * 0.4)}px;color:${p('textColor', '#000000')};pointer-events:none;font-family:${getCssFontStack(p('fontFamily', 'simsun.ttc'))};`;
+        el.appendChild(pct);
+      }
       break;
     }
 
@@ -1458,24 +1891,80 @@ function renderWidgetVisual(el, w) {
       el.style.border = `${p('borderWidth', 1) * z}px solid ${p('borderColor', '#3d3d5c')}`;
       el.style.borderRadius = (p('radius', 4) * z) + 'px';
       el.style.opacity = alphaCss;
+      el.style.overflow = 'hidden';
+      const ddOptions = (p('options', '') || '').split('\n').filter(o => o.length > 0);
+      const ddFontSize = p('fontSize', 14);
+      const ddTextColor = p('textColor', '#e4e4e7');
+      const ddFontFamily = getCssFontStack(p('fontFamily', 'simhei.ttf'));
+      const ddRadius = p('radius', 4) * z;
+      const ddBorderW = p('borderWidth', 1) * z;
+      // SGL dropdown (closed): item_pad = max(radius, border + 3), text centered vertically
+      const ddItemPad = Math.max(ddRadius, ddBorderW + 3 * z);
+      const ddTextX = ddItemPad;
+      const ddHeaderH = w.height * z;
+      const ddArrowW = Math.max(18, Math.round(ddFontSize * z * 0.9));
+      const ddArrowH = Math.max(10, Math.round(ddArrowW * 10 / 18));
       const ddInner = document.createElement('div');
-      ddInner.style.cssText = `width:100%;height:100%;display:flex;align-items:center;padding:0 ${8 * z}px;gap:${8 * z}px;`;
+      ddInner.style.cssText = `position:absolute;inset:${ddBorderW}px ${ddBorderW}px;display:flex;align-items:center;`;
       const ddText = document.createElement('span');
-      ddText.textContent = p('text', '请选择');
-      ddText.style.color = p('textColor', '#e4e4e7');
-      ddText.style.fontSize = (p('fontSize', 14) * z) + 'px';
-      ddText.style.fontFamily = getCssFontStack(p('fontFamily', 'simhei.ttf'));
+      ddText.textContent = ddOptions.length > 0 ? ddOptions[0] : '请选择';
+      ddText.style.color = ddTextColor;
+      ddText.style.fontSize = (ddFontSize * z) + 'px';
+      ddText.style.fontFamily = ddFontFamily;
       ddText.style.flex = '1';
+      ddText.style.marginLeft = (ddTextX - ddBorderW) + 'px';
+      ddText.style.marginRight = (ddArrowW + 4 * z) + 'px';
       ddText.style.overflow = 'hidden';
       ddText.style.textOverflow = 'ellipsis';
       ddText.style.whiteSpace = 'nowrap';
       const ddArrow = document.createElement('span');
-      ddArrow.textContent = '▼';
-      ddArrow.style.fontSize = (8 * z) + 'px';
-      ddArrow.style.color = p('color', '#8b5cf6');
+      ddArrow.innerHTML = `<svg width="${ddArrowW}" height="${ddArrowH}" viewBox="0 0 24 24" fill="currentColor" style="display:block;"><polygon points="12 18 4 8 20 8"/></svg>`;
+      ddArrow.style.color = ddTextColor;
+      ddArrow.style.position = 'absolute';
+      ddArrow.style.right = (ddItemPad - ddBorderW) + 'px';
+      ddArrow.style.top = '50%';
+      ddArrow.style.transform = 'translateY(-50%)';
+      ddArrow.style.display = 'flex';
+      ddArrow.style.alignItems = 'center';
+      ddArrow.style.justifyContent = 'center';
       ddInner.appendChild(ddText);
       ddInner.appendChild(ddArrow);
       el.appendChild(ddInner);
+      break;
+    }
+
+    case 'roller': {
+      el.style.background = p('bgColor', '#1e1e2e');
+      el.style.border = `${p('borderWidth', 1) * z}px solid ${p('borderColor', '#3d3d5c')}`;
+      el.style.borderRadius = (p('radius', 4) * z) + 'px';
+      el.style.opacity = alphaCss;
+      el.style.overflow = 'hidden';
+      const rOptions = (p('options', '') || '').split('\n').filter(o => o.length > 0);
+      const rFontSize = p('fontSize', 14);
+      const rTextColor = p('textColor', '#e4e4e7');
+      const rSelectedColor = p('selectedColor', '#8b5cf6');
+      const rFontFamily = getCssFontStack(p('fontFamily', 'simhei.ttf'));
+      const rRadius = p('radius', 4) * z;
+      const rBorderW = p('borderWidth', 1) * z;
+      // SGL roller: item_h ≈ font_height + 6; use fontSize as practical approx.
+      const rItemH = rFontSize * z;
+      const rWidgetH = w.height * z;
+      // selected band vertically centered in widget area
+      const rBandY1 = (rWidgetH - rItemH) / 2;
+      const rTextX = rRadius + 2 * z;
+      // draw rows around the band; default scroll_y=0 so item 0 aligns with band
+      for (let i = 0; i < rOptions.length; i++) {
+        const itemY = rBandY1 + i * rItemH;
+        const row = document.createElement('div');
+        const isSelected = i === 0;
+        row.style.cssText = `position:absolute;left:${rTextX}px;top:${itemY}px;width:${(w.width * z) - rTextX - rBorderW}px;height:${rItemH}px;display:flex;align-items:center;justify-content:flex-start;box-sizing:border-box;color:${rTextColor};font-size:${rFontSize * z}px;font-family:${rFontFamily};background:transparent;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;`;
+        row.textContent = rOptions[i] || '';
+        el.appendChild(row);
+      }
+      // selected band overlay
+      const band = document.createElement('div');
+      band.style.cssText = `position:absolute;left:${rBorderW}px;top:${rBandY1}px;width:${(w.width * z) - rBorderW * 2}px;height:${rItemH}px;background:${rSelectedColor};pointer-events:none;`;
+      el.appendChild(band);
       break;
     }
 
@@ -1680,21 +2169,155 @@ function renderWidgetVisual(el, w) {
     }
 
     case 'analogclock': {
-      el.style.background = p('bgColor', '#1e1e2e');
-      el.style.border = `${p('borderWidth', 2) * z}px solid ${p('borderColor', '#3d3d5c')}`;
-      el.style.borderRadius = '50%';
+      // SGL analogclock: r = max(radius, width/2 - 1); border not drawn as colored ring
+      const acBg = p('bgColor', '#000000');
+      const acScaleCol = p('scaleColor', '#FFFFFF');
+      const acTextCol = p('textColor', '#FFFFFF');
+      const acHourCol = p('hourPtrColor', '#ffffff');
+      const acMinCol = p('minPtrColor', '#FFFFFF');
+      const acSecCol = p('secPtrColor', '#FF0000');
+      const acHubCol = p('hubColor', '#FF0000');
+      const acBorderW = p('borderWidth', 0) * z;
+      const acScaleW = p('scaleWidth', 1) * z;
+      const acScaleLen = Math.max(p('scaleLength', 8), 4) * z;
+      const acHourW = p('hourPtrWidth', 5) * z;
+      const acMinW = p('minPtrWidth', 5) * z;
+      const acSecW = p('secPtrWidth', 2) * z;
+      const acHubR = Math.max(5 * z, p('hubRadius', 6) * z);
+      const hour = p('hour', 0), minute = p('minute', 0), second = p('second', 0);
+
+      const wPx = w.width * z;
+      const hPx = w.height * z;
+      const cx = wPx / 2;
+      const cy = hPx / 2;
+      const r = Math.max(0, Math.floor(w.width / 2 - 1) * z);
+      const innerR = Math.max(0, r - acBorderW);
+      const scaleOut = Math.max(0, innerR - 2 * z);
+      const scaleIn = Math.max(0, scaleOut - acScaleLen);
+      const hLen = innerR / 2;
+      const mLen = (innerR * 160) >> 8;
+      const sLen1 = (innerR * 217) >> 8;
+      const sLen2 = (innerR * 39) >> 8;
+      const subScaleCol = mixColors(acScaleCol, acBg, 0.5);
+
+      el.style.background = 'transparent';
+      el.style.border = 'none';
+      el.style.borderRadius = '0';
       el.style.opacity = alphaCss;
-      const cx = w.width / 2, cy = w.height / 2, r = Math.min(w.width, w.height) / 2 - p('borderWidth', 2);
-      const acCol = p('color', '#8b5cf6');
-      const hourHand = document.createElement('div');
-      hourHand.style.cssText = `position:absolute;top:${cy * z}px;left:${cx * z}px;width:${2 * z}px;height:${r * 0.4 * z}px;background:${acCol};transform-origin:bottom center;transform:translateX(-50%) rotate(120deg);border-radius:1px;`;
-      el.appendChild(hourHand);
-      const minHand = document.createElement('div');
-      minHand.style.cssText = `position:absolute;top:${cy * z}px;left:${cx * z}px;width:${1.5 * z}px;height:${r * 0.6 * z}px;background:${acCol};transform-origin:bottom center;transform:translateX(-50%) rotate(45deg);border-radius:1px;`;
-      el.appendChild(minHand);
-      const dot = document.createElement('div');
-      dot.style.cssText = `position:absolute;top:${(cy - 2) * z}px;left:${(cx - 2) * z}px;width:${4 * z}px;height:${4 * z}px;background:${acCol};border-radius:50%;transform:translateY(-50%);`;
-      el.appendChild(dot);
+      el.style.overflow = 'visible';
+
+      const bgCircle = document.createElement('div');
+      bgCircle.style.cssText = `position:absolute;left:${cx - r}px;top:${cy - r}px;width:${2 * r}px;height:${2 * r}px;border-radius:50%;background:${acBg};`;
+      el.appendChild(bgCircle);
+
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('width', wPx);
+      svg.setAttribute('height', hPx);
+      svg.style.cssText = 'position:absolute;top:0;left:0;overflow:visible;pointer-events:none;';
+
+      const deg2rad = d => d * Math.PI / 180;
+
+      for (let i = 0; i < 60; i++) {
+        const angle = i * 6 - 90;
+        const rad = deg2rad(angle);
+        const cos = Math.cos(rad), sin = Math.sin(rad);
+        const xo = cx + scaleOut * cos;
+        const yo = cy + scaleOut * sin;
+        const xi = cx + scaleIn * cos;
+        const yi = cy + scaleIn * sin;
+        const isMain = (i % 5 === 0);
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('x1', xo);
+        line.setAttribute('y1', yo);
+        line.setAttribute('x2', xi);
+        line.setAttribute('y2', yi);
+        line.setAttribute('stroke', isMain ? acScaleCol : subScaleCol);
+        line.setAttribute('stroke-width', isMain ? acScaleW * 2 : acScaleW);
+        line.setAttribute('stroke-linecap', 'round');
+        svg.appendChild(line);
+
+        if (isMain) {
+          const text = i === 0 ? '12' : String(i / 5);
+          const fontH = Math.max(8 * z, p('fontSize', 12) * z);
+          const textR = Math.max(0, scaleIn - fontH - 2 * z);
+          const tx = cx + textR * cos;
+          const ty = cy + textR * sin;
+          const txt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          txt.setAttribute('x', tx);
+          txt.setAttribute('y', ty);
+          txt.setAttribute('text-anchor', 'middle');
+          txt.setAttribute('dominant-baseline', 'central');
+          txt.setAttribute('fill', acTextCol);
+          txt.setAttribute('font-size', fontH);
+          txt.setAttribute('font-family', getCssFontStack(p('fontFamily', 'simsun.ttc')));
+          txt.textContent = text;
+          svg.appendChild(txt);
+        }
+      }
+
+      function drawHand(angleDeg, tailLen, tipLen, mainWidth, tailWidth, color) {
+        const rad = deg2rad(angleDeg);
+        const cos = Math.cos(rad), sin = Math.sin(rad);
+        const sx = cx + tailLen * cos;
+        const sy = cy + tailLen * sin;
+        const px = cx + tipLen * cos;
+        const py = cy + tipLen * sin;
+        if (tailWidth > 0 && tailLen > 0) {
+          const tail = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+          tail.setAttribute('x1', cx); tail.setAttribute('y1', cy);
+          tail.setAttribute('x2', sx); tail.setAttribute('y2', sy);
+          tail.setAttribute('stroke', color);
+          tail.setAttribute('stroke-width', tailWidth);
+          tail.setAttribute('stroke-linecap', 'round');
+          svg.appendChild(tail);
+        }
+        const main = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        main.setAttribute('x1', sx); main.setAttribute('y1', sy);
+        main.setAttribute('x2', px); main.setAttribute('y2', py);
+        main.setAttribute('stroke', color);
+        main.setAttribute('stroke-width', mainWidth);
+        main.setAttribute('stroke-linecap', 'round');
+        svg.appendChild(main);
+      }
+
+      const hAngle = ((hour % 12) * 30 + Math.floor(minute / 2)) - 90;
+      const mAngle = (minute * 6) - 90;
+      const sAngle = (second * 6) - 90;
+      drawHand(hAngle, sLen2, hLen, acHourW, acSecW, acHourCol);
+      drawHand(mAngle, sLen2, mLen, acMinW, acSecW, acMinCol);
+
+      const sRad = deg2rad(sAngle);
+      const sCos = Math.cos(sRad), sSin = Math.sin(sRad);
+      const secLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      secLine.setAttribute('x1', cx - sLen2 * sCos);
+      secLine.setAttribute('y1', cy - sLen2 * sSin);
+      secLine.setAttribute('x2', cx + sLen1 * sCos);
+      secLine.setAttribute('y2', cy + sLen1 * sSin);
+      secLine.setAttribute('stroke', acSecCol);
+      secLine.setAttribute('stroke-width', acSecW);
+      secLine.setAttribute('stroke-linecap', 'round');
+      svg.appendChild(secLine);
+
+      if (acHubR + 1 > 0) {
+        const hubMin = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        hubMin.setAttribute('cx', cx); hubMin.setAttribute('cy', cy); hubMin.setAttribute('r', acHubR + 1);
+        hubMin.setAttribute('fill', acMinCol);
+        svg.appendChild(hubMin);
+      }
+      if (acHubR > 0) {
+        const hubMain = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        hubMain.setAttribute('cx', cx); hubMain.setAttribute('cy', cy); hubMain.setAttribute('r', acHubR);
+        hubMain.setAttribute('fill', acHubCol);
+        svg.appendChild(hubMain);
+      }
+      if (acHubR - 2 > 0) {
+        const hubInner = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        hubInner.setAttribute('cx', cx); hubInner.setAttribute('cy', cy); hubInner.setAttribute('r', acHubR - 2);
+        hubInner.setAttribute('fill', acBg);
+        svg.appendChild(hubInner);
+      }
+
+      el.appendChild(svg);
       break;
     }
 
@@ -1932,8 +2555,23 @@ function renderWidgetProps() {
 
   let html = '';
 
-  // 位置与尺寸（通用）
-  html += `<div class="form-group"><label class="form-label">位置与尺寸</label></div>`;
+  // 控件名称（C 代码变量名）
+  html += `<div class="form-group" style="margin-bottom:8px;">`;
+  html += `<label class="form-label">控件名称 <span style="font-weight:normal;color:var(--text-muted);font-size:10px;">(C 变量名)</span></label>`;
+  html += `<input type="text" class="form-input" data-prop="name" value="${escapeAttr(w.name || w.id)}" placeholder="如 btn_1" style="font-family:monospace;" />`;
+  html += `</div>`;
+
+  // 位置与尺寸（通用），右侧加锁定图标
+  const hasLocked = propList.includes('locked');
+  const lockIconSvg = w.locked
+    ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>`
+    : `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 9.9-1"></path></svg>`;
+  html += `<div class="form-group" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">`;
+  html += `<label class="form-label" style="margin-bottom:0;">位置与尺寸</label>`;
+  if (hasLocked) {
+    html += `<button type="button" class="lock-icon-btn ${w.locked ? 'locked' : ''}" data-prop="locked" data-bool="1" title="${w.locked ? '解锁控件' : '锁定控件'}">${lockIconSvg}</button>`;
+  }
+  html += `</div>`;
   html += `<div class="form-row"><div class="form-group"><label class="form-label">X</label><input type="number" class="form-input" data-prop="x" value="${w.x}" /></div><div class="form-group"><label class="form-label">Y</label><input type="number" class="form-input" data-prop="y" value="${w.y}" /></div></div>`;
   html += `<div class="form-row" style="margin-bottom:8px;"><div class="form-group"><label class="form-label">宽度</label><input type="number" class="form-input" data-prop="width" value="${w.width}" min="20" /></div><div class="form-group"><label class="form-label">高度</label><input type="number" class="form-input" data-prop="height" value="${w.height}" min="20" /></div></div>`;
 
@@ -1949,13 +2587,7 @@ function renderWidgetProps() {
   });
   html += `</select></div>`;
 
-  // 锁定控件开关（在最上面，位置与尺寸之后）
-  const hasLocked = propList.includes('locked');
-  if (hasLocked) {
-    html += `<div class="form-group" style="margin-bottom:10px;"><label class="form-label">🔒 锁定控件</label><div class="switch-input ${w.locked ? 'on' : ''}" data-prop="locked" data-bool="1" style="cursor:pointer;"></div></div>`;
-  }
-
-  // 根据 properties 列表 + PROP_META 动态渲染属性（跳过 locked，已在上面显示）
+  // 根据 properties 列表 + PROP_META 动态渲染属性（跳过 locked，已在位置与尺寸标题处显示）
   let inFontSection = false;
   let inEventSection = false;
   
@@ -2021,13 +2653,33 @@ function renderWidgetProps() {
         html += `</select></div>`;
       } else {
         html += `<div class="form-group"><label class="form-label">${label}</label><select class="form-select" data-prop="${prop}">`;
+        const defaultVal = (WIDGET_DEFAULTS[w.type] && WIDGET_DEFAULTS[w.type][prop]) || meta.options[0][0];
+        const curStr = rawVal != null ? String(rawVal) : String(defaultVal);
         meta.options.forEach(([optVal, optLabel]) => {
           const optStr = String(optVal);
-          const curStr = String(rawVal);
           html += `<option value="${optStr}" ${curStr === optStr ? 'selected' : ''}>${optLabel}</option>`;
         });
         html += `</select></div>`;
       }
+    } else if (prop === 'options') {
+      // 选项文本：用可添加/删除的列表编辑，内部自动用 \n 拼接
+      const opts = (typeof rawVal === 'string' ? rawVal : '').split('\n').filter(o => o.length > 0);
+      html += `<div class="form-group" data-options-group>`;
+      html += `<label class="form-label">${label}</label>`;
+      html += `<div class="options-list" style="display:flex;flex-direction:column;gap:4px;margin-bottom:6px;">`;
+      if (opts.length === 0) {
+        html += `<div style="font-size:11px;color:var(--text-muted);padding:2px 0;">暂无选项</div>`;
+      } else {
+        opts.forEach((opt, idx) => {
+          html += `<div class="option-item" style="display:flex;gap:4px;align-items:center;">`;
+          html += `<input type="text" class="form-input option-input" data-option-idx="${idx}" value="${escapeAttr(opt)}" placeholder="选项文本" style="flex:1;font-size:12px;" />`;
+          html += `<button type="button" class="option-delete-btn" data-option-idx="${idx}" title="删除" style="background:none;color:#ef4444;border:none;cursor:pointer;font-size:14px;padding:2px 6px;">✕</button>`;
+          html += `</div>`;
+        });
+      }
+      html += `</div>`;
+      html += `<button type="button" class="option-add-btn" style="background:var(--accent);color:#fff;border:none;border-radius:4px;padding:4px 10px;font-size:12px;cursor:pointer;width:100%;">+ 添加选项</button>`;
+      html += `</div>`;
     } else if (meta.type === 'text' || prop === 'text') {
       html += `<div class="form-group"><label class="form-label">${label}</label><input type="text" class="form-input" data-prop="${prop}" value="${escapeAttr(rawVal || '')}" /></div>`;
     } else {
@@ -2171,6 +2823,43 @@ function renderWidgetProps() {
     const isBool = input.dataset.bool === '1';
     const isColor = input.dataset.clr === '1';
 
+    // 控件名称：单独校验 C 标识符规则与唯一性
+    if (prop === 'name') {
+      input.addEventListener('input', () => {
+        const val = input.value.trim();
+        if (val && !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(val)) {
+          input.style.borderColor = 'var(--error)';
+        } else {
+          input.style.borderColor = '';
+        }
+      });
+      input.addEventListener('blur', () => {
+        const val = input.value.trim();
+        const wgt = AppState.getWidget(AppState.selectedWidgetId);
+        if (!wgt) return;
+        if (!val) {
+          input.value = wgt.name || wgt.id;
+          return;
+        }
+        if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(val)) {
+          showToast('控件名称只能包含英文字母、数字和下划线，且不能以数字开头');
+          input.value = wgt.name || wgt.id;
+          input.style.borderColor = '';
+          return;
+        }
+        const page = AppState.getCurrentPage();
+        const duplicate = page && page.widgets.some(ww => ww.id !== wgt.id && (ww.name || ww.id) === val);
+        if (duplicate) {
+          showToast('控件名称已存在，请使用唯一名称');
+          input.value = wgt.name || wgt.id;
+          input.style.borderColor = '';
+          return;
+        }
+        AppState.updateWidget(wgt.id, { name: val });
+      });
+      return;
+    }
+
     if (isBool) {
       input.addEventListener('click', () => {
         const wgt = AppState.getWidget(AppState.selectedWidgetId);
@@ -2179,8 +2868,8 @@ function renderWidgetProps() {
       return;
     }
 
-    // parentId 不需要 input 事件（由 change 事件处理），其他属性绑定 input 事件
-    if (prop !== 'parentId') {
+    // parentId/fontFamily 不需要 input 事件（由 change 事件处理），其他属性绑定 input 事件
+    if (prop !== 'parentId' && prop !== 'fontFamily') {
       input.addEventListener('input', () => {
         let val;
         if (input.type === 'number') val = parseFloat(input.value) || 0;
@@ -2334,7 +3023,7 @@ function renderWidgetProps() {
           // 只刷新画布和图层，不重建属性面板
           renderCanvas();
           renderLayerList();
-          renderStatus();
+          renderProperties();
           AppState.save();
           
           // 如果是 dashed 属性变化，需要重新渲染属性面板以显示/隐藏虚线参数
@@ -2438,7 +3127,7 @@ function renderWidgetProps() {
           }
           renderCanvas();
           renderLayerList();
-          renderStatus();
+          renderProperties();
           AppState.save();
           return;
         }
@@ -2455,7 +3144,12 @@ function renderWidgetProps() {
         }
         
         AppState.updateWidget(AppState.selectedWidgetId, { [prop]: val });
-        
+
+        // 字体变更时立即注册并加载字体，确保实时渲染
+        if (prop === 'fontFamily' && val) {
+          registerFontFile(val).then(() => renderCanvas());
+        }
+
         // dashed 属性变化时重新渲染属性面板（显示/隐藏虚线参数）
         if (prop === 'dashed') {
           const w = AppState.getWidget(AppState.selectedWidgetId);
@@ -2466,6 +3160,51 @@ function renderWidgetProps() {
       });
     }
   });
+
+  // 选项文本（options）添加/删除/编辑
+  const optionsGroup = widgetPropContent.querySelector('[data-options-group]');
+  if (optionsGroup) {
+    optionsGroup.querySelector('.option-add-btn').addEventListener('click', () => {
+      const wgt = AppState.getWidget(AppState.selectedWidgetId);
+      if (!wgt) return;
+      const opts = (typeof wgt.options === 'string' ? wgt.options : '').split('\n').filter(o => o.length > 0);
+      opts.push(`选项${opts.length + 1}`);
+      AppState.updateWidget(AppState.selectedWidgetId, { options: opts.join('\n') });
+    });
+
+    optionsGroup.querySelectorAll('.option-delete-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const wgt = AppState.getWidget(AppState.selectedWidgetId);
+        if (!wgt) return;
+        const idx = parseInt(btn.dataset.optionIdx);
+        const opts = (typeof wgt.options === 'string' ? wgt.options : '').split('\n').filter(o => o.length > 0);
+        opts.splice(idx, 1);
+        AppState.updateWidget(AppState.selectedWidgetId, { options: opts.join('\n') });
+      });
+    });
+
+    optionsGroup.querySelectorAll('.option-input').forEach(input => {
+      input.addEventListener('input', () => {
+        const wgt = AppState.getWidget(AppState.selectedWidgetId);
+        if (!wgt) return;
+        const idx = parseInt(input.dataset.optionIdx);
+        const opts = (typeof wgt.options === 'string' ? wgt.options : '').split('\n');
+        // 保留原始空字符串位置，仅修改对应索引
+        opts[idx] = input.value;
+        wgt.options = opts.join('\n');
+        renderCanvas();
+        AppState.save();
+      });
+      input.addEventListener('blur', () => {
+        const wgt = AppState.getWidget(AppState.selectedWidgetId);
+        if (!wgt) return;
+        const idx = parseInt(input.dataset.optionIdx);
+        const opts = (typeof wgt.options === 'string' ? wgt.options : '').split('\n');
+        opts[idx] = input.value;
+        AppState.updateWidget(AppState.selectedWidgetId, { options: opts.join('\n') });
+      });
+    });
+  }
 }
 
 // ============ 图层列表：树形结构（页面 → 父控件 → 子控件）============
@@ -2591,8 +3330,8 @@ function renderLayerList() {
 
         const wLabel = document.createElement('span');
         wLabel.className = 'tree-label';
-        wLabel.textContent = w.id;
-        wLabel.title = w.id + (w.text ? ' - ' + w.text : '');
+        wLabel.textContent = w.name || w.id;
+        wLabel.title = (w.name || w.id) + (w.text ? ' - ' + w.text : '');
         widgetRow.appendChild(wLabel);
 
         widgetRow.addEventListener('click', (e) => {
@@ -2669,10 +3408,11 @@ function renderProjectPanel() {
       }
       pixmapSelect.innerHTML = optionsHtml;
     }
+    el('prop-page-pixmap-format', page.pixmapFormat || 'RGB565');
   }
 }
 
-function renderStatus() {
+function renderProperties() {
   const w = AppState.selectedWidgetId ? AppState.getWidget(AppState.selectedWidgetId) : null;
   const page = AppState.getCurrentPage();
   document.getElementById('status-project').textContent = '项目: ' + AppState.project.name;
@@ -2680,6 +3420,12 @@ function renderStatus() {
   document.getElementById('status-widgets').textContent = '组件: ' + (page ? page.widgets.length : 0);
   document.getElementById('status-selection').textContent = w ? `选中: ${SGL_WIDGET_TYPES.find(t => t.type === w.type)?.name || w.type} @ (${w.x},${w.y})` : '未选中';
   document.getElementById('zoom-label').textContent = Math.round(AppState.zoom * 100) + '%';
+
+  const fontIssues = validateProjectFonts(AppState.project);
+  const statusFont = document.getElementById('status-font');
+  if (statusFont) {
+    statusFont.textContent = fontIssues.length > 0 ? `缺少字体: ${fontIssues.length} 个控件` : '';
+  }
 }
 
 // ============ 资源管理 ============
@@ -2745,6 +3491,9 @@ document.getElementById('btn-add-font').addEventListener('click', async () => {
       }
     });
     AppState.notify();
+    // 注册新字体到浏览器并刷新画布
+    await Promise.all(paths.map(p => registerFontFile(p)));
+    renderCanvas();
     logMessage(`已添加 ${paths.length} 个字体资源`, 'success');
   } catch (err) {
     logMessage('添加字体失败: ' + err, 'error');
@@ -2917,7 +3666,7 @@ document.addEventListener('mouseup', (e) => {
 });
 
 // 项目属性
-document.getElementById('prop-project-name').addEventListener('change', e => { AppState.project.name = e.target.value; AppState.save(); renderStatus(); });
+document.getElementById('prop-project-name').addEventListener('change', e => { AppState.project.name = e.target.value; AppState.save(); renderProperties(); });
 document.getElementById('prop-screen-w').addEventListener('change', e => {
   const w = parseInt(e.target.value) || 480;
   AppState.updateProject({ screen_width: w });
@@ -2970,10 +3719,39 @@ document.getElementById('prop-page-pixmap').addEventListener('change', e => {
   const page = AppState.getCurrentPage();
   if (page) { page.pixmap = e.target.value; AppState.save(); renderCanvas(); }
 });
+document.getElementById('prop-page-pixmap-format').addEventListener('change', e => {
+  const page = AppState.getCurrentPage();
+  if (page) { page.pixmapFormat = e.target.value; AppState.save(); renderCanvas(); }
+});
 document.getElementById('prop-page-alpha').addEventListener('change', e => {
   const page = AppState.getCurrentPage();
   if (page) { page.alpha = parseInt(e.target.value) || 0; AppState.save(); renderCanvas(); }
 });
+
+// 检查并提示字体缺失
+async function checkAndWarnFonts(actionName) {
+  const issues = validateProjectFonts(AppState.project);
+  if (issues.length === 0) return true;
+
+  const summary = `检测到 ${issues.length} 个文本控件缺少字体资源`;
+  const detail = issues.map(item =>
+    `• ${item.page} / ${item.widget}: ${item.reason} (${item.fontFamily || '无'})`
+  ).join('\n');
+  const msg = `${summary}，请在右侧资源面板添加字体文件后再操作。\n\n${detail}`;
+
+  showToast(summary, 'warn');
+  logMessage(`[${actionName}] ${summary}`, 'warn');
+  issues.forEach(item => {
+    logMessage(`  - ${item.page} / ${item.widget}: ${item.reason} (${item.fontFamily || '无'})`, 'warn');
+  });
+
+  try {
+    await message(msg, { title: '字体资源缺失', kind: 'warning' });
+  } catch (e) {
+    console.warn('显示字体缺失提示失败:', e);
+  }
+  return false;
+}
 
 // 保存与导出
 document.getElementById('btn-open').addEventListener('click', async () => {
@@ -2994,6 +3772,7 @@ document.getElementById('btn-open').addEventListener('click', async () => {
 });
 
 document.getElementById('btn-save').addEventListener('click', async () => {
+  await checkAndWarnFonts('保存');
   const result = await AppState.saveProject();
   if (result.ok) {
     showToast('项目已保存到: ' + result.path.split(/[/\\]/).pop(), 'success');
@@ -3023,20 +3802,17 @@ async function ensureProjectSaved() {
 }
 
 document.getElementById('btn-export-code').addEventListener('click', async () => {
-  const projectPath = await ensureProjectSaved();
-  if (!projectPath) return;
-  try {
-    logMessage('正在导出代码...', 'info');
-    const result = await invoke('export_code_to_project', { project: AppState.project, projectPath });
-    showToast('代码已导出', 'success');
-    logMessage(result, 'success');
-  } catch (e) {
-    showToast('导出失败: ' + e, 'error');
-    logMessage('导出失败: ' + e, 'error');
+  logMessage('正在导出代码...', 'info');
+  const result = await AppState.exportCodeToProject('导出代码');
+  if (result.ok) {
+    logMessage(result.msg, 'success');
+  } else if (result.msg !== '项目未保存' && result.msg !== '取消保存') {
+    logMessage('导出失败: ' + result.msg, 'error');
   }
 });
 
 document.getElementById('btn-build-run').addEventListener('click', async () => {
+  await checkAndWarnFonts('编译运行');
   const projectPath = await ensureProjectSaved();
   if (!projectPath) return;
   try {
@@ -3076,7 +3852,8 @@ document.getElementById('btn-build-run').addEventListener('click', async () => {
     // 编译
     logMessage('正在编译项目...', 'info');
     showToast('正在编译，请稍候...', 'info');
-    const buildResult = await invoke('build_project', { project: AppState.project, projectPath });
+    const code = AppState.generateCode();
+    const buildResult = await invoke('build_project', { project: AppState.project, projectPath, code });
     logMessage(buildResult, 'success');
 
     // 运行模拟器
@@ -3523,6 +4300,11 @@ contextMenu.addEventListener('click', (e) => {
 AppState.subscribe(renderAll);
 
 function renderAll() {
+  // 页面切换时自动重新居中画布
+  if (AppState.currentPageId !== lastRenderedPageId) {
+    centerCanvas();
+    lastRenderedPageId = AppState.currentPageId;
+  }
   renderPageTabs();
   renderPageTabsMini();
   renderCanvas();
@@ -3530,7 +4312,7 @@ function renderAll() {
   renderResourceList();
   renderWidgetProps();
   renderProjectPanel();
-  renderStatus();
+  renderProperties();
 }
 
 // 初始化
@@ -3546,4 +4328,10 @@ requestAnimationFrame(() => {
     canvas.style.top = panOffset.y + 'px';
     renderRulers(page.width, page.height);
   }
+});
+
+// 窗口大小变化时重新居中画布
+window.addEventListener('resize', () => {
+  centerCanvas();
+  renderCanvas();
 });

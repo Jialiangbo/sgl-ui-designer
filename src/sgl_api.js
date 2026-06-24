@@ -1400,7 +1400,6 @@ function getSglSetters(w) {
         const fontId = getFontId(w.fontFamily, w.fontSize, w.fontBpp || 4);
         setters.push(`    sgl_textbox_set_text_font(${obj(w)}, &${fontId});`);
       }
-      if (shouldGenerateValue(w.alpha, defaults, 'alpha')) setters.push(`sgl_textbox_set_alpha(${obj(w)}, ${w.alpha});`);
       break;
 
     case 'switch':

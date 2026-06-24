@@ -148,7 +148,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><line x1="7" y1="9" x2="17" y2="9"/><line x1="7" y1="13" x2="13" y2="13"/></svg>',
     category: 'text',
     defaultSize: [160, 36],
-    properties: ['text', 'textColor', 'bgColor', 'borderColor', 'borderWidth', 'radius', 'fontFamily', 'fontBpp', 'lineMargin', 'pixmap', 'pixmapFormat', 'alpha', 'locked']
+    properties: ['text', 'textColor', 'bgColor', 'borderColor', 'borderWidth', 'radius', 'fontSize', 'fontFamily', 'fontBpp', 'lineMargin', 'pixmap', 'pixmapFormat', 'alpha', 'locked']
   },
   {
     type: 'textline',
@@ -715,7 +715,7 @@ export function createWidgetDefaults(type) {
     case 'label':
       return { ...base, text: '标签文本', textColor: '#000000', bgColor: 'transparent', align: 'LEFT', fontSize: 14, fontFamily: 'simsun.ttc', fontBpp: 4, textOffsetX: 0, textOffsetY: 0, textRotation: 0, radius: 0, textBuffer: '', textFmt: '', textFmtDynamic: '' };
     case 'textbox':
-      return { ...base, text: 'textbox', textColor: '#000000', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 10, fontFamily: 'simsun.ttc', fontBpp: 4, lineMargin: 1, pixmap: '', pixmapFormat: 'RGB565' };
+      return { ...base, text: 'textbox', textColor: '#000000', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 10, fontSize: 14, fontFamily: 'simsun.ttc', fontBpp: 4, lineMargin: 1, pixmap: '', pixmapFormat: 'RGB565' };
     case 'textline':
       return { ...base, text: 'textline', textColor: '#000000', bgColor: '#FFFFFF', bgTransparent: false, radius: 0, fontSize: 14, fontFamily: 'simsun.ttc', fontBpp: 4, edgeMargin: 0, lineMargin: 1 };
     case 'textlist':

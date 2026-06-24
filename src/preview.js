@@ -519,12 +519,27 @@ function renderPreviewWidget(el, w, z) {
     }
 
     case 'textbox': {
-      el.style.background = w.bgColor || '#1e1e2e';
+      const tbPixmap = w.pixmap || '';
+      const tbPixmapFormat = w.pixmapFormat || 'RGB565';
+      const tbHasAlpha = pixmapFormatHasAlpha(tbPixmapFormat);
       el.style.border = `${(w.borderWidth || 2) * z}px solid ${w.borderColor || '#3d3d5c'}`;
       el.style.borderRadius = ((w.radius || 6) * z) + 'px';
       el.style.display = 'flex';
       el.style.alignItems = 'center';
       el.style.padding = '0 ' + (8 * z) + 'px';
+      el.style.backgroundSize = '100% 100%';
+      el.style.backgroundPosition = '0 0';
+      if (tbPixmap) {
+        // 支持 Alpha 的格式：图片透明区域与控件底色混合；否则按黑色填充并去掉 alpha 通道
+        el.style.backgroundColor = tbHasAlpha ? (w.bgColor || '#1e1e2e') : '#000000';
+        if (tbHasAlpha) {
+          el.style.backgroundImage = `url('${toAssetUrl(tbPixmap)}')`;
+        } else {
+          getOpaqueImageUrl(tbPixmap, '#000000').then(url => { el.style.backgroundImage = `url('${url}')`; });
+        }
+      } else {
+        el.style.background = w.bgColor || '#1e1e2e';
+      }
       const text = document.createElement('span');
       text.textContent = w.text || '';
       text.style.color = w.textColor || '#e4e4e7';

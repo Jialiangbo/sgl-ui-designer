@@ -1408,10 +1408,25 @@ function renderWidgetVisual(el, w) {
     }
 
     case 'textbox': {
-      el.style.background = p('bgColor', '#1e1e2e');
+      const tbPixmap = p('pixmap', '');
+      const tbPixmapFormat = p('pixmapFormat', 'RGB565');
+      const tbHasAlpha = pixmapFormatHasAlpha(tbPixmapFormat);
       el.style.border = `${p('borderWidth', 2) * z}px solid ${p('borderColor', '#3d3d5c')}`;
       el.style.borderRadius = (p('radius', 6) * z) + 'px';
       el.style.opacity = alphaCss;
+      el.style.backgroundSize = '100% 100%';
+      el.style.backgroundPosition = '0 0';
+      if (tbPixmap) {
+        // 支持 Alpha 的格式：图片透明区域与控件底色混合；否则按黑色填充并去掉 alpha 通道
+        el.style.backgroundColor = tbHasAlpha ? p('bgColor', '#1e1e2e') : '#000000';
+        if (tbHasAlpha) {
+          el.style.backgroundImage = `url('${toAssetUrl(tbPixmap)}')`;
+        } else {
+          getOpaqueImageUrl(tbPixmap, '#000000').then(url => { el.style.backgroundImage = `url('${url}')`; });
+        }
+      } else {
+        el.style.background = p('bgColor', '#1e1e2e');
+      }
       const tbInner = document.createElement('div');
       tbInner.style.cssText = 'width:100%;height:100%;display:flex;align-items:center;padding:0 8px;pointer-events:none;';
       const tbSpan = document.createElement('span');

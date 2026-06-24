@@ -57,13 +57,6 @@ $('file-import').addEventListener('change', e => {
       const json = JSON.parse(evt.target.result);
       if (!json.pages || !Array.isArray(json.pages)) throw new Error('格式错误');
       AppState.project = json;
-      if (!AppState.project.screen_width) AppState.project.screen_width = AppState.project.screenWidth || 480;
-      if (!AppState.project.screen_height) AppState.project.screen_height = AppState.project.screenHeight || 320;
-      // 兼容旧格式
-      if (AppState.project.screenWidth) {
-        AppState.project.screen_width = AppState.project.screenWidth;
-        AppState.project.screen_height = AppState.project.screenHeight;
-      }
       if (AppState.project.pages.length > 0) AppState.currentPageId = AppState.project.pages[0].id;
       AppState.selectedWidgetId = null;
       AppState.save();

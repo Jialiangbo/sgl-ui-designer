@@ -678,16 +678,6 @@ fn generate_pixmap_includes(project: &Project) -> Result<String, String> {
 }
 
 fn generate_pixmap_files(project: &Project, pixmaps_dir: &std::path::Path) -> Result<(), String> {
-    // 建立文件名 -> 资源绝对路径 的映射，用于兼容保存后 widget.pixmap 仍为旧路径的情况
-    let mut image_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    for img in &project.resources.images {
-        let name = std::path::Path::new(&img.path)
-            .file_name()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| img.path.clone());
-        image_map.insert(name, img.path.clone());
-    }
-
     // 解析实际用于读取的图片路径
     let resolve_path = |p: &str| -> Option<String> {
         if p.is_empty() { return None; }
@@ -698,8 +688,7 @@ fn generate_pixmap_files(project: &Project, pixmaps_dir: &std::path::Path) -> Re
         if path.exists() {
             return Some(path.canonicalize().unwrap_or(path.to_path_buf()).to_string_lossy().to_string());
         }
-        let name = path.file_name().map(|s| s.to_string_lossy().to_string())?;
-        image_map.get(&name).cloned()
+        None
     };
 
     let used = collect_pixmaps(project);

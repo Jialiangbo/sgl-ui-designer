@@ -79,36 +79,6 @@ export const AppState = {
 
   init() {
     this.load();
-    // 兼容旧项目：确保 resources 字段存在
-    if (!this.project.resources) {
-      this.project.resources = { fonts: [], images: [] };
-    }
-    // 兼容旧项目：为 ring 控件补充缺失的 radiusIn/radiusOut
-    // 兼容旧项目：将布尔值字段从字符串转换为真正的布尔值
-    this.project.pages.forEach(p => {
-      p.widgets.forEach(w => {
-        if (w.type === 'ring') {
-          const diameter = Math.min(w.width || 60, w.height || 60);
-          if (w.radiusOut == null) w.radiusOut = Math.round(diameter / 2);
-          if (w.radiusIn == null) w.radiusIn = w.radiusOut - 2;
-        }
-        // 兼容旧项目：将 dashed 的字符串值转换为布尔值
-        if (w.dashed === 'true') w.dashed = true;
-        else if (w.dashed === 'false') w.dashed = false;
-        // 兼容旧项目：将其他布尔值字段从字符串转换为布尔值
-        if (w.status === 'true') w.status = true;
-        else if (w.status === 'false') w.status = false;
-        if (w.locked === 'true') w.locked = true;
-        else if (w.locked === 'false') w.locked = false;
-        // 兼容旧项目：有 fontFamily 但缺少 fontSize 的控件补回默认值，否则不会生成字体 API
-        if (w.fontFamily && w.fontSize == null) {
-          const defaults = createWidgetDefaults(w.type);
-          if (defaults && defaults.fontSize != null) {
-            w.fontSize = defaults.fontSize;
-          }
-        }
-      });
-    });
     if (this.project.pages.length === 0) {
       this.addPage('主页面');
     }
@@ -372,7 +342,7 @@ export const AppState = {
     this.notify();
   },
 
-  // 兼容属性：获取第一个选中的控件ID
+  // 辅助属性：获取第一个选中的控件ID
   get selectedWidgetId() {
     return this.selectedWidgetIds.size > 0 ? [...this.selectedWidgetIds][0] : null;
   },
@@ -512,7 +482,6 @@ export const AppState = {
       if (!filePath) return { ok: false, msg: '取消打开' };
       const project = await invoke('load_project', { path: filePath });
       if (project && project.pages) {
-        this._migrateWidgetDefaults(project);
         this.project = project;
         this.projectPath = filePath;
         this.currentPageId = this.project.pages.length > 0 ? this.project.pages[0].id : null;
@@ -544,13 +513,6 @@ export const AppState = {
         const p = JSON.parse(proj);
         if (p && p.pages) {
           this.project = p;
-          // 兼容处理：将所有布尔值字段从字符串转换为真正的布尔值
-          this.project.pages.forEach(page => {
-            page.widgets.forEach(w => {
-              this._fixBooleanFields(w);
-            });
-          });
-          this._migrateWidgetDefaults(this.project);
           this.currentPageId = localStorage.getItem('sgl_current') || null;
           try {
             const sel = JSON.parse(localStorage.getItem('sgl_selected') || '[]');
@@ -563,40 +525,6 @@ export const AppState = {
     } catch (e) {}
   },
   
-  // 递归修复所有布尔值字段，将字符串转换为布尔值
-  _fixBooleanFields(obj) {
-    if (obj === null || obj === undefined) return;
-    if (typeof obj !== 'object') return;
-    if (Array.isArray(obj)) {
-      obj.forEach(item => this._fixBooleanFields(item));
-      return;
-    }
-    // 修复布尔值字段
-    const boolFields = ['dashed', 'status', 'locked', 'autoRefresh', 'autoScale', 'showYLabels', 'charging', 'showPercentage'];
-    boolFields.forEach(field => {
-      if (obj[field] === 'true') obj[field] = true;
-      else if (obj[field] === 'false') obj[field] = false;
-    });
-    // 递归处理子对象
-    Object.values(obj).forEach(val => this._fixBooleanFields(val));
-  },
-
-  // 加载旧项目时，把缺失的控件默认属性补回来，避免新 API 调用缺失
-  _migrateWidgetDefaults(project) {
-    if (!project || !project.pages) return;
-    project.pages.forEach(page => {
-      if (!page.widgets) return;
-      page.widgets.forEach(w => {
-        const defaults = WIDGET_DEFAULTS[w.type];
-        if (!defaults) return;
-        Object.keys(defaults).forEach(key => {
-          if (w[key] === undefined) {
-            w[key] = JSON.parse(JSON.stringify(defaults[key]));
-          }
-        });
-      });
-    });
-  },
 
   reset() {
     localStorage.removeItem('sgl_project');

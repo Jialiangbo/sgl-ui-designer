@@ -892,20 +892,6 @@ function emitAlphaGroup(setters, objId, prefix, alpha, mainAlpha, borderAlpha) {
 
 // ============ SGL 代码生成器 ============
 export function generateSGLCode(project) {
-  // 兼容旧项目：用控件默认值填充缺失的属性，避免新 API 调用丢失
-  if (project && project.pages) {
-    project.pages.forEach(page => {
-      if (!Array.isArray(page.widgets)) return;
-      page.widgets.forEach(w => {
-        const defs = WIDGET_DEFAULTS[w.type];
-        if (!defs) return;
-        Object.keys(defs).forEach(key => {
-          if (w[key] === undefined) w[key] = defs[key];
-        });
-      });
-    });
-  }
-
   const fonts = collectFonts(project);
   const fontIssues = validateProjectFonts(project);
 

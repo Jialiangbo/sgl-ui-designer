@@ -122,7 +122,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="5" height="5" rx="1"/><rect x="10" y="3" width="5" height="5" rx="1"/><rect x="17" y="3" width="5" height="5" rx="1"/><rect x="3" y="10" width="5" height="5" rx="1"/><rect x="10" y="10" width="5" height="5" rx="1"/><rect x="17" y="10" width="5" height="5" rx="1"/><rect x="3" y="17" width="5" height="5" rx="1"/><rect x="10" y="17" width="12" height="5" rx="1"/></svg>',
     category: 'interactive',
     defaultSize: [200, 240],
-    properties: ['cellColor', 'btnColor', 'textColor', 'borderColor', 'borderWidth', 'radius', 'btnMargin', 'btnBorderWidth', 'btnBorderColor', 'btnRadius', 'btnPixmap', 'pixmap', 'fontFamily', 'fontBpp', 'alpha', 'locked']
+    properties: ['cellColor', 'btnColor', 'textColor', 'borderColor', 'borderWidth', 'radius', 'btnMargin', 'btnBorderWidth', 'btnBorderColor', 'btnRadius', 'btnPixmap', 'pixmap', 'fontSize', 'fontFamily', 'fontBpp', 'alpha', 'locked']
   },
   {
     type: 'keyboard',
@@ -130,7 +130,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><line x1="6" y1="10" x2="6" y2="10.01"/><line x1="10" y1="10" x2="10" y2="10.01"/><line x1="14" y1="10" x2="14" y2="10.01"/><line x1="18" y1="10" x2="18" y2="10.01"/><line x1="8" y1="14" x2="16" y2="14"/></svg>',
     category: 'interactive',
     defaultSize: [320, 180],
-    properties: ['cellColor', 'btnColor', 'textColor', 'borderColor', 'borderWidth', 'radius', 'mainAlpha', 'borderAlpha', 'btnRadius', 'btnAlpha', 'btnMainAlpha', 'btnBorderColor', 'btnBorderWidth', 'btnBorderAlpha', 'btnPixmap', 'pixmap', 'textarea', 'fontFamily', 'fontBpp', 'alpha', 'locked']
+    properties: ['cellColor', 'btnColor', 'textColor', 'borderColor', 'borderWidth', 'radius', 'mainAlpha', 'borderAlpha', 'btnRadius', 'btnAlpha', 'btnMainAlpha', 'btnBorderColor', 'btnBorderWidth', 'btnBorderAlpha', 'btnPixmap', 'pixmap', 'textarea', 'fontSize', 'fontFamily', 'fontBpp', 'alpha', 'locked']
   },
 
   // ============ 文本相关 ============
@@ -232,7 +232,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="7" y1="7" x2="7" y2="7.01"/></svg>',
     category: 'special',
     defaultSize: [240, 160],
-    properties: ['titleText', 'titleTextColor', 'msgText', 'msgColor', 'leftBtnText', 'leftBtnColor', 'leftBtnTextColor', 'rightBtnText', 'rightBtnColor', 'rightBtnTextColor', 'bgColor', 'borderColor', 'borderWidth', 'radius', 'titleHeight', 'msgOffsetX', 'msgOffsetY', 'msgLineMargin', 'mainAlpha', 'borderAlpha', 'pixmap', 'fontFamily', 'fontBpp', 'alpha', 'locked']
+    properties: ['titleText', 'titleTextColor', 'msgText', 'msgColor', 'leftBtnText', 'leftBtnColor', 'leftBtnTextColor', 'rightBtnText', 'rightBtnColor', 'rightBtnTextColor', 'bgColor', 'borderColor', 'borderWidth', 'radius', 'titleHeight', 'msgOffsetX', 'msgOffsetY', 'msgLineMargin', 'mainAlpha', 'borderAlpha', 'pixmap', 'fontSize', 'fontFamily', 'fontBpp', 'alpha', 'locked']
   },
   {
     type: 'viewlist',
@@ -280,7 +280,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="8" x2="21" y2="8"/><circle cx="7" cy="5.5" r="1"/><circle cx="11" cy="5.5" r="1"/><circle cx="15" cy="5.5" r="1"/></svg>',
     category: 'special',
     defaultSize: [240, 180],
-    properties: ['titleText', 'titleBgColor', 'titleTextColor', 'closeBtnColor', 'bgColor', 'borderColor', 'borderWidth', 'radius', 'titleHeight', 'titleAlign', 'pixmap', 'fontFamily', 'fontBpp', 'alpha', 'locked']
+    properties: ['titleText', 'titleBgColor', 'titleTextColor', 'closeBtnColor', 'bgColor', 'borderColor', 'borderWidth', 'radius', 'titleHeight', 'titleAlign', 'pixmap', 'fontSize', 'fontFamily', 'fontBpp', 'alpha', 'locked']
   },
   {
     type: 'qrcode',
@@ -296,7 +296,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><polyline points="5,12 8,8 11,14 14,10 17,12 20,12"/></svg>',
     category: 'display',
     defaultSize: [200, 120],
-    properties: ['channelCount', 'channelBuffers', 'channelWaveformColors', 'maxDisplayPoints', 'rangeMin', 'rangeMax', 'autoScale', 'showYLabels', 'yLabelColor', 'lineWidth', 'gridLine', 'bgColor', 'gridColor', 'borderColor', 'borderWidth', 'alpha', 'fontFamily', 'fontBpp', 'locked']
+    properties: ['channelCount', 'channelBuffers', 'channelWaveformColors', 'maxDisplayPoints', 'rangeMin', 'rangeMax', 'autoScale', 'showYLabels', 'yLabelColor', 'lineWidth', 'gridLine', 'bgColor', 'gridColor', 'borderColor', 'borderWidth', 'alpha', 'fontSize', 'fontFamily', 'fontBpp', 'locked']
   },
   {
     type: 'chart',
@@ -709,9 +709,9 @@ export function createWidgetDefaults(type) {
     case 'slider':
       return { ...base, value: 50, direct: 0, fillColor: '#8b5cf6', trackColor: '#313149', knobColor: '#ffffff', borderWidth: 2, radius: 4, thickness: 8 };
     case 'numberkbd':
-      return { ...base, cellColor: '#FFFFFF', borderColor: '#000000', borderWidth: 2, radius: 0, fontFamily: 'simsun.ttc', fontBpp: 4, btnColor: '#FFFFFF', textColor: '#000000', btnMargin: 1, btnBorderWidth: 1, btnBorderColor: '#000000', btnRadius: 0, btnPixmap: '', pixmap: '' };
+      return { ...base, cellColor: '#FFFFFF', borderColor: '#000000', borderWidth: 2, radius: 0, fontSize: 14, fontFamily: 'simsun.ttc', fontBpp: 4, btnColor: '#FFFFFF', textColor: '#000000', btnMargin: 1, btnBorderWidth: 1, btnBorderColor: '#000000', btnRadius: 0, btnPixmap: '', pixmap: '' };
     case 'keyboard':
-      return { ...base, cellColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, mainAlpha: 255, borderAlpha: 255, fontFamily: 'simsun.ttc', fontBpp: 4, btnColor: '#404040', textColor: '#000000', btnRadius: 0, btnAlpha: 255, btnMainAlpha: 255, btnBorderColor: '#000000', btnBorderWidth: 0, btnBorderAlpha: 255, btnPixmap: '', pixmap: '', textarea: '' };
+      return { ...base, cellColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, mainAlpha: 255, borderAlpha: 255, fontSize: 14, fontFamily: 'simsun.ttc', fontBpp: 4, btnColor: '#404040', textColor: '#000000', btnRadius: 0, btnAlpha: 255, btnMainAlpha: 255, btnBorderColor: '#000000', btnBorderWidth: 0, btnBorderAlpha: 255, btnPixmap: '', pixmap: '', textarea: '' };
     case 'label':
       return { ...base, text: '标签文本', textColor: '#000000', bgColor: 'transparent', align: 'LEFT', fontSize: 14, fontFamily: 'simsun.ttc', fontBpp: 4, textOffsetX: 0, textOffsetY: 0, textRotation: 0, radius: 0, textBuffer: '', textFmt: '', textFmtDynamic: '' };
     case 'textbox':
@@ -735,7 +735,7 @@ export function createWidgetDefaults(type) {
     case 'led':
       return { ...base, onColor: '#FFFFFF', offColor: '#000000', bgColor: '#000000', radius: 0, status: false };
     case 'msgbox':
-      return { ...base, titleText: 'Message Box', titleTextColor: '#000000', msgText: 'NULL', msgColor: '#000000', leftBtnText: 'YES', leftBtnColor: '#C8C8C8', leftBtnTextColor: '#000000', rightBtnText: 'NO', rightBtnColor: '#C8C8C8', rightBtnTextColor: '#000000', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 2, radius: 0, titleHeight: 0, msgOffsetX: 0, msgOffsetY: 0, msgLineMargin: 1, mainAlpha: 255, borderAlpha: 255, pixmap: '', fontFamily: 'simsun.ttc', fontBpp: 4, exitAnswer: false };
+      return { ...base, titleText: 'Message Box', titleTextColor: '#000000', msgText: 'NULL', msgColor: '#000000', leftBtnText: 'YES', leftBtnColor: '#C8C8C8', leftBtnTextColor: '#000000', rightBtnText: 'NO', rightBtnColor: '#C8C8C8', rightBtnTextColor: '#000000', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 2, radius: 0, titleHeight: 0, msgOffsetX: 0, msgOffsetY: 0, msgLineMargin: 1, mainAlpha: 255, borderAlpha: 255, pixmap: '', fontSize: 14, fontFamily: 'simsun.ttc', fontBpp: 4, exitAnswer: false };
     case 'viewlist':
       return { ...base, bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, itemHeight: 20, itemMarginX: 1, itemMarginY: 1, pixmap: '' };
     case 'dropdown':
@@ -745,11 +745,11 @@ export function createWidgetDefaults(type) {
     case 'box':
       return { ...base, bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, scrollbarColor: '#C8C8C8', showVScrollbar: true, showHScrollbar: true, elasticUp: 0, elasticDown: 0, elasticLeft: 0, elasticRight: 0, pixmap: '' };
     case 'win':
-      return { ...base, titleText: '窗口标题', titleBgColor: '#808080', titleTextColor: '#000000', closeBtnColor: '#FF5A50', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 0, radius: 0, pixmap: '', pixmapFormat: 'RGB565', fontFamily: 'simsun.ttc', fontBpp: 4, titleHeight: 0, titleAlign: 'LEFT' };
+      return { ...base, titleText: '窗口标题', titleBgColor: '#808080', titleTextColor: '#000000', closeBtnColor: '#FF5A50', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 0, radius: 0, pixmap: '', pixmapFormat: 'RGB565', fontSize: 14, fontFamily: 'simsun.ttc', fontBpp: 4, titleHeight: 0, titleAlign: 'LEFT' };
     case 'qrcode':
       return { ...base, cellColor: '#000000', bgColor: '#ffffff', cellRadius: 0, qrText: 'hello', scale: 4, zone: 1, version: 5, ecc: 0, logo: '', logoRadius: 0 };
     case 'scope':
-      return { ...base, channelCount: 1, channelBuffers: '', channelWaveformColors: '#00FF00', maxDisplayPoints: 0, rangeMin: 0, rangeMax: 65535, autoScale: true, showYLabels: true, yLabelColor: '#FFFFFF', lineWidth: 2, gridLine: 0, bgColor: '#000000', gridColor: '#323232', borderColor: '#969696', borderWidth: 0, alpha: 255, fontFamily: 'simsun.ttc', fontBpp: 4 };
+      return { ...base, channelCount: 1, channelBuffers: '', channelWaveformColors: '#00FF00', maxDisplayPoints: 0, rangeMin: 0, rangeMax: 65535, autoScale: true, showYLabels: true, yLabelColor: '#FFFFFF', lineWidth: 2, gridLine: 0, bgColor: '#000000', gridColor: '#323232', borderColor: '#969696', borderWidth: 0, alpha: 255, fontSize: 14, fontFamily: 'simsun.ttc', fontBpp: 4 };
     case 'chart':
       return { ...base, chartType: 'linechart', bgColor: '#000000', borderColor: '#000000', minValue: 0, maxValue: 100, autoScale: true, showYLabels: true, gridColor: '#3C3C3C', gridDashed: true, textColor: '#000000', fontSize: 12, fontFamily: 'simsun.ttc', fontBpp: 4, seriesCount: 0, seriesData: '', seriesColors: '#FFFFFF', xLabels: '', startAngle: 0, innerRadiusRate: 0, radius: 0, legendEnable: false, legendPos: 0, legendDir: 0, legendTextColor: '#e4e4e7', sliceCount: 3, sliceValues: '30;50;20', sliceColors: '#ff0000;#00ff00;#0000ff', sliceLabels: 'A;B;C', alpha: 255 };
     case 'canvas':

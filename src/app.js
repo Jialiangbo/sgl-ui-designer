@@ -100,6 +100,13 @@ export const AppState = {
         else if (w.status === 'false') w.status = false;
         if (w.locked === 'true') w.locked = true;
         else if (w.locked === 'false') w.locked = false;
+        // 兼容旧项目：有 fontFamily 但缺少 fontSize 的控件补回默认值，否则不会生成字体 API
+        if (w.fontFamily && w.fontSize == null) {
+          const defaults = createWidgetDefaults(w.type);
+          if (defaults && defaults.fontSize != null) {
+            w.fontSize = defaults.fontSize;
+          }
+        }
       });
     });
     if (this.project.pages.length === 0) {

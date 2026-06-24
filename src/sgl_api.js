@@ -1290,8 +1290,7 @@ function getSglSetters(w) {
       }
       if (shouldGenerateValue(w.borderColor, defaults, 'borderColor')) setters.push(`sgl_circle_set_border_color(${obj(w)}, ${hexToSglColor(w.borderColor)});`);
       if (shouldGenerateValue(w.borderWidth, defaults, 'borderWidth')) setters.push(`sgl_circle_set_border_width(${obj(w)}, ${w.borderWidth});`);
-      // SGL 中 sgl_circle_set_radius 会改变控件尺寸，默认 0 不需要调用，避免把圆缩成 0
-      if (w.radius > 0) setters.push(`sgl_circle_set_radius(${obj(w)}, ${w.radius});`);
+      // SGL 的 sgl_circle_set_radius 会改变控件尺寸，而设计器中 circle 大小由 width/height 决定，因此不生成该 setter
       if (shouldGenerateValue(w.xOffset, defaults, 'xOffset')) setters.push(`sgl_circle_set_x_offset(${obj(w)}, ${w.xOffset});`);
       if (shouldGenerateValue(w.yOffset, defaults, 'yOffset')) setters.push(`sgl_circle_set_y_offset(${obj(w)}, ${w.yOffset});`);
       if (shouldGenerateValue(w.alpha, defaults, 'alpha')) setters.push(`sgl_circle_set_alpha(${obj(w)}, ${w.alpha});`);

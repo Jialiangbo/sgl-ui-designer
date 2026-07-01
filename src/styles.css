@@ -26,6 +26,10 @@
   box-sizing: border-box;
 }
 
+html, body {
+  height: 100%;
+}
+
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   background: var(--bg-primary);
@@ -34,6 +38,8 @@ body {
   line-height: 1.5;
   overflow: hidden;
   user-select: none;
+  display: flex;
+  flex-direction: column;
 }
 
 /* ============ 顶栏 ============ */
@@ -170,8 +176,10 @@ body {
 
 /* ============ 主布局 ============ */
 .app-main {
+  flex: 1;
+  min-height: 0;
   display: flex;
-  height: calc(100vh - 48px);
+  overflow: hidden;
 }
 
 .sidebar-left {
@@ -191,23 +199,28 @@ body {
 }
 
 .canvas-area {
+  --log-height: 140px;
   flex: 1;
+  min-height: 0;
   background: var(--canvas-bg);
   position: relative;
   overflow: hidden;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: 44px 1fr var(--log-height);
+  grid-template-areas:
+    "toolbar"
+    "canvas"
+    "console";
 }
 
 /* ============ 日志输出面板 ============ */
 .log-panel {
-  height: 140px;
-  min-height: 32px;
+  grid-area: console;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   border-top: 1px solid var(--border);
   background: var(--bg-primary);
-  flex-shrink: 0;
 }
 
 .log-resizer {
@@ -268,6 +281,38 @@ body {
 .log-content .log-line.success { color: #50fa7b; }
 .log-content .log-line.warn { color: #f1fa8c; }
 .log-content .log-line.error { color: #ff5555; }
+
+.log-input-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-primary);
+  flex-shrink: 0;
+}
+
+.log-prompt {
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 12px;
+  color: var(--accent-light);
+  user-select: none;
+}
+
+.log-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.log-input::placeholder {
+  color: var(--text-muted);
+}
 
 /* ============ 面板 ============ */
 .panel {
@@ -411,6 +456,7 @@ body {
 
 /* ============ 画布 ============ */
 .canvas-toolbar {
+  grid-area: toolbar;
   height: 44px;
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border);
@@ -478,7 +524,8 @@ body {
 }
 
 .canvas-container {
-  flex: 1;
+  grid-area: canvas;
+  min-height: 0;
   display: grid;
   grid-template-columns: 20px 1fr;
   grid-template-rows: 20px 1fr;
@@ -513,6 +560,7 @@ body {
 .canvas-viewport {
   overflow: hidden;
   position: relative;
+  min-height: 0;
   background-image:
     linear-gradient(45deg, #181825 25%, transparent 25%),
     linear-gradient(-45deg, #181825 25%, transparent 25%),
@@ -586,20 +634,24 @@ body {
 
 .resize-handle {
   position: absolute;
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
   background: #fff;
   border: 2px solid var(--accent);
-  z-index: 10;
+  border-radius: 2px;
+  z-index: 10001;
+  pointer-events: auto;
+  box-sizing: border-box;
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.5), 0 2px 4px rgba(0,0,0,0.3);
 }
-.resize-handle.nw { top: -4px; left: -4px; cursor: nw-resize; }
-.resize-handle.ne { top: -4px; right: -4px; cursor: ne-resize; }
-.resize-handle.sw { bottom: -4px; left: -4px; cursor: sw-resize; }
-.resize-handle.se { bottom: -4px; right: -4px; cursor: se-resize; }
-.resize-handle.n { top: -4px; left: 50%; transform: translateX(-50%); cursor: n-resize; }
-.resize-handle.s { bottom: -4px; left: 50%; transform: translateX(-50%); cursor: s-resize; }
-.resize-handle.w { top: 50%; left: -4px; transform: translateY(-50%); cursor: w-resize; }
-.resize-handle.e { top: 50%; right: -4px; transform: translateY(-50%); cursor: e-resize; }
+.resize-handle.nw { cursor: nw-resize; }
+.resize-handle.ne { cursor: ne-resize; }
+.resize-handle.sw { cursor: sw-resize; }
+.resize-handle.se { cursor: se-resize; }
+.resize-handle.n { cursor: n-resize; }
+.resize-handle.s { cursor: s-resize; }
+.resize-handle.w { cursor: w-resize; }
+.resize-handle.e { cursor: e-resize; }
 
 /* ============ 属性面板 ============ */
 .form-group {
@@ -1029,6 +1081,27 @@ body {
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 32px;
+}
+
+.settings-subtitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin: 22px 0 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.settings-row-2 {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
 }
 
 /* ============ 预览页 ============ */

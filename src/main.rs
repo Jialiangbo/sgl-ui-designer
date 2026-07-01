@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Deserializer, Serialize};
 use base64::Engine;
+use tauri::Emitter;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct Widget {
@@ -102,6 +103,8 @@ struct Widget {
     line_width: Option<i32>,
     #[serde(default)]
     vertices: Option<String>,
+    #[serde(default)]
+    options: Option<String>,
 }
 
 // 兼容前端传来的字符串布尔值（"true"/"false"）
@@ -133,115 +136,6 @@ where
     }
 }
 
-// 控件默认值定义
-struct WidgetDefaults {
-    color: &'static str,
-    border_color: &'static str,
-    border_width: i32,
-    border_alpha: i32,
-    main_alpha: i32,
-    radius: i32,
-    alpha: i32,
-    pixmap: &'static str,
-    text: &'static str,
-    text_color: &'static str,
-    bg_color: &'static str,
-    font_size: i32,
-    font_family: &'static str,
-    align: &'static str,
-    status: bool,
-    dashed: bool,
-    dash_len: i32,
-    gap_len: i32,
-    value: i32,
-    fill_color: &'static str,
-    track_color: &'static str,
-    knob_color: &'static str,
-    knob_radius: i32,
-    knob_margin: i32,
-    x_offset: i32,
-    y_offset: i32,
-    text_offset_x: i32,
-    text_offset_y: i32,
-    text_rotation: i32,
-    direct: i32,
-    border_width_i16: i32,
-    radius_u16: i32,
-    thickness: i32,
-    fill_gap: i32,
-    fill_radius: i32,
-}
-
-fn get_widget_defaults(t: &str) -> Option<WidgetDefaults> {
-    match t {
-        "rect" => Some(WidgetDefaults {
-            color: "#FFFFFF", border_color: "#000000", border_width: 2, border_alpha: 255,
-            main_alpha: 255, radius: 0, alpha: 255, pixmap: "", text: "", text_color: "",
-            bg_color: "", font_size: 0, font_family: "", align: "", status: false, dashed: false,
-            dash_len: 0, gap_len: 0, value: 0, fill_color: "", track_color: "", knob_color: "",
-            knob_radius: 0, knob_margin: 0, x_offset: 0, y_offset: 0, text_offset_x: 0,
-            text_offset_y: 0, text_rotation: 0, direct: 0, border_width_i16: 0, radius_u16: 0,
-            thickness: 0, fill_gap: 0, fill_radius: 0,
-        }),
-        "circle" => Some(WidgetDefaults {
-            color: "#FFFFFF", border_color: "#000000", border_width: 2, border_alpha: 255,
-            main_alpha: 255, radius: 0, alpha: 255, pixmap: "", text: "", text_color: "",
-            bg_color: "", font_size: 0, font_family: "", align: "", status: false,
-            dashed: false, dash_len: 0, gap_len: 0, value: 0, fill_color: "", track_color: "",
-            knob_color: "", knob_radius: 0, knob_margin: 0, x_offset: 0, y_offset: 0,
-            text_offset_x: 0, text_offset_y: 0, text_rotation: 0, direct: 0,
-            border_width_i16: 0, radius_u16: 0, thickness: 0, fill_gap: 0, fill_radius: 0,
-        }),
-        "line" => Some(WidgetDefaults {
-            color: "#8b5cf6", border_color: "", border_width: 2, border_alpha: 255,
-            main_alpha: 255, radius: 0, alpha: 255, pixmap: "", text: "", text_color: "",
-            bg_color: "", font_size: 0, font_family: "", align: "", status: false, dashed: false,
-            dash_len: 10, gap_len: 5, value: 0, fill_color: "", track_color: "", knob_color: "",
-            knob_radius: 0, knob_margin: 0, x_offset: 0, y_offset: 0, text_offset_x: 0,
-            text_offset_y: 0, text_rotation: 0, direct: 0, border_width_i16: 0, radius_u16: 0,
-            thickness: 0, fill_gap: 0, fill_radius: 0,
-        }),
-        "button" => Some(WidgetDefaults {
-            color: "#ffffff", border_color: "#000000", border_width: 2, border_alpha: 255,
-            main_alpha: 255, radius: 0, alpha: 255, pixmap: "", text: "按钮", text_color: "#000000",
-            bg_color: "", font_size: 14, font_family: "simsun.ttc", align: "CENTER",
-            status: false, dashed: false, dash_len: 0, gap_len: 0, value: 0, fill_color: "",
-            track_color: "", knob_color: "", knob_radius: 0, knob_margin: 0, x_offset: 0,
-            y_offset: 0, text_offset_x: 0, text_offset_y: 0, text_rotation: 0, direct: 0,
-            border_width_i16: 0, radius_u16: 0, thickness: 0, fill_gap: 0, fill_radius: 0,
-        }),
-        "label" => Some(WidgetDefaults {
-            color: "", border_color: "", border_width: 0, border_alpha: 255,
-            main_alpha: 255, radius: 0, alpha: 255, pixmap: "", text: "标签文本",
-            text_color: "#e4e4e7", bg_color: "transparent", font_size: 14,
-            font_family: "simsun.ttc", align: "LEFT", status: false, dashed: false,
-            dash_len: 0, gap_len: 0, value: 0, fill_color: "", track_color: "", knob_color: "",
-            knob_radius: 0, knob_margin: 0, x_offset: 0, y_offset: 0, text_offset_x: 0,
-            text_offset_y: 0, text_rotation: 0, direct: 0, border_width_i16: 0, radius_u16: 0,
-            thickness: 0, fill_gap: 0, fill_radius: 0,
-        }),
-        "textbox" => Some(WidgetDefaults {
-            color: "", border_color: "#3d3d5c", border_width: 2, border_alpha: 255,
-            main_alpha: 255, radius: 6, alpha: 255, pixmap: "", text: "", text_color: "#e4e4e7",
-            bg_color: "#1e1e2e", font_size: 14, font_family: "simsun.ttc", align: "",
-            status: false, dashed: false, dash_len: 0, gap_len: 0, value: 0, fill_color: "",
-            track_color: "", knob_color: "", knob_radius: 0, knob_margin: 0, x_offset: 0,
-            y_offset: 0, text_offset_x: 0, text_offset_y: 0, text_rotation: 0, direct: 0,
-            border_width_i16: 0, radius_u16: 0, thickness: 0, fill_gap: 0, fill_radius: 0,
-        }),
-        "switch" => Some(WidgetDefaults {
-            color: "#8b5cf6", border_color: "#3d3d5c", border_width: 1, border_alpha: 255,
-            main_alpha: 255, radius: 15, alpha: 255, pixmap: "", text: "", text_color: "",
-            bg_color: "#313149", font_size: 0, font_family: "", align: "", status: false,
-            dashed: false, dash_len: 0, gap_len: 0, value: 0, fill_color: "", track_color: "",
-            knob_color: "#ffffff", knob_radius: 255, knob_margin: 2, x_offset: 0, y_offset: 0,
-            text_offset_x: 0, text_offset_y: 0, text_rotation: 0, direct: 0,
-            border_width_i16: 0, radius_u16: 0, thickness: 0, fill_gap: 0, fill_radius: 0,
-        }),
-        _ => None,
-    }
-}
-
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct Page {
     id: String,
@@ -270,6 +164,72 @@ struct Resources {
     images: Vec<ResourceItem>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+struct SglConfig {
+    #[serde(rename = "fbdev_pixel_depth", default)]
+    fbdev_pixel_depth: i32,
+    #[serde(rename = "fbdev_rotation", default)]
+    fbdev_rotation: i32,
+    #[serde(rename = "fbdev_runtime_rotation", default)]
+    fbdev_runtime_rotation: i32,
+    #[serde(rename = "use_fbdev_vram", default)]
+    use_fbdev_vram: i32,
+    #[serde(rename = "systick_ms", default)]
+    systick_ms: i32,
+    #[serde(rename = "event_queue_size", default)]
+    event_queue_size: i32,
+    #[serde(rename = "dirty_area_num_max", default)]
+    dirty_area_num_max: i32,
+    #[serde(rename = "color16_swap", default)]
+    color16_swap: i32,
+    #[serde(rename = "animation", default)]
+    animation: i32,
+    #[serde(rename = "debug", default)]
+    debug: i32,
+    #[serde(rename = "log_color", default)]
+    log_color: i32,
+    #[serde(rename = "log_level", default)]
+    log_level: i32,
+    #[serde(rename = "obj_use_name", default)]
+    obj_use_name: i32,
+    #[serde(rename = "font_compressed", default)]
+    font_compressed: i32,
+    #[serde(rename = "boot_logo", default)]
+    boot_logo: i32,
+    #[serde(rename = "theme_dark", default)]
+    theme_dark: i32,
+    #[serde(rename = "heap_algo", default)]
+    heap_algo: String,
+    #[serde(rename = "heap_memory_size", default)]
+    heap_memory_size: i32,
+    #[serde(rename = "label_rotation", default)]
+    label_rotation: i32,
+    #[serde(rename = "font_song23", default)]
+    font_song23: i32,
+    #[serde(rename = "font_consolas14", default)]
+    font_consolas14: i32,
+    #[serde(rename = "font_consolas23", default)]
+    font_consolas23: i32,
+    #[serde(rename = "font_consolas24", default)]
+    font_consolas24: i32,
+    #[serde(rename = "font_consolas32", default)]
+    font_consolas32: i32,
+    #[serde(rename = "font_consolas24_compress", default)]
+    font_consolas24_compress: i32,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct AsciiFontConfig {
+    #[serde(rename = "name")]
+    name: String,
+    #[serde(rename = "size", default)]
+    size: i32,
+    #[serde(rename = "bpp", default)]
+    bpp: i32,
+    #[serde(rename = "compress", default)]
+    compress: i32,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct Project {
     name: String,
@@ -283,6 +243,10 @@ struct Project {
     pages: Vec<Page>,
     #[serde(default = "default_resources")]
     resources: Resources,
+    #[serde(default)]
+    ascii_fonts: Vec<AsciiFontConfig>,
+    #[serde(default)]
+    sgl_config: SglConfig,
 }
 
 fn default_resources() -> Resources {
@@ -348,14 +312,21 @@ fn resolve_font_path(family: &str) -> Option<String> {
     Some(family.to_string())
 }
 
-fn collect_fonts(project: &Project) -> Vec<(String, String, i32, i32, String)> {
-    // (font_name, font_path, size, bpp, symbols)
+fn collect_fonts(project: &Project) -> Vec<(String, String, i32, i32, i32, String)> {
+    // (font_name, font_path, size, bpp, compress, symbols)
     use std::collections::{HashMap, HashSet};
-    let mut map: HashMap<(String, i32, i32), (String, HashSet<char>)> = HashMap::new();
+    // 控件字体默认不压缩，ASCII 字模配置可独立指定 compress
+    let mut map: HashMap<(String, i32, i32, i32), (String, HashSet<char>)> = HashMap::new();
+
+    // 可打印 ASCII 字符（0x20-0x7E）
+    const ASCII_SYMBOLS: &str = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+
     for page in &project.pages {
         for w in &page.widgets {
             if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
                 let bpp = w.font_bpp.unwrap_or(4);
+                // 控件字体默认不压缩
+                let compress = 0;
                 // 提取文件名用于去重
                 let font_name = fam.replace('\\', "/").rsplit('/').next().unwrap_or(fam).to_string();
                 // 跳过 "default" 字体
@@ -365,7 +336,7 @@ fn collect_fonts(project: &Project) -> Vec<(String, String, i32, i32, String)> {
                 // 解析字体文件路径
                 let font_path = resolve_font_path(fam).unwrap_or_else(|| fam.clone());
                 let entry = map
-                    .entry((font_name.clone(), sz, bpp))
+                    .entry((font_name.clone(), sz, bpp, compress))
                     .or_insert((font_path, HashSet::new()));
                 // 收集该控件使用的文本字符
                 if let Some(ref text) = w.text {
@@ -376,29 +347,67 @@ fn collect_fonts(project: &Project) -> Vec<(String, String, i32, i32, String)> {
                         }
                     }
                 }
+                // dropdown/roller/textlist 使用 options 作为显示文本
+                if let Some(ref opts) = w.options {
+                    for ch in opts.chars() {
+                        if !ch.is_control() || ch == ' ' {
+                            entry.1.insert(ch);
+                        }
+                    }
+                }
             }
         }
     }
+
+    // 为设置列表中的资源配置生成 ASCII 字符集
+    // 每项可独立指定字体、字号、bpp、compress；如果控件中已使用同字体同尺寸同压缩，则合并 ASCII 字符
+    let ascii_chars: Vec<char> = ASCII_SYMBOLS.chars().collect();
+    for cfg in &project.ascii_fonts {
+        let Some(res) = project.resources.fonts.iter().find(|f| {
+            f.name == cfg.name || f.path == cfg.name
+        }) else {
+            continue;
+        };
+        let font_name = res.name.replace('\\', "/").rsplit('/').next().unwrap_or(&res.name).to_string();
+        if font_name == "default" {
+            continue;
+        }
+        let font_path = resolve_font_path(&res.path)
+            .or_else(|| resolve_font_path(&res.name))
+            .unwrap_or_else(|| res.path.clone());
+        let sz = if cfg.size > 0 { cfg.size } else { 16 };
+        let bpp = if cfg.bpp > 0 { cfg.bpp } else { 4 };
+        let compress = if cfg.compress > 0 { 1 } else { 0 };
+        let entry = map
+            .entry((font_name, sz, bpp, compress))
+            .or_insert((font_path, HashSet::new()));
+        for ch in &ascii_chars {
+            entry.1.insert(*ch);
+        }
+    }
+
     map.into_iter()
-        .map(|((name, sz, bpp), (path, set))| {
+        .map(|((name, sz, bpp, compress), (path, set))| {
             let symbols: String = set.into_iter().collect();
-            (name, path, sz, bpp, symbols)
+            (name, path, sz, bpp, compress, symbols)
         })
-        .filter(|(_, _, _, _, symbols)| !symbols.is_empty())
+        .filter(|(_, _, _, _, _, symbols)| !symbols.is_empty())
         .collect()
 }
 
-fn font_id_from_family(family: &str, size: i32, bpp: i32) -> String {
+fn font_id_from_family(family: &str, size: i32, bpp: i32, compress: i32) -> String {
     // 从完整路径提取文件名用于生成 font_id
     let binding = family.replace('\\', "/");
     let name = binding.rsplit('/').next().unwrap_or(family);
     let clean: String = name.chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect();
-    format!("sgl_font_{}_{}_bpp{}", clean, size, bpp)
+    let compress_suffix = if compress > 0 { "_compress" } else { "" };
+    format!("sgl_font_{}_{}_bpp{}{}", clean, size, bpp, compress_suffix)
 }
 
-fn font_filename(family: &str, size: i32, bpp: i32) -> String {
+fn font_filename(family: &str, size: i32, bpp: i32, compress: i32) -> String {
     let clean: String = family.chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect();
-    format!("sgl_font_{}_{}_bpp{}.c", clean, size, bpp)
+    let compress_suffix = if compress > 0 { "_compress" } else { "" };
+    format!("sgl_font_{}_{}_bpp{}{}.c", clean, size, bpp, compress_suffix)
 }
 
 /// 确保 sgl-port 的 CMakeLists.txt 会自动收集 demo/fonts/*.c 字模源文件
@@ -435,6 +444,7 @@ fn run_font_conv(
     path: &str,
     sz: i32,
     bpp: i32,
+    compress: i32,
     symbols: &str,
     fonts_dir: &std::path::Path,
 ) -> Result<(), String> {
@@ -457,7 +467,9 @@ fn run_font_conv(
             .map_err(|e| format!("复制字体文件 {} 失败: {}", path, e))?;
     }
 
-    let out_file = fonts_dir.join(format!("sgl_font_{}_{}_bpp{}.c", clean_name, sz, bpp));
+    // 压缩字体文件名添加 _compress 后缀以区分
+    let compress_suffix = if compress > 0 { "_compress" } else { "" };
+    let out_file = fonts_dir.join(format!("sgl_font_{}_{}_bpp{}{}.c", clean_name, sz, bpp, compress_suffix));
     let out_str = out_file.to_string_lossy().to_string();
     let font_arg = temp_font_path.to_string_lossy().to_string();
 
@@ -467,8 +479,13 @@ fn run_font_conv(
         .arg("--bpp").arg(bpp.to_string())
         .arg("--output").arg(&out_str);
 
+    // 启用 RLE 压缩（仅 bpp 2/4 有效）
+    if compress > 0 {
+        cmd.arg("--compress");
+    }
+
     if !symbols.is_empty() {
-        let symbols_file = fonts_dir.join(format!("symbols_{}_{}_bpp{}.txt", clean_name, sz, bpp));
+        let symbols_file = fonts_dir.join(format!("symbols_{}_{}_bpp{}{}.txt", clean_name, sz, bpp, compress_suffix));
         std::fs::write(&symbols_file, symbols)
             .map_err(|e| format!("写入 symbols 文件失败: {}", e))?;
         cmd.arg("--symbols-file").arg(&symbols_file);
@@ -497,6 +514,12 @@ enum PixmapFormat {
     ARGB4444,
     RGB888,
     ARGB8888,
+    RLE_RGB332,
+    RLE_ARGB2222,
+    RLE_RGB565,
+    RLE_ARGB4444,
+    RLE_RGB888,
+    RLE_ARGB8888,
 }
 
 impl PixmapFormat {
@@ -508,6 +531,12 @@ impl PixmapFormat {
             "ARGB4444" => Self::ARGB4444,
             "RGB888" => Self::RGB888,
             "ARGB8888" => Self::ARGB8888,
+            "RLE_RGB332" => Self::RLE_RGB332,
+            "RLE_ARGB2222" => Self::RLE_ARGB2222,
+            "RLE_RGB565" => Self::RLE_RGB565,
+            "RLE_ARGB4444" => Self::RLE_ARGB4444,
+            "RLE_RGB888" => Self::RLE_RGB888,
+            "RLE_ARGB8888" => Self::RLE_ARGB8888,
             _ => Self::RGB565,
         }
     }
@@ -520,36 +549,74 @@ impl PixmapFormat {
             Self::ARGB4444 => "SGL_PIXMAP_FMT_ARGB4444",
             Self::RGB888 => "SGL_PIXMAP_FMT_RGB888",
             Self::ARGB8888 => "SGL_PIXMAP_FMT_ARGB8888",
+            Self::RLE_RGB332 => "SGL_PIXMAP_FMT_RLE_RGB332",
+            Self::RLE_ARGB2222 => "SGL_PIXMAP_FMT_RLE_ARGB2222",
+            Self::RLE_RGB565 => "SGL_PIXMAP_FMT_RLE_RGB565",
+            Self::RLE_ARGB4444 => "SGL_PIXMAP_FMT_RLE_ARGB4444",
+            Self::RLE_RGB888 => "SGL_PIXMAP_FMT_RLE_RGB888",
+            Self::RLE_ARGB8888 => "SGL_PIXMAP_FMT_RLE_ARGB8888",
+        }
+    }
+
+    /// 是否为 RLE 压缩格式
+    fn is_rle(&self) -> bool {
+        matches!(
+            self,
+            Self::RLE_RGB332
+                | Self::RLE_ARGB2222
+                | Self::RLE_RGB565
+                | Self::RLE_ARGB4444
+                | Self::RLE_RGB888
+                | Self::RLE_ARGB8888
+        )
+    }
+
+    /// 返回对应的未压缩格式（RLE 格式返回其基础格式）
+    fn base_format(&self) -> Self {
+        match self {
+            Self::RLE_RGB332 => Self::RGB332,
+            Self::RLE_ARGB2222 => Self::ARGB2222,
+            Self::RLE_RGB565 => Self::RGB565,
+            Self::RLE_ARGB4444 => Self::ARGB4444,
+            Self::RLE_RGB888 => Self::RGB888,
+            Self::RLE_ARGB8888 => Self::ARGB8888,
+            _ => *self,
         }
     }
 
     fn bytes_per_pixel(&self) -> usize {
         match self {
-            Self::RGB332 | Self::ARGB2222 => 1,
-            Self::RGB565 | Self::ARGB4444 => 2,
-            Self::RGB888 => 3,
-            Self::ARGB8888 => 4,
+            Self::RGB332 | Self::ARGB2222 | Self::RLE_RGB332 | Self::RLE_ARGB2222 => 1,
+            Self::RGB565 | Self::ARGB4444 | Self::RLE_RGB565 | Self::RLE_ARGB4444 => 2,
+            Self::RGB888 | Self::RLE_RGB888 => 3,
+            Self::ARGB8888 | Self::RLE_ARGB8888 => 4,
         }
     }
 
     fn has_alpha(&self) -> bool {
-        matches!(self, Self::ARGB2222 | Self::ARGB4444 | Self::ARGB8888)
+        matches!(
+            self,
+            Self::ARGB2222 | Self::ARGB4444 | Self::ARGB8888
+                | Self::RLE_ARGB2222
+                | Self::RLE_ARGB4444
+                | Self::RLE_ARGB8888
+        )
     }
 
     fn encode(&self, r: u8, g: u8, b: u8, a: u8) -> Vec<u8> {
         match self {
-            Self::RGB332 => vec![((r & 0xE0) | ((g >> 3) & 0x1C) | ((b >> 6) & 0x03))],
-            Self::ARGB2222 => vec![((a >> 6) << 6) | ((r >> 6) << 4) | ((g >> 6) << 2) | (b >> 6)],
-            Self::RGB565 => {
+            Self::RGB332 | Self::RLE_RGB332 => vec![((r & 0xE0) | ((g >> 3) & 0x1C) | ((b >> 6) & 0x03))],
+            Self::ARGB2222 | Self::RLE_ARGB2222 => vec![((a >> 6) << 6) | ((r >> 6) << 4) | ((g >> 6) << 2) | (b >> 6)],
+            Self::RGB565 | Self::RLE_RGB565 => {
                 let v = (((r as u16) & 0xF8) << 8) | (((g as u16) & 0xFC) << 3) | ((b as u16) >> 3);
                 vec![(v & 0xFF) as u8, ((v >> 8) & 0xFF) as u8]
             }
-            Self::ARGB4444 => {
+            Self::ARGB4444 | Self::RLE_ARGB4444 => {
                 let v = (((a as u16) & 0xF0) << 8) | (((r as u16) & 0xF0) << 4) | ((g as u16) & 0xF0) | ((b as u16) >> 4);
                 vec![(v & 0xFF) as u8, ((v >> 8) & 0xFF) as u8]
             }
-            Self::RGB888 => vec![b, g, r],
-            Self::ARGB8888 => vec![b, g, r, a],
+            Self::RGB888 | Self::RLE_RGB888 => vec![b, g, r],
+            Self::ARGB8888 | Self::RLE_ARGB8888 => vec![b, g, r, a],
         }
     }
 }
@@ -558,7 +625,8 @@ fn convert_image_to_pixmap(path: &str, fmt: PixmapFormat) -> Result<(u32, u32, V
     let img = image::open(path).map_err(|e| format!("无法打开图片 {}: {}", path, e))?;
     let rgba = img.to_rgba8();
     let (w, h) = rgba.dimensions();
-    let mut bytes = Vec::with_capacity((w * h) as usize * fmt.bytes_per_pixel());
+    let bpp = fmt.bytes_per_pixel();
+    let mut bytes = Vec::with_capacity((w * h) as usize * bpp);
     for pix in rgba.pixels() {
         let [r, g, b, a] = pix.0;
         // 非 Alpha 格式：将透明/半透明像素按黑色背景合成，避免导出后透明区域残留异常颜色
@@ -573,7 +641,48 @@ fn convert_image_to_pixmap(path: &str, fmt: PixmapFormat) -> Result<(u32, u32, V
         };
         bytes.extend_from_slice(&fmt.encode(r, g, b, a));
     }
+
+    // RLE 压缩格式：对原始像素数据按行进行 RLE 编码
+    // 编码格式：[计数字节][像素数据字节序列]，计数表示像素重复次数（1-255）
+    if fmt.is_rle() {
+        bytes = rle_encode_pixmap(&bytes, w, h, bpp);
+    }
+
     Ok((w, h, bytes))
+}
+
+/// 对 pixmap 像素数据按行进行 RLE 编码
+/// 编码格式：[计数字节][像素数据字节序列]，每行独立编码
+/// 计数字节表示像素重复次数（1-255），超过 255 则分段
+fn rle_encode_pixmap(raw: &[u8], w: u32, h: u32, bpp: usize) -> Vec<u8> {
+    let w = w as usize;
+    let h = h as usize;
+    let row_bytes = w * bpp;
+    let mut out = Vec::new();
+
+    for y in 0..h {
+        let row_start = y * row_bytes;
+        let mut x = 0;
+        while x < w {
+            let pixel_start = row_start + x * bpp;
+            let pixel = &raw[pixel_start..pixel_start + bpp];
+            // 统计连续相同像素数
+            let mut count = 1usize;
+            while x + count < w
+                && &raw[pixel_start + count * bpp..pixel_start + (count + 1) * bpp] == pixel
+            {
+                count += 1;
+                if count == 255 {
+                    break;
+                }
+            }
+            // 写入：[计数][像素数据]
+            out.push(count as u8);
+            out.extend_from_slice(pixel);
+            x += count;
+        }
+    }
+    out
 }
 
 fn parse_hex_color(hex: &str) -> Option<(u8, u8, u8)> {
@@ -758,13 +867,14 @@ fn generate_code(project: Project) -> Result<String, String> {
         code.push_str("\n/* ============================================\n");
         code.push_str(" * 字体字模声明\n");
         code.push_str(" * 在导出目录的 fonts/ 子目录中运行以下命令生成字模文件：\n");
-        for (name, path, sz, bpp, _symbols) in &fonts {
-            code.push_str(&format!(" *   sgl_font_conv.exe --font {} --size {} --bpp {} --output fonts/{}\n",
-                path, sz, bpp, font_filename(name, *sz, *bpp)));
+        for (name, path, sz, bpp, compress, _symbols) in &fonts {
+            let compress_arg = if *compress > 0 { " --compress" } else { "" };
+            code.push_str(&format!(" *   sgl_font_conv.exe --font {} --size {} --bpp {}{} --output fonts/{}\n",
+                path, sz, bpp, compress_arg, font_filename(name, *sz, *bpp, *compress)));
         }
         code.push_str(" * ============================================ */\n");
-        for (name, _path, sz, bpp, _symbols) in &fonts {
-            code.push_str(&format!("extern const sgl_font_t {};\n", font_id_from_family(name, *sz, *bpp)));
+        for (name, _path, sz, bpp, _compress, _symbols) in &fonts {
+            code.push_str(&format!("extern const sgl_font_t {};\n", font_id_from_family(name, *sz, *bpp, *_compress)));
         }
     }
     code.push('\n');
@@ -994,11 +1104,11 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
                 let gl = w.gap_len.unwrap_or(5);
                 code.push_str(&format!("    sgl_line_set_dash_pattern({}, {}, {});\n", obj, dl, gl));
             }
-            // line 控件的 x1/y1 就是控件位置，x2/y2 默认由 x1+width/y1+height 计算
+            // line 控件：x1/y1, x2/y2 是中心线端点坐标（SGL 语义）
             let abs_x1 = w.x1.unwrap_or(w.x);
             let abs_y1 = w.y1.unwrap_or(w.y);
-            let abs_x2 = w.x2.unwrap_or(w.x + w.width);
-            let abs_y2 = w.y2.unwrap_or(w.y + w.height);
+            let abs_x2 = w.x2.unwrap_or(w.x + w.width - 1);
+            let abs_y2 = w.y2.unwrap_or(w.y + w.height - 1);
             code.push_str(&format!("    sgl_line_set_pos({}, {}, {}, {}, {});\n", obj, abs_x1, abs_y1, abs_x2, abs_y2));
         }
         "button" => {
@@ -1009,7 +1119,7 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             c!( "sgl_button_set_border_width", w.border_width.map(|v| v as u8));
             c!( "sgl_button_set_radius", w.radius.map(|v| v as u8));
             if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
-                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4));
+                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
                 code.push_str(&format!("    sgl_button_set_font({}, &{});\n", obj, fid));
             }
             c!( "sgl_button_set_alpha", w.alpha.map(|v| v as u8));
@@ -1028,7 +1138,7 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             cclr!("sgl_label_set_text_color", w.text_color);
             cclr!("sgl_label_set_bg_color", w.bg_color);
             if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
-                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4));
+                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
                 code.push_str(&format!("    sgl_label_set_font({}, &{});\n", obj, fid));
             }
             c!( "sgl_label_set_alpha", w.alpha.map(|v| v as u8));
@@ -1049,7 +1159,7 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             c!( "sgl_textbox_set_border_width", w.border_width.map(|v| v as u8));
             c!( "sgl_textbox_set_radius", w.radius.map(|v| v as u8));
             if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
-                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4));
+                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
                 code.push_str(&format!("    sgl_textbox_set_text_font({}, &{});\n", obj, fid));
             }
         }
@@ -1103,7 +1213,7 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             c!( "sgl_gauge_set_value", w.value.map(|v| v as i16));
             c!( "sgl_gauge_set_alpha", w.alpha.map(|v| v as u8));
             if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
-                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4));
+                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
                 code.push_str(&format!("    sgl_gauge_set_font({}, &{});\n", obj, fid));
             }
         }
@@ -1150,7 +1260,7 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             cstr!("sgl_checkbox_set_text", w.text);
             cclr!("sgl_checkbox_set_color", w.color);
             if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
-                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4));
+                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
                 code.push_str(&format!("    sgl_checkbox_set_font({}, &{});\n", obj, fid));
             }
             c!( "sgl_checkbox_set_alpha", w.alpha.map(|v| v as u8));
@@ -1178,7 +1288,7 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             c!( "sgl_dropdown_set_radius", w.radius.map(|v| v as u8));
             c!( "sgl_dropdown_set_alpha", w.alpha.map(|v| v as u8));
             if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
-                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4));
+                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
                 code.push_str(&format!("    sgl_dropdown_set_text_font({}, &{});\n", obj, fid));
             }
         }
@@ -1189,7 +1299,7 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             c!( "sgl_textline_set_radius", w.radius.map(|v| v as u8));
             c!( "sgl_textline_set_alpha", w.alpha.map(|v| v as u8));
             if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
-                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4));
+                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
                 code.push_str(&format!("    sgl_textline_set_text_font({}, &{});\n", obj, fid));
             }
         }
@@ -1200,7 +1310,7 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             c!( "sgl_textlist_set_radius", w.radius.map(|v| v as u8));
             c!( "sgl_textlist_set_alpha", w.alpha.map(|v| v as u8));
             if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
-                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4));
+                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
                 code.push_str(&format!("    sgl_textlist_set_text_font({}, &{});\n", obj, fid));
             }
         }
@@ -1269,7 +1379,7 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             }
             cclr!("sgl_polygon_set_text_color", w.text_color);
             if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
-                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4));
+                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
                 code.push_str(&format!("    sgl_polygon_set_font({}, &{});\n", obj, fid));
             }
             if let Some(ref pixmap) = w.pixmap {
@@ -1286,7 +1396,7 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             c!( "sgl_numberkbd_set_border_width", w.border_width.map(|v| v as u8));
             c!( "sgl_numberkbd_set_alpha", w.alpha.map(|v| v as u8));
             if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
-                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4));
+                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
                 code.push_str(&format!("    sgl_numberkbd_set_text_font({}, &{});\n", obj, fid));
             }
         }
@@ -1298,7 +1408,7 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             c!( "sgl_keyboard_set_radius", w.radius.map(|v| v as u8));
             c!( "sgl_keyboard_set_alpha", w.alpha.map(|v| v as u8));
             if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
-                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4));
+                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
                 code.push_str(&format!("    sgl_keyboard_set_text_font({}, &{});\n", obj, fid));
             }
         }
@@ -1494,8 +1604,8 @@ fn export_code(path: String, code: String, mut project: Project) -> Result<(), S
 
         let conv_path = find_sgl_font_conv();
         if let Some(conv) = conv_path {
-            for (name, path, sz, bpp, symbols) in &fonts {
-                run_font_conv(&conv, name, path, *sz, *bpp, symbols, &fonts_dir)
+            for (name, path, sz, bpp, compress, symbols) in &fonts {
+                run_font_conv(&conv, name, path, *sz, *bpp, *compress, symbols, &fonts_dir)
                     .map_err(|e| format!("生成字模 {} 失败: {}", name, e))?;
             }
         } else {
@@ -1520,6 +1630,50 @@ fn which_command_path(name: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// 执行命令并将 stdout/stderr 实时推送到前端控制台（build-log 事件）
+fn run_command_stream(
+    program: &str,
+    args: &[&str],
+    cwd: &std::path::Path,
+    window: &tauri::Window,
+) -> Result<std::process::ExitStatus, String> {
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new(program)
+        .current_dir(cwd)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("启动 {} 失败: {}", program, e))?;
+
+    let stdout = child.stdout.take().ok_or("无法捕获标准输出")?;
+    let stderr = child.stderr.take().ok_or("无法捕获标准错误")?;
+    let w_out = window.clone();
+    let w_err = window.clone();
+
+    std::thread::spawn(move || {
+        let reader = BufReader::new(stdout);
+        for line in reader.lines() {
+            if let Ok(l) = line {
+                let _ = w_out.emit("build-log", serde_json::json!({"message": l, "level": "info"}));
+            }
+        }
+    });
+
+    std::thread::spawn(move || {
+        let reader = BufReader::new(stderr);
+        for line in reader.lines() {
+            if let Ok(l) = line {
+                let _ = w_err.emit("build-log", serde_json::json!({"message": l, "level": "error"}));
+            }
+        }
+    });
+
+    child.wait().map_err(|e| format!("等待 {} 结束失败: {}", program, e))
 }
 
 fn copy_dir_contents(src: &std::path::Path, dst: &std::path::Path) -> Result<(), String> {
@@ -1578,6 +1732,17 @@ fn export_code_to_project(mut project: Project, project_path: String, code: Stri
     let ui_c = code_dir.join("ui.c");
     std::fs::write(&ui_c, &code).map_err(|e| format!("写入 ui.c 失败: {}", e))?;
 
+    // 生成 sgl_config.h 到 code 目录
+    let pixel_depth = match project.color_depth.as_str() {
+        "8bit" => 8,
+        "16bit" => 16,
+        "24bit" => 24,
+        _ => 32,
+    };
+    project.sgl_config.fbdev_pixel_depth = pixel_depth;
+    let code_config_path = code_dir.join("sgl_config.h");
+    generate_sgl_config_h(&project.sgl_config, &code_config_path)?;
+
     // 生成字模文件到 code/fonts/ 目录
     if !fonts.is_empty() {
         let fonts_dir = code_dir.join("fonts");
@@ -1589,8 +1754,8 @@ fn export_code_to_project(mut project: Project, project_path: String, code: Stri
 
         let conv_path = find_sgl_font_conv();
         if let Some(conv) = conv_path {
-            for (name, path, sz, bpp, symbols) in &fonts {
-                run_font_conv(&conv, name, path, *sz, *bpp, symbols, &fonts_dir)
+            for (name, path, sz, bpp, compress, symbols) in &fonts {
+                run_font_conv(&conv, name, path, *sz, *bpp, *compress, symbols, &fonts_dir)
                     .map_err(|e| format!("生成字模 {} 失败: {}", name, e))?;
             }
         } else {
@@ -1642,8 +1807,100 @@ fn check_toolchain(project_path: String) -> Result<serde_json::Value, String> {
     Ok(serde_json::Value::Object(result))
 }
 
-/// 将 sgl-port 仓库的 sgl 子模块更新到远程最新 main 分支，实现无感使用
-fn update_sgl_submodules_to_latest(sgl_port_dir: &std::path::Path) -> Result<(), String> {
+/// 检查 sgl 子模块是否为最新版本（不更新，仅检查）
+#[tauri::command]
+fn check_sgl_submodule_status(
+    project_path: String,
+    window: tauri::Window,
+) -> Result<serde_json::Value, String> {
+    let proj_dir = std::path::Path::new(&project_path)
+        .parent()
+        .ok_or_else(|| "无法获取项目目录".to_string())?;
+    let sgl_port_dir = proj_dir.join("sgl-port-windows-vscode");
+
+    if !sgl_port_dir.exists() {
+        return Ok(serde_json::json!({ "exists": false, "up_to_date": false, "msg": "sgl-port 项目不存在" }));
+    }
+
+    let submodule_path = sgl_submodule_path(&sgl_port_dir);
+    if !submodule_path.exists() || !submodule_path.join(".git").exists() {
+        return Ok(serde_json::json!({ "exists": false, "up_to_date": false, "msg": "sgl 子模块尚未初始化" }));
+    }
+
+    match is_sgl_submodule_up_to_date(&sgl_port_dir, &window) {
+        Ok(true) => Ok(serde_json::json!({ "exists": true, "up_to_date": true, "msg": "sgl 子模块已是最新版本" })),
+        Ok(false) => Ok(serde_json::json!({ "exists": true, "up_to_date": false, "msg": "sgl 子模块有新版本可用" })),
+        Err(e) => Ok(serde_json::json!({ "exists": true, "up_to_date": false, "msg": format!("检查失败: {}", e) })),
+    }
+}
+
+fn sgl_submodule_path(sgl_port_dir: &std::path::Path) -> std::path::PathBuf {
+    use std::process::Command;
+    let output = Command::new("git")
+        .current_dir(sgl_port_dir)
+        .args(&["config", "-f", ".gitmodules", "--get", "submodule.sgl.path"])
+        .output();
+    match output {
+        Ok(o) if o.status.success() => {
+            let p = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            sgl_port_dir.join(p)
+        }
+        _ => sgl_port_dir.join("sgl"),
+    }
+}
+
+fn sgl_submodule_branch(sgl_port_dir: &std::path::Path) -> String {
+    use std::process::Command;
+    let output = Command::new("git")
+        .current_dir(sgl_port_dir)
+        .args(&["config", "-f", ".gitmodules", "--get", "submodule.sgl.branch"])
+        .output();
+    match output {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+        _ => "main".to_string(),
+    }
+}
+
+/// 检查 sgl 子模块本地版本是否与远程一致（git fetch 日志实时输出到控制台）
+fn is_sgl_submodule_up_to_date(
+    sgl_port_dir: &std::path::Path,
+    window: &tauri::Window,
+) -> Result<bool, String> {
+    use std::process::Command;
+    let submodule_path = sgl_submodule_path(sgl_port_dir);
+    if !submodule_path.exists() || !submodule_path.join(".git").exists() {
+        return Ok(false);
+    }
+    let branch = sgl_submodule_branch(sgl_port_dir);
+
+    let fetch_status = run_command_stream("git", &["fetch", "origin"], &submodule_path, window)
+        .map_err(|e| format!("获取 sgl 子模块远程信息失败: {}", e))?;
+    if !fetch_status.success() {
+        return Err("获取 sgl 子模块远程信息失败".to_string());
+    }
+
+    let local = Command::new("git")
+        .current_dir(&submodule_path)
+        .args(&["rev-parse", "HEAD"])
+        .output()
+        .map_err(|e| format!("获取 sgl 子模块本地版本失败: {}", e))?;
+    let local_rev = String::from_utf8_lossy(&local.stdout).trim().to_string();
+
+    let remote = Command::new("git")
+        .current_dir(&submodule_path)
+        .args(&["rev-parse", &format!("origin/{}", branch)])
+        .output()
+        .map_err(|e| format!("获取 sgl 子模块远程版本失败: {}", e))?;
+    let remote_rev = String::from_utf8_lossy(&remote.stdout).trim().to_string();
+
+    Ok(!local_rev.is_empty() && !remote_rev.is_empty() && local_rev == remote_rev)
+}
+
+/// 将 sgl-port 仓库的 sgl 子模块更新到远程最新分支；先检查版本，已最新则跳过
+fn update_sgl_submodules_to_latest(
+    sgl_port_dir: &std::path::Path,
+    window: &tauri::Window,
+) -> Result<String, String> {
     use std::process::Command;
 
     // 让子模块跟踪 main 分支（仅对 sgl 子模块做此配置）
@@ -1656,16 +1913,27 @@ fn update_sgl_submodules_to_latest(sgl_port_dir: &std::path::Path) -> Result<(),
         .args(&["submodule", "sync", "--recursive"])
         .output();
 
-    // 拉取子模块远程最新代码
-    let mut submodule_output = Command::new("git")
-        .current_dir(sgl_port_dir)
-        .args(&["submodule", "update", "--init", "--recursive", "--remote"])
-        .output()
-        .map_err(|e| format!("初始化/更新子模块失败: {}", e))?;
+    // 先对比本地与远程版本，已最新则跳过网络更新
+    match is_sgl_submodule_up_to_date(sgl_port_dir, window) {
+        Ok(true) => return Ok("sgl 子模块已是最新版本，跳过更新".to_string()),
+        Ok(false) => {}
+        Err(e) => eprintln!("检查 sgl 子模块版本失败，继续尝试更新: {}", e),
+    }
 
-    if !submodule_output.status.success() {
-        let stderr = String::from_utf8_lossy(&submodule_output.stderr);
-        eprintln!("GitHub 子模块更新失败，尝试使用 Gitee 镜像。错误: {}", stderr);
+    // 拉取子模块远程最新代码，并实时输出到控制台
+    let status = run_command_stream(
+        "git",
+        &["submodule", "update", "--init", "--recursive", "--remote"],
+        sgl_port_dir,
+        window,
+    )
+    .map_err(|e| format!("初始化/更新子模块失败: {}", e))?;
+
+    if !status.success() {
+        let _ = window.emit(
+            "build-log",
+            serde_json::json!({"message": "GitHub 子模块更新失败，尝试使用 Gitee 镜像", "level": "warn"}),
+        );
 
         // 将 .gitmodules 中的 github.com 替换为 gitee.com 并同步配置
         let gitmodules_path = sgl_port_dir.join(".gitmodules");
@@ -1678,24 +1946,25 @@ fn update_sgl_submodules_to_latest(sgl_port_dir: &std::path::Path) -> Result<(),
             .args(&["submodule", "sync", "--recursive"])
             .output();
 
-        submodule_output = Command::new("git")
-            .current_dir(sgl_port_dir)
-            .args(&["submodule", "update", "--init", "--recursive", "--remote"])
-            .output()
-            .map_err(|e| format!("初始化/更新子模块失败: {}", e))?;
+        let status = run_command_stream(
+            "git",
+            &["submodule", "update", "--init", "--recursive", "--remote"],
+            sgl_port_dir,
+            window,
+        )
+        .map_err(|e| format!("初始化/更新子模块失败: {}", e))?;
 
-        if !submodule_output.status.success() {
-            let stderr = String::from_utf8_lossy(&submodule_output.stderr);
-            return Err(format!("子模块更新失败: GitHub 和 Gitee 均无法访问。{}", stderr));
+        if !status.success() {
+            return Err("子模块更新失败: GitHub 和 Gitee 均无法访问".to_string());
         }
     }
 
-    Ok(())
+    Ok("sgl 子模块已更新到最新版本".to_string())
 }
 
 /// 克隆 sgl-port-windows-vscode 到项目目录
 #[tauri::command]
-fn clone_sgl_port(project_path: String) -> Result<String, String> {
+fn clone_sgl_port(project_path: String, window: tauri::Window) -> Result<String, String> {
     let proj_dir = std::path::Path::new(&project_path)
         .parent()
         .ok_or_else(|| "无法获取项目目录".to_string())?;
@@ -1706,40 +1975,41 @@ fn clone_sgl_port(project_path: String) -> Result<String, String> {
         return Err("未找到 git，请先安装 Git 并添加到环境变量".to_string());
     }
 
-    use std::process::Command;
-
-    // 如果不存在则克隆，GitHub 失败时自动尝试 Gitee 镜像
+    // 如果不存在则克隆，GitHub 失败时自动尝试 Gitee 镜像，并实时输出到控制台
     if !sgl_port_dir.exists() || !sgl_port_dir.join("CMakelists.txt").exists() {
         let github_url = "https://github.com/sgl-org/sgl-port-windows-vscode.git";
         let gitee_url = "https://gitee.com/sgl-org/sgl-port-windows-vscode.git";
 
-        let output = Command::new("git")
-            .arg("clone")
-            .arg(github_url)
-            .arg(&sgl_port_dir)
-            .output()
+        let status = run_command_stream(
+            "git",
+            &["clone", github_url, sgl_port_dir.to_string_lossy().as_ref()],
+            proj_dir,
+            &window,
+        )
+        .map_err(|e| format!("执行 git clone 失败: {}", e))?;
+
+        if !status.success() {
+            let _ = window.emit(
+                "build-log",
+                serde_json::json!({"message": "GitHub 克隆失败，尝试 Gitee 镜像", "level": "warn"}),
+            );
+
+            let status = run_command_stream(
+                "git",
+                &["clone", gitee_url, sgl_port_dir.to_string_lossy().as_ref()],
+                proj_dir,
+                &window,
+            )
             .map_err(|e| format!("执行 git clone 失败: {}", e))?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            eprintln!("GitHub 克隆失败，尝试 Gitee 镜像。错误: {}", stderr);
-
-            let output = Command::new("git")
-                .arg("clone")
-                .arg(gitee_url)
-                .arg(&sgl_port_dir)
-                .output()
-                .map_err(|e| format!("执行 git clone 失败: {}", e))?;
-
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(format!("克隆失败: GitHub 和 Gitee 均无法访问。{}", stderr));
+            if !status.success() {
+                return Err("克隆失败: GitHub 和 Gitee 均无法访问".to_string());
             }
         }
     }
 
     // 确保子模块已初始化并更新到远程最新 main 分支（用户无感）
-    update_sgl_submodules_to_latest(&sgl_port_dir)?;
+    let _submodule_msg = update_sgl_submodules_to_latest(&sgl_port_dir, &window)?;
 
     // 复制 sgl_config.h
     let config_src = sgl_port_dir.join("demo").join("sgl_config.h");
@@ -1770,9 +2040,85 @@ fn clone_sgl_port(project_path: String) -> Result<String, String> {
     Ok("sgl-port 项目已就绪".to_string())
 }
 
+/// 根据项目配置生成 sgl_config.h
+fn generate_sgl_config_h(config: &SglConfig, path: &std::path::Path) -> Result<(), String> {
+    let content = format!(
+        r#"//********************************************************************
+//* SGL Configuration File                                           //
+//* You can modify the following parameters according to your needs. //
+//********************************************************************
+
+#ifndef  __SGL_CONFIG_H__
+#define  __SGL_CONFIG_H__
+
+
+#define  CONFIG_SGL_FBDEV_PIXEL_DEPTH                      {}
+#define  CONFIG_SGL_FBDEV_ROTATION                         {}
+#define  CONFIG_SGL_FBDEV_RUNTIME_ROTATION                 {}
+#define  CONFIG_SGL_USE_FBDEV_VRAM                         {}
+#define  CONFIG_SGL_SYSTICK_MS                             {}
+#define  CONFIG_SGL_EVENT_QUEUE_SIZE                       {}
+#define  CONFIG_SGL_DIRTY_AREA_NUM_MAX                     {}
+#define  CONFIG_SGL_COLOR16_SWAP                           {}
+#define  CONFIG_SGL_ANIMATION                              {}
+#define  CONFIG_SGL_DEBUG                                  {}
+#define  CONFIG_SGL_LOG_COLOR                              {}
+#define  CONFIG_SGL_LOG_LEVEL                              {}
+#define  CONFIG_SGL_OBJ_USE_NAME                           {}
+#define  CONFIG_SGL_FONT_COMPRESSED                        {}
+#define  CONFIG_SGL_BOOT_LOGO                              {}
+#define  CONFIG_SGL_THEME_DARK                             {}
+#define  CONFIG_SGL_HEAP_ALGO                              {}
+#define  CONFIG_SGL_HEAP_MEMORY_SIZE                       {}
+#define  CONFIG_SGL_LABEL_ROTATION                         {}
+#define  CONFIG_SGL_FONT_SONG23                            {}
+#define  CONFIG_SGL_FONT_CONSOLAS14                        {}
+#define  CONFIG_SGL_FONT_CONSOLAS23                        {}
+#define  CONFIG_SGL_FONT_CONSOLAS24                        {}
+#define  CONFIG_SGL_FONT_CONSOLAS32                        {}
+#define  CONFIG_SGL_FONT_CONSOLAS24_COMPRESS               {}
+
+
+#endif  //!__SGL_CONFIG_H__
+"#,
+        config.fbdev_pixel_depth,
+        config.fbdev_rotation,
+        config.fbdev_runtime_rotation,
+        config.use_fbdev_vram,
+        config.systick_ms,
+        config.event_queue_size,
+        config.dirty_area_num_max,
+        config.color16_swap,
+        config.animation,
+        config.debug,
+        config.log_color,
+        config.log_level,
+        config.obj_use_name,
+        config.font_compressed,
+        config.boot_logo,
+        config.theme_dark,
+        config.heap_algo,
+        config.heap_memory_size,
+        config.label_rotation,
+        config.font_song23,
+        config.font_consolas14,
+        config.font_consolas23,
+        config.font_consolas24,
+        config.font_consolas32,
+        config.font_consolas24_compress
+    );
+    std::fs::write(path, content).map_err(|e| format!("写入 sgl_config.h 失败: {}", e))
+}
+
 /// 复制导出的代码到 sgl-port 项目并编译
 #[tauri::command]
-fn build_project(mut project: Project, project_path: String, code: String) -> Result<String, String> {
+fn build_project(
+    mut project: Project,
+    project_path: String,
+    code: String,
+    update_sgl: Option<bool>,
+    window: tauri::Window,
+) -> Result<String, String> {
     let proj_dir = std::path::Path::new(&project_path)
         .parent()
         .ok_or_else(|| "无法获取项目目录".to_string())?;
@@ -1789,11 +2135,15 @@ fn build_project(mut project: Project, project_path: String, code: String) -> Re
 
     // 检查 sgl-port 项目，不存在则自动克隆
     if !sgl_port_dir.exists() || !sgl_port_dir.join("CMakelists.txt").exists() {
-        clone_sgl_port(project_path.clone())?;
+        clone_sgl_port(project_path.clone(), window.clone())?;
     }
 
-    // 每次构建都确保 sgl 子模块更新到远程最新 main，避免主仓库子模块指针停留在旧节点
-    update_sgl_submodules_to_latest(&sgl_port_dir)?;
+    // 根据用户选择决定是否更新 sgl 子模块
+    let submodule_msg = if update_sgl.unwrap_or(false) {
+        update_sgl_submodules_to_latest(&sgl_port_dir, &window)?
+    } else {
+        "已跳过 sgl 子模块更新".to_string()
+    };
 
     // 清理旧的 demo/bg.c 和 demo/test.c，只使用设计器生成的 ui.c
     let demo_dir = sgl_port_dir.join("demo");
@@ -1853,8 +2203,8 @@ fn build_project(mut project: Project, project_path: String, code: String) -> Re
             .map_err(|e| format!("创建 fonts 目录失败: {}", e))?;
         let conv_path = find_sgl_font_conv();
         if let Some(conv) = conv_path {
-            for (name, path, sz, bpp, symbols) in &fonts {
-                run_font_conv(&conv, name, path, *sz, *bpp, symbols, &fonts_dir)
+            for (name, path, sz, bpp, compress, symbols) in &fonts {
+                run_font_conv(&conv, name, path, *sz, *bpp, *compress, symbols, &fonts_dir)
                     .map_err(|e| format!("生成字模 {} 失败: {}", name, e))?;
             }
         } else {
@@ -1928,29 +2278,16 @@ fn build_project(mut project: Project, project_path: String, code: String) -> Re
     let main_c_path = demo_dir.join("main.c");
     std::fs::write(&main_c_path, &main_content).map_err(|e| format!("写入 main.c 失败: {}", e))?;
 
-    // 根据用户项目设置修改 sgl_config.h（颜色深度）
+    // 根据用户项目设置生成 sgl_config.h
     let pixel_depth = match project.color_depth.as_str() {
         "8bit" => 8,
         "16bit" => 16,
         "24bit" => 24,
         _ => 32,
     };
+    project.sgl_config.fbdev_pixel_depth = pixel_depth;
     let sgl_config_path = demo_dir.join("sgl_config.h");
-    if let Ok(config_content) = std::fs::read_to_string(&sgl_config_path) {
-        let mut updated = config_content;
-        if let Some(start) = updated.find("CONFIG_SGL_FBDEV_PIXEL_DEPTH") {
-            if let Some(line_end) = updated[start..].find('\n') {
-                let line_start = updated[..start].rfind('#').unwrap_or(0);
-                updated = format!(
-                    "{}#define  CONFIG_SGL_FBDEV_PIXEL_DEPTH                      {}{}",
-                    &updated[..line_start],
-                    pixel_depth,
-                    &updated[start + line_end..]
-                );
-            }
-        }
-        let _ = std::fs::write(&sgl_config_path, &updated);
-    }
+    generate_sgl_config_h(&project.sgl_config, &sgl_config_path)?;
 
     // 根据用户项目设置修改 sgl_port_sdl2.c（屏幕宽高）
     let sdl2_port_path = demo_dir.join("sgl_port_sdl2.c");
@@ -2015,36 +2352,33 @@ fn build_project(mut project: Project, project_path: String, code: String) -> Re
     let build_dir = sgl_port_dir.join("build");
     std::fs::create_dir_all(&build_dir).map_err(|e| format!("创建 build 目录失败: {}", e))?;
 
-    use std::process::Command;
+    // 重新 cmake 配置，确保字模源文件 GLOB 最新，并实时输出到控制台
+    let cmake_status = run_command_stream(
+        "cmake",
+        &["..", "-G", "MinGW Makefiles"],
+        &build_dir,
+        &window,
+    )
+    .map_err(|e| format!("执行 cmake 失败: {}（请确认已安装 CMake）", e))?;
 
-    // 重新 cmake 配置，确保字模源文件 GLOB 最新
-    let cmake_output = Command::new("cmake")
-        .arg("..")
-        .arg("-G").arg("MinGW Makefiles")
-        .current_dir(&build_dir)
-        .output()
-        .map_err(|e| format!("执行 cmake 失败: {}（请确认已安装 CMake）", e))?;
-
-    if !cmake_output.status.success() {
-        let stderr = String::from_utf8_lossy(&cmake_output.stderr);
-        let stdout = String::from_utf8_lossy(&cmake_output.stdout);
-        return Err(format!("cmake 配置失败:\n{}{}", stdout, stderr));
+    if !cmake_status.success() {
+        return Err("cmake 配置失败".to_string());
     }
 
-    // 编译
-    let make_output = Command::new("cmake")
-        .arg("--build").arg(".")
-        .current_dir(&build_dir)
-        .output()
-        .map_err(|e| format!("执行编译失败: {}", e))?;
+    // 编译，并实时输出到控制台
+    let make_status = run_command_stream(
+        "cmake",
+        &["--build", "."],
+        &build_dir,
+        &window,
+    )
+    .map_err(|e| format!("执行编译失败: {}", e))?;
 
-    if !make_output.status.success() {
-        let stderr = String::from_utf8_lossy(&make_output.stderr);
-        let stdout = String::from_utf8_lossy(&make_output.stdout);
-        return Err(format!("编译失败:\n{}{}", stdout, stderr));
+    if !make_status.success() {
+        return Err("编译失败".to_string());
     }
 
-    Ok("编译成功！".to_string())
+    Ok(format!("{}；编译成功！", submodule_msg))
 }
 
 /// 写入日志到项目目录的 log 文件
@@ -2108,6 +2442,114 @@ fn is_leap_year(y: u64) -> bool {
     (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
 }
 
+/// 读取项目根目录下 sgl-port-windows-vscode/demo/sgl_config.h，解析 CONFIG_XXX 宏并返回 SglConfig
+/// 用于在进入 SGL 配置页面或编译仿真前同步外部修改的配置
+/// 文件不存在时返回默认配置（后续编译时会用默认值生成 sgl_config.h 覆盖）
+#[tauri::command]
+fn read_sgl_config_from_file(project_path: String) -> Result<SglConfig, String> {
+    let proj_dir = std::path::Path::new(&project_path)
+        .parent()
+        .ok_or_else(|| "无法获取项目目录".to_string())?;
+    let config_path = proj_dir
+        .join("sgl-port-windows-vscode")
+        .join("demo")
+        .join("sgl_config.h");
+
+    // 文件不存在时使用空内容，后续 get_i32/get_string 会返回默认值
+    // 编译时会用这些默认值生成 sgl_config.h 覆盖
+    let content = if config_path.exists() {
+        std::fs::read_to_string(&config_path)
+            .map_err(|e| format!("读取 sgl_config.h 失败: {}", e))?
+    } else {
+        String::new()
+    };
+
+    // 解析 #define CONFIG_SGL_XXX value
+    // value 可能是整数或标识符（如 lwmem）
+    fn parse_define(line: &str) -> Option<(String, String)> {
+        let trimmed = line.trim();
+        if !trimmed.starts_with("#define") {
+            return None;
+        }
+        let rest = trimmed.trim_start_matches("#define").trim();
+        let mut iter = rest.split_whitespace();
+        let key = iter.next()?.to_string();
+        let val = iter.next()?.to_string();
+        Some((key, val))
+    }
+
+    // 从内容中查找宏值，提供默认值兜底
+    fn get_i32(content: &str, key: &str, default: i32) -> i32 {
+        for line in content.lines() {
+            if let Some((k, v)) = parse_define(line) {
+                if k == key {
+                    return v.parse::<i32>().unwrap_or(default);
+                }
+            }
+        }
+        default
+    }
+
+    fn get_string(content: &str, key: &str, default: &str) -> String {
+        for line in content.lines() {
+            if let Some((k, v)) = parse_define(line) {
+                if k == key {
+                    return v;
+                }
+            }
+        }
+        default.to_string()
+    }
+
+    let config = SglConfig {
+        fbdev_pixel_depth: get_i32(&content, "CONFIG_SGL_FBDEV_PIXEL_DEPTH", 16),
+        fbdev_rotation: get_i32(&content, "CONFIG_SGL_FBDEV_ROTATION", 0),
+        fbdev_runtime_rotation: get_i32(&content, "CONFIG_SGL_FBDEV_RUNTIME_ROTATION", 0),
+        use_fbdev_vram: get_i32(&content, "CONFIG_SGL_USE_FBDEV_VRAM", 0),
+        systick_ms: get_i32(&content, "CONFIG_SGL_SYSTICK_MS", 10),
+        event_queue_size: get_i32(&content, "CONFIG_SGL_EVENT_QUEUE_SIZE", 16),
+        dirty_area_num_max: get_i32(&content, "CONFIG_SGL_DIRTY_AREA_NUM_MAX", 16),
+        color16_swap: get_i32(&content, "CONFIG_SGL_COLOR16_SWAP", 0),
+        animation: get_i32(&content, "CONFIG_SGL_ANIMATION", 1),
+        debug: get_i32(&content, "CONFIG_SGL_DEBUG", 1),
+        log_color: get_i32(&content, "CONFIG_SGL_LOG_COLOR", 1),
+        log_level: get_i32(&content, "CONFIG_SGL_LOG_LEVEL", 0),
+        obj_use_name: get_i32(&content, "CONFIG_SGL_OBJ_USE_NAME", 0),
+        font_compressed: get_i32(&content, "CONFIG_SGL_FONT_COMPRESSED", 0),
+        boot_logo: get_i32(&content, "CONFIG_SGL_BOOT_LOGO", 0),
+        theme_dark: get_i32(&content, "CONFIG_SGL_THEME_DARK", 0),
+        heap_algo: get_string(&content, "CONFIG_SGL_HEAP_ALGO", "lwmem"),
+        heap_memory_size: get_i32(&content, "CONFIG_SGL_HEAP_MEMORY_SIZE", 10240),
+        label_rotation: get_i32(&content, "CONFIG_SGL_LABEL_ROTATION", 0),
+        font_song23: get_i32(&content, "CONFIG_SGL_FONT_SONG23", 0),
+        font_consolas14: get_i32(&content, "CONFIG_SGL_FONT_CONSOLAS14", 1),
+        font_consolas23: get_i32(&content, "CONFIG_SGL_FONT_CONSOLAS23", 0),
+        font_consolas24: get_i32(&content, "CONFIG_SGL_FONT_CONSOLAS24", 0),
+        font_consolas32: get_i32(&content, "CONFIG_SGL_FONT_CONSOLAS32", 0),
+        font_consolas24_compress: get_i32(&content, "CONFIG_SGL_FONT_CONSOLAS24_COMPRESS", 0),
+    };
+
+    Ok(config)
+}
+
+/// 将配置写入项目根目录下 sgl-port-windows-vscode/demo/sgl_config.h
+/// 用户在 SGL 配置页面修改参数后立即写入文件，保证配置文件与页面一致
+#[tauri::command]
+fn write_sgl_config_to_file(project_path: String, config: SglConfig) -> Result<(), String> {
+    let proj_dir = std::path::Path::new(&project_path)
+        .parent()
+        .ok_or_else(|| "无法获取项目目录".to_string())?;
+    let sgl_port_dir = proj_dir.join("sgl-port-windows-vscode");
+    let config_path = sgl_port_dir.join("demo").join("sgl_config.h");
+
+    // 若 sgl-port 目录不存在，静默返回（未克隆项目时不报错）
+    if !sgl_port_dir.exists() {
+        return Ok(());
+    }
+
+    generate_sgl_config_h(&config, &config_path)
+}
+
 /// 运行 sgl_simulator
 #[tauri::command]
 fn run_simulator(project_path: String) -> Result<String, String> {
@@ -2142,6 +2584,129 @@ fn run_simulator(project_path: String) -> Result<String, String> {
         .map_err(|e| format!("启动模拟器失败: {}", e))?;
 
     Ok("模拟器已启动".to_string())
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct ExecResult {
+    stdout: String,
+    stderr: String,
+    exit_code: i32,
+}
+
+/// 调用 sgl_font_conv.exe 生成字体 C 文件并返回内容，供前端解析为字模位图数据
+/// 实现 SGL 内核字模位图渲染（所见即所得）
+#[tauri::command]
+fn generate_font_c_content(
+    font_path: String,
+    size: i32,
+    bpp: i32,
+    symbols: Option<String>,
+) -> Result<String, String> {
+    // 解析字体文件路径（与 collect_fonts/run_font_conv 一致的逻辑）
+    let resolved = resolve_font_path(&font_path).unwrap_or_else(|| font_path.clone());
+    let path = std::path::Path::new(&resolved);
+    if !path.exists() {
+        return Err(format!("字体文件不存在: {}", resolved));
+    }
+
+    // 字体名称（清理后）
+    let name = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "font".to_string());
+    let clean_name: String = name
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '_' })
+        .collect();
+
+    // 查找 sgl_font_conv.exe
+    let conv = find_sgl_font_conv()
+        .ok_or_else(|| "未找到 sgl_font_conv.exe".to_string())?;
+
+    // 临时输出目录
+    let temp_dir = std::env::temp_dir().join("sgl_ui_designer_fonts");
+    std::fs::create_dir_all(&temp_dir)
+        .map_err(|e| format!("创建临时目录失败: {}", e))?;
+
+    // 将字体文件复制到临时目录（使用清理后的文件名）
+    let temp_font_path = temp_dir.join(&clean_name);
+    if path != temp_font_path.as_path() {
+        std::fs::copy(path, &temp_font_path)
+            .map_err(|e| format!("复制字体文件失败: {}", e))?;
+    }
+
+    let out_file = temp_dir.join(format!(
+        "sgl_font_{}_{}_bpp{}.c",
+        clean_name, size, bpp
+    ));
+    let out_str = out_file.to_string_lossy().to_string();
+    let font_arg = temp_font_path.to_string_lossy().to_string();
+
+    let mut cmd = std::process::Command::new(&conv);
+    cmd.arg("--font")
+        .arg(&font_arg)
+        .arg("--size")
+        .arg(size.to_string())
+        .arg("--bpp")
+        .arg(bpp.to_string())
+        .arg("--output")
+        .arg(&out_str);
+
+    // 符号表（可选）：指定字符集，减少字模大小
+    if let Some(ref syms) = symbols {
+        if !syms.is_empty() {
+            let symbols_file = temp_dir.join(format!(
+                "symbols_{}_{}_bpp{}.txt",
+                clean_name, size, bpp
+            ));
+            std::fs::write(&symbols_file, syms)
+                .map_err(|e| format!("写入 symbols 文件失败: {}", e))?;
+            cmd.arg("--symbols-file").arg(&symbols_file);
+        }
+    }
+
+    let output = cmd
+        .output()
+        .map_err(|e| format!("调用 sgl_font_conv 失败: {}", e))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return Err(format!(
+            "sgl_font_conv 返回非零状态\nstdout: {}\nstderr: {}",
+            stdout, stderr
+        ));
+    }
+
+    // 读取生成的 C 文件内容
+    let content = std::fs::read_to_string(&out_file)
+        .map_err(|e| format!("读取字模 C 文件失败: {}", e))?;
+
+    Ok(content)
+}
+
+/// 在系统 shell 中执行命令（Windows 使用 cmd /c）
+#[tauri::command]
+fn exec_command(command: String, cwd: Option<String>) -> Result<ExecResult, String> {
+    use std::process::Command;
+
+    let mut cmd = Command::new("cmd");
+    cmd.arg("/c").arg(&command);
+
+    if let Some(dir) = cwd {
+        cmd.current_dir(dir);
+    } else if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            cmd.current_dir(dir);
+        }
+    }
+
+    let output = cmd.output().map_err(|e| format!("执行命令失败: {}", e))?;
+
+    Ok(ExecResult {
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        exit_code: output.status.code().unwrap_or(-1),
+    })
 }
 
 fn find_sgl_font_conv() -> Option<String> {
@@ -2186,11 +2751,16 @@ fn main() {
             export_code,
             export_code_to_project,
             check_toolchain,
+            check_sgl_submodule_status,
             clone_sgl_port,
             build_project,
             run_simulator,
+            read_sgl_config_from_file,
+            write_sgl_config_to_file,
             append_log,
-            get_opaque_image_data_url
+            get_opaque_image_data_url,
+            generate_font_c_content,
+            exec_command
         ])
         .run(tauri::generate_context!());
 
@@ -2295,11 +2865,13 @@ mod tests {
                 fonts: vec![],
                 images: vec![],
             },
+            ascii_fonts: vec![],
+            sgl_config: SglConfig::default(),
         };
 
         let fonts = collect_fonts(&project);
         assert_eq!(fonts.len(), 1);
-        let (name, _path, sz, bpp, symbols) = &fonts[0];
+        let (name, _path, sz, bpp, _compress, symbols) = &fonts[0];
         assert_eq!(name, "simsun.ttc");
         assert_eq!(*sz, 24);
         assert_eq!(*bpp, 4);

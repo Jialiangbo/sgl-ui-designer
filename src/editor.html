@@ -31,6 +31,8 @@
     <div class="context-menu-item" data-action="copy">复制 Ctrl+C</div>
     <div class="context-menu-item" data-action="paste">粘贴 Ctrl+V</div>
     <div class="context-menu-item" data-action="delete">删除 Delete</div>
+    <div class="context-menu-separator"></div>
+    <div class="context-menu-item" data-action="pick-color">取色器</div>
   </div>
 
   <header class="app-header">
@@ -39,7 +41,7 @@
       <button class="nav-tab active" data-nav="editor">编辑器</button>
       <button class="nav-tab" data-nav="preview">预览</button>
       <button class="nav-tab" data-nav="components">代码</button>
-      <button class="nav-tab" data-nav="settings">设置</button>
+      <button class="nav-tab" data-nav="settings">SGL配置</button>
     </nav>
 
     <div class="header-actions">
@@ -112,11 +114,6 @@
         <canvas class="ruler-v" id="ruler-v" width="20"></canvas>
         <div class="canvas-viewport" id="canvas-viewport">
           <div class="canvas" id="canvas" tabindex="0">
-            <div id="canvas-hint" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#4b4b6b;font-size:14px;pointer-events:none;flex-direction:column;gap:8px;">
-              <div style="font-size:32px;opacity:0.3;">📦</div>
-              <div>从左侧拖拽 SGL 组件到此处</div>
-              <div style="font-size:11px;opacity:0.5;">共 37 种真实 SGL 组件</div>
-            </div>
           </div>
         </div>
       </div>
@@ -129,6 +126,10 @@
           </div>
         </div>
         <div class="log-content" id="log-content"></div>
+        <div class="log-input-line">
+          <span class="log-prompt">&gt;</span>
+          <input type="text" id="log-input" class="log-input" spellcheck="false" autocomplete="off" placeholder="输入命令并按回车执行" />
+        </div>
       </div>
     </main>
 
@@ -243,6 +244,7 @@
     <span style="margin-left:auto;" id="status-api">API: SGL v2.0</span>
   </div>
 
+  <script type="module" src="sgl_renderer.js"></script>
   <script type="module" src="editor.js"></script>
 </body>
 </html>

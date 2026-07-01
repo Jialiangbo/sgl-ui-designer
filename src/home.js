@@ -61,7 +61,7 @@ const DEMOS = {
     pages: [{
       id: 'page_dashboard', name: '仪表盘', width: 480, height: 320, bg_color: '#1e1e2e',
       widgets: [
-        { id: 'w1', x: 20, y: 16, width: 280, height: 36, ...createWidgetDefaults('label'), text: '🏠 智能家居控制台', textColor: '#e4e4e7', fontSize: 22, align: 'LEFT' },
+        { id: 'w1', x: 20, y: 16, width: 280, height: 36, ...createWidgetDefaults('label'), text: '🏠 智能家居控制台', textColor: '#e4e4e7', fontSize: 22, align: 'LEFT_MID' },
         { id: 'w2', x: 20, y: 70, width: 200, height: 100, ...createWidgetDefaults('rect'), color: '#313149', bgColor: '#313149', borderColor: '#8b5cf6', borderWidth: 2, radius: 8 },
         { id: 'w3', x: 32, y: 80, width: 80, height: 20, ...createWidgetDefaults('label'), text: '温度', textColor: '#a1a1aa', fontSize: 12 },
         { id: 'w4', x: 32, y: 108, width: 120, height: 40, ...createWidgetDefaults('label'), text: '23°C', textColor: '#8b5cf6', fontSize: 28 },
@@ -82,11 +82,11 @@ const DEMOS = {
       widgets: [
         { id: 'm0', x: 0, y: 0, width: 320, height: 60, ...createWidgetDefaults('rect'), bgColor: '#8b5cf6', borderWidth: 0, radius: 0 },
         { id: 'm1', x: 16, y: 16, width: 200, height: 32, ...createWidgetDefaults('label'), text: '设备菜单', textColor: '#ffffff', fontSize: 20 },
-        { id: 'm2', x: 20, y: 80, width: 280, height: 50, ...createWidgetDefaults('button'), text: '⚙  系统设置', bgColor: '#313149', borderColor: '#8b5cf6', borderWidth: 1, radius: 8, align: 'LEFT', fontSize: 16 },
-        { id: 'm3', x: 20, y: 145, width: 280, height: 50, ...createWidgetDefaults('button'), text: '🌐 网络配置', bgColor: '#313149', borderColor: '#8b5cf6', borderWidth: 1, radius: 8, align: 'LEFT', fontSize: 16 },
-        { id: 'm4', x: 20, y: 210, width: 280, height: 50, ...createWidgetDefaults('button'), text: '📊 数据统计', bgColor: '#313149', borderColor: '#8b5cf6', borderWidth: 1, radius: 8, align: 'LEFT', fontSize: 16 },
-        { id: 'm5', x: 20, y: 275, width: 280, height: 50, ...createWidgetDefaults('button'), text: '💾 存储管理', bgColor: '#313149', borderColor: '#8b5cf6', borderWidth: 1, radius: 8, align: 'LEFT', fontSize: 16 },
-        { id: 'm6', x: 20, y: 340, width: 280, height: 50, ...createWidgetDefaults('button'), text: '❓ 关于设备', bgColor: '#313149', borderColor: '#8b5cf6', borderWidth: 1, radius: 8, align: 'LEFT', fontSize: 16 },
+        { id: 'm2', x: 20, y: 80, width: 280, height: 50, ...createWidgetDefaults('button'), text: '⚙  系统设置', bgColor: '#313149', borderColor: '#8b5cf6', borderWidth: 1, radius: 8, align: 'LEFT_MID', fontSize: 16 },
+        { id: 'm3', x: 20, y: 145, width: 280, height: 50, ...createWidgetDefaults('button'), text: '🌐 网络配置', bgColor: '#313149', borderColor: '#8b5cf6', borderWidth: 1, radius: 8, align: 'LEFT_MID', fontSize: 16 },
+        { id: 'm4', x: 20, y: 210, width: 280, height: 50, ...createWidgetDefaults('button'), text: '📊 数据统计', bgColor: '#313149', borderColor: '#8b5cf6', borderWidth: 1, radius: 8, align: 'LEFT_MID', fontSize: 16 },
+        { id: 'm5', x: 20, y: 275, width: 280, height: 50, ...createWidgetDefaults('button'), text: '💾 存储管理', bgColor: '#313149', borderColor: '#8b5cf6', borderWidth: 1, radius: 8, align: 'LEFT_MID', fontSize: 16 },
+        { id: 'm6', x: 20, y: 340, width: 280, height: 50, ...createWidgetDefaults('button'), text: '❓ 关于设备', bgColor: '#313149', borderColor: '#8b5cf6', borderWidth: 1, radius: 8, align: 'LEFT_MID', fontSize: 16 },
         { id: 'm7', x: 20, y: 420, width: 280, height: 44, ...createWidgetDefaults('button'), text: '↩ 返回', bgColor: '#ef4444', borderColor: '#dc2626', radius: 8 }
       ]
     }]

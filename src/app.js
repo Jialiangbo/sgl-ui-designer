@@ -12,7 +12,33 @@ export const AppState = {
     screen_height: 320,
     screen_shape: 'rect', // 'rect' | 'circle'
     pages: [],
-    resources: { fonts: [], images: [] }
+    resources: { fonts: [], images: [] },
+    ascii_fonts: [],
+    sgl_config: {
+      fbdev_pixel_depth: 16,
+      fbdev_rotation: 0,
+      use_fbdev_vram: 0,
+      systick_ms: 10,
+      event_queue_size: 16,
+      dirty_area_num_max: 16,
+      color16_swap: 0,
+      animation: 1,
+      debug: 1,
+      log_color: 1,
+      log_level: 0,
+      obj_use_name: 0,
+      font_compressed: 0,
+      boot_logo: 1,
+      theme_dark: 0,
+      heap_algo: 'lwmem',
+      heap_memory_size: 102400,
+      font_song23: 1,
+      font_consolas14: 1,
+      font_consolas23: 1,
+      font_consolas24: 1,
+      font_consolas32: 1,
+      font_consolas24_compress: 1
+    }
   },
   projectPath: null, // 项目文件保存路径（未保存时为 null）
   currentPageId: null,
@@ -153,18 +179,54 @@ export const AppState = {
   },
 
   // ============ line 控件尺寸同步 ============
-  // 直线时：高度/宽度等于线宽；斜线时：宽高为端点差值
+  // 中心线语义：x1/y1, x2/y2 是中心线端点坐标（SGL 标准）
+  // 水平线（|dy| < lineWidth）：y2 = y1, height = lineWidth, 线在控件内垂直居中
+  // 垂直线（|dx| < lineWidth）：x2 = x1, width = lineWidth, 线在控件内水平居中
+  // 斜线：width/height 为包围盒（含线宽扩展）
   syncLineBounds(w) {
     if (w.type !== 'line') return;
-    const lineWidth = w.lineWidth != null ? w.lineWidth : 1;
+    const lineWidth = Math.max(1, w.lineWidth != null ? w.lineWidth : 1);
     const x1 = w.x1 != null ? w.x1 : w.x;
     const y1 = w.y1 != null ? w.y1 : w.y;
     const x2 = w.x2 != null ? w.x2 : w.x + w.width;
     const y2 = w.y2 != null ? w.y2 : w.y + w.height;
     const dx = x2 - x1;
     const dy = y2 - y1;
-    w.width = dx === 0 ? lineWidth : Math.abs(dx);
-    w.height = dy === 0 ? lineWidth : Math.abs(dy);
+    const isHorizontal = Math.abs(dy) < lineWidth;
+    const isVertical = Math.abs(dx) < lineWidth;
+    if (isHorizontal && !isVertical) {
+      // 水平线：y2 = y1（中心线），height = lineWidth，线在控件内居中
+      w.y2 = y1;
+      w.x2 = x2;
+      w.width = Math.max(1, Math.abs(dx) + 1);
+      w.height = lineWidth;
+      w.x = Math.min(x1, x2);
+      w.y = y1 - Math.floor((lineWidth - 1) / 2);
+    } else if (isVertical && !isHorizontal) {
+      // 垂直线：x2 = x1（中心线），width = lineWidth
+      w.x2 = x1;
+      w.y2 = y2;
+      w.width = lineWidth;
+      w.height = Math.max(1, Math.abs(dy) + 1);
+      w.x = x1 - Math.floor((lineWidth - 1) / 2);
+      w.y = Math.min(y1, y2);
+    } else if (isHorizontal && isVertical) {
+      // 点：width = height = lineWidth
+      w.x2 = x1;
+      w.y2 = y1;
+      w.width = lineWidth;
+      w.height = lineWidth;
+      w.x = x1 - Math.floor((lineWidth - 1) / 2);
+      w.y = y1 - Math.floor((lineWidth - 1) / 2);
+    } else {
+      // 斜线：中心线端点不变，包围盒含线宽扩展
+      w.x2 = x2;
+      w.y2 = y2;
+      w.width = Math.max(1, Math.abs(dx) + lineWidth);
+      w.height = Math.max(1, Math.abs(dy) + lineWidth);
+      w.x = Math.min(x1, x2) - Math.floor((lineWidth - 1) / 2);
+      w.y = Math.min(y1, y2) - Math.floor((lineWidth - 1) / 2);
+    }
   },
 
   // ============ 组件操作 ============
@@ -216,14 +278,14 @@ export const AppState = {
       widget.width = widget.radius * 2;
       widget.height = widget.radius * 2;
     }
-    // line 控件：x1/y1 为控件位置，初始为水平直线（y2 = y1），高度等于线宽
+    // line 控件：中心线在控件内居中，调用 syncLineBounds 计算包围盒
     if (type === 'line') {
-      widget.x1 = widget.x;
-      widget.y1 = widget.y;
-      widget.x2 = widget.x + widget.width;
-      widget.y2 = widget.y;
       const lineWidth = widget.lineWidth != null ? widget.lineWidth : 1;
-      widget.height = lineWidth;
+      widget.x1 = widget.x;
+      widget.y1 = widget.y + Math.floor((lineWidth - 1) / 2);
+      widget.x2 = widget.x + widget.width - 1;
+      widget.y2 = widget.y1;
+      this.syncLineBounds(widget);
     }
     // arc 控件：根据宽高计算内外径
     if (type === 'arc') {
@@ -312,12 +374,44 @@ export const AppState = {
         w.width = newDiameter;
         w.height = newDiameter;
       } else if (w.type === 'line') {
-        const lineWidth = w.lineWidth != null ? w.lineWidth : 1;
-        w.x1 = w.x; w.y1 = w.y;
-        // line 控件：终点坐标 = 起点坐标 + 宽高
-        w.x2 = w.x1 + Math.max(lineWidth, Math.round(w0));
-        w.y2 = w.y1 + Math.max(lineWidth, Math.round(h0));
+        const lineWidth = Math.max(1, w.lineWidth != null ? w.lineWidth : 1);
+        // 根据当前线方向设置中心线端点
+        const curDx = (w.x2 != null ? w.x2 : w.x + w.width - 1) - w.x1;
+        const curDy = (w.y2 != null ? w.y2 : w.y + w.height - 1) - w.y1;
+        const wasHorizontal = Math.abs(curDy) < lineWidth;
+        const wasVertical = Math.abs(curDx) < lineWidth;
+        if (wasHorizontal && !wasVertical) {
+          // 水平线：只改变 x 方向长度，y1/y2 保持中心线
+          w.x1 = w.x;
+          w.y1 = w.y + Math.floor((lineWidth - 1) / 2);
+          w.x2 = w.x1 + Math.max(1, Math.round(w0) - 1);
+          w.y2 = w.y1;
+        } else if (wasVertical && !wasHorizontal) {
+          // 垂直线：只改变 y 方向长度，x1/x2 保持中心线
+          w.x1 = w.x + Math.floor((lineWidth - 1) / 2);
+          w.y1 = w.y;
+          w.x2 = w.x1;
+          w.y2 = w.y1 + Math.max(1, Math.round(h0) - 1);
+        } else {
+          // 斜线：x2/y2 都根据新的宽高设置
+          w.x1 = w.x + Math.floor((lineWidth - 1) / 2);
+          w.y1 = w.y + Math.floor((lineWidth - 1) / 2);
+          w.x2 = w.x1 + Math.max(1, Math.round(w0) - lineWidth);
+          w.y2 = w.y1 + Math.max(1, Math.round(h0) - lineWidth);
+        }
         this.syncLineBounds(w);
+      } else if (w.type === 'polygon') {
+        // polygon 控件：缩放时同步按比例缩放顶点坐标
+        const scaleX = nw / w.width;
+        const scaleY = nh / w.height;
+        if (w.vertices) {
+          w.vertices = w.vertices.split(';').map(p => {
+            const [vx, vy] = p.split(',').map(v => parseInt(v.trim()) || 0);
+            return `${Math.round(vx * scaleX)},${Math.round(vy * scaleY)}`;
+          }).join(';');
+        }
+        w.width = nw;
+        w.height = nh;
       } else {
         w.width = nw;
         w.height = nh;
@@ -406,19 +500,24 @@ export const AppState = {
 
   // ============ 导出代码到项目目录（设计器和代码预览共用） ============
   async exportCodeToProject(actionName = '导出代码') {
-    // 检查并提示字体缺失
+    // 检查字体缺失，有缺失则阻止导出
     const issues = validateProjectFonts(this.project);
     if (issues.length > 0) {
       const summary = `检测到 ${issues.length} 个文本控件缺少字体资源`;
       const detail = issues.map(item =>
         `• ${item.page} / ${item.widget}: ${item.reason} (${item.fontFamily || '无'})`
       ).join('\n');
-      showToast(summary, 'warn');
+      showToast(summary, 'error');
+      logMessage(`[${actionName}] ${summary}，操作已终止`, 'error');
+      issues.forEach(item => {
+        logMessage(`  - ${item.page} / ${item.widget}: ${item.reason} (${item.fontFamily || '无'})`, 'error');
+      });
       try {
-        await message(`${summary}，请在右侧资源面板添加字体文件后再操作。\n\n${detail}`, { title: '字体资源缺失', kind: 'warning' });
+        await message(`${summary}，请在右侧资源面板添加字体文件后再操作。\n\n${detail}`, { title: '字体资源缺失', kind: 'error' });
       } catch (e) {
         console.warn('显示字体缺失提示失败:', e);
       }
+      return { ok: false, msg: '字体资源缺失，已终止导出' };
     }
 
     if (!this.projectPath) {
@@ -513,6 +612,46 @@ export const AppState = {
         const p = JSON.parse(proj);
         if (p && p.pages) {
           this.project = p;
+          if (!Array.isArray(this.project.ascii_fonts)) {
+            this.project.ascii_fonts = [];
+          }
+          // 迁移旧 ascii_fonts 字符串数组为对象数组，补充缺失的 compress 字段
+          this.project.ascii_fonts = this.project.ascii_fonts
+            .map(item => {
+              if (typeof item === 'string') {
+                return { name: item, size: 16, bpp: this.project.ascii_font_bpp || 4, compress: 0 };
+              }
+              if (item.compress === undefined) item.compress = 0;
+              return item;
+            })
+            .filter(item => item && typeof item === 'object');
+          if (!this.project.sgl_config) {
+            this.project.sgl_config = {
+              fbdev_pixel_depth: 16,
+              fbdev_rotation: 0,
+              use_fbdev_vram: 0,
+              systick_ms: 10,
+              event_queue_size: 16,
+              dirty_area_num_max: 16,
+              color16_swap: 0,
+              animation: 1,
+              debug: 1,
+              log_color: 1,
+              log_level: 0,
+              obj_use_name: 0,
+              font_compressed: 0,
+              boot_logo: 1,
+              theme_dark: 0,
+              heap_algo: 'lwmem',
+              heap_memory_size: 102400,
+              font_song23: 1,
+              font_consolas14: 1,
+              font_consolas23: 1,
+              font_consolas24: 1,
+              font_consolas32: 1,
+              font_consolas24_compress: 1
+            };
+          }
           this.currentPageId = localStorage.getItem('sgl_current') || null;
           try {
             const sel = JSON.parse(localStorage.getItem('sgl_selected') || '[]');
@@ -539,7 +678,33 @@ export const AppState = {
       screen_height: 320,
       screen_shape: 'rect',
       pages: [],
-      resources: { fonts: [], images: [] }
+      resources: { fonts: [], images: [] },
+      ascii_fonts: [],
+      sgl_config: {
+        fbdev_pixel_depth: 16,
+        fbdev_rotation: 0,
+        use_fbdev_vram: 0,
+        systick_ms: 10,
+        event_queue_size: 16,
+        dirty_area_num_max: 16,
+        color16_swap: 0,
+        animation: 1,
+        debug: 1,
+        log_color: 1,
+        log_level: 0,
+        obj_use_name: 0,
+        font_compressed: 0,
+        boot_logo: 1,
+        theme_dark: 0,
+        heap_algo: 'lwmem',
+        heap_memory_size: 102400,
+        font_song23: 1,
+        font_consolas14: 1,
+        font_consolas23: 1,
+        font_consolas24: 1,
+        font_consolas32: 1,
+        font_consolas24_compress: 1
+      }
     };
     this.projectPath = null;
     this.currentPageId = null;

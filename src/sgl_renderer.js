@@ -79,8 +79,11 @@ const OPA2_TABLE = [0,85,170,255];
  * @returns {{canvas, ctx, imageData, buf32, w, h, scale, clip}}
  */
 function createSurface(canvas, w, h, scale) {
-  const cw = Math.max(1, Math.ceil(w * scale));
-  const ch = Math.max(1, Math.ceil(h * scale));
+  // SGL 闭区间坐标：绘制范围 0 ~ round((w-1)*scale)
+  // cw 至少要 = round((w-1)*scale)+1，否则右边框/下边框像素 px2 会超出 clip 被裁
+  // (当 z<1 且 (w-1)*z 小数部分>=0.5 时，round((w-1)*z) 可能 = ceil(w*z) > cw-1)
+  const cw = Math.max(1, Math.ceil(w * scale), Math.round((w - 1) * scale) + 1);
+  const ch = Math.max(1, Math.ceil(h * scale), Math.round((h - 1) * scale) + 1);
   canvas.width = cw;
   canvas.height = ch;
   const ctx = canvas.getContext('2d');
@@ -1465,8 +1468,12 @@ function drawLed(surf, cx, cy, radius, color, bgColor, alpha) {
 }
 
 // ============================================================
-// sgl_draw_fill_polygon - 多边形扫描线填充
-// 移植自 sgl_draw_polygon.c（扫描线算法，半开半闭边穿越判定）
+// sgl_polygon_fill_scanline - 多边形扫描线填充
+// 精确移植自 sgl_polygon.c:134-196
+// 算法要点：
+//   - 扫描线在像素中心 y+0.5 处（8.8 定点数 +128）
+//   - 奇偶规则：(y1 > scan_y) == (y2 > scan_y) 跳过（严格大于）
+//   - 填充范围内缩 1 像素：x_start = inter[i]+1, x_end = inter[i+1]-1
 // ============================================================
 
 /**
@@ -1477,6 +1484,9 @@ function drawLed(surf, cx, cy, radius, color, bgColor, alpha) {
  */
 function drawFillPolygon(surf, points, color, alpha) {
   if (alpha <= 0 || !points || points.length < 3) return;
+  // SGL: if (polygon->fill_color.full != 0) 才画填充
+  // RGB565 下黑色 (0,0,0) 的 .full = 0，跳过填充以保持 WYSIWYG
+  if (color.r === 0 && color.g === 0 && color.b === 0) return;
   const z = surf.scale;
   // 转换为像素坐标
   const pts = points.map(p => ({
@@ -1495,27 +1505,41 @@ function drawFillPolygon(surf, points, color, alpha) {
   if (minY > maxY) return;
 
   const n = pts.length;
+
   for (let y = minY; y <= maxY; y++) {
-    const xs = [];
-    for (let i = 0; i < n; i++) {
-      const p1 = pts[i];
-      const p2 = pts[(i + 1) % n];
-      // 半开半闭：边端点 y 较小者包含，较大者不包含，避免重复计数
-      let y0, y1, x0, x1;
-      if (p1.y < p2.y) { y0 = p1.y; y1 = p2.y; x0 = p1.x; x1 = p2.x; }
-      else if (p1.y > p2.y) { y0 = p2.y; y1 = p1.y; x0 = p2.x; x1 = p1.x; }
-      else continue; // 水平边跳过
-      if (y >= y0 && y < y1) {
-        // 线性插值求 x
-        const t = (y - y0) / (y1 - y0);
-        xs.push(x0 + t * (x1 - x0));
-      }
+    const intersections = [];
+    // 扫描线在像素中心 y+0.5，用 8.8 定点数表示
+    const scan_y = (y << 8) + 128;
+
+    for (let i = 0, j = n - 1; i < n; j = i++) {
+      // 顶点坐标转 8.8 定点数 + 0.5 偏移
+      const x1_q8 = (pts[j].x << 8) + 128;
+      const y1_q8 = (pts[j].y << 8) + 128;
+      const x2_q8 = (pts[i].x << 8) + 128;
+      const y2_q8 = (pts[i].y << 8) + 128;
+
+      // 奇偶规则：两端点严格大于扫描线的情况相同则跳过
+      if ((y1_q8 > scan_y) === (y2_q8 > scan_y) || y1_q8 === y2_q8) continue;
+
+      // 线性插值求 x 交点（8.8 定点数，C 的 int64 除法向零截断）
+      const num = (scan_y - y1_q8) * (x2_q8 - x1_q8);
+      const den = (y2_q8 - y1_q8);
+      const x_q8 = x1_q8 + Math.trunc(num / den);
+      // 转回整数坐标（减 0.5 偏移后右移 8 位）
+      intersections.push((x_q8 - 128) >> 8);
     }
-    xs.sort((a, b) => a - b);
-    for (let i = 0; i + 1 < xs.length; i += 2) {
-      const sx1 = Math.max(Math.ceil(xs[i] - 0.5), surf.clip.x1);
-      const sx2 = Math.min(Math.floor(xs[i + 1] + 0.5), surf.clip.x2);
-      for (let x = sx1; x <= sx2; x++) {
+
+    if (intersections.length < 2) continue;
+
+    // 排序
+    intersections.sort((a, b) => a - b);
+
+    // 成对填充，内缩 1 像素（与 SGL 一致）
+    for (let i = 0; i + 1 < intersections.length; i += 2) {
+      const x_start = Math.max(intersections[i] + 1, surf.clip.x1);
+      const x_end = Math.min(intersections[i + 1] - 1, surf.clip.x2);
+      if (x_start > x_end) continue;
+      for (let x = x_start; x <= x_end; x++) {
         setPixel(surf, x, y, color, alpha);
       }
     }
@@ -1523,7 +1547,115 @@ function drawFillPolygon(surf, points, color, alpha) {
 }
 
 // ============================================================
+// sgl_polygon_draw_border_line - 多边形边框线段（SDF 算法）
+// 精确移植自 sgl_polygon.c:41-132
+// 算法要点：
+//   - 8.8 定点数 SDF，像素中心 (px<<8)+128
+//   - radius_fp = width << 7（半宽，q8）
+//   - fade = radius_fp + 128 - dist（width/2 + 0.5 - dist）
+//   - 端点圆角 cap（投影到端点后求距离）
+//   - sgl_sqrt 返回 floor(sqrt(x))
+// ============================================================
+
+/**
+ * @param {object} surf - 绘制表面
+ * @param {number} x1,y1,x2,y2 - 线段端点（逻辑坐标）
+ * @param {number} width - 边框宽度
+ * @param {{r,g,b}} color - 边框色
+ * @param {number} alpha - 透明度 0-255
+ */
+function drawPolygonBorderLine(surf, x1, y1, x2, y2, width, color, alpha) {
+  if (width === 0 || alpha === 0) return;
+  const z = surf.scale;
+  const px1 = Math.round(x1 * z);
+  const py1 = Math.round(y1 * z);
+  const px2 = Math.round(x2 * z);
+  const py2 = Math.round(y2 * z);
+
+  const bax = px2 - px1;
+  const bay = py2 - py1;
+  const len_sq = bax * bax + bay * bay;
+
+  // 长度为 0（点）的情况：画圆
+  if (len_sq === 0) {
+    const radius = ((width + 1) >> 1);
+    for (let py = py1 - radius; py <= py1 + radius; py++) {
+      for (let px = px1 - radius; px <= px1 + radius; px++) {
+        const dx = ((px << 8) + 128) - ((px1 << 8) + 128);
+        const dy = ((py << 8) + 128) - ((py1 << 8) + 128);
+        // sgl_sqrt 返回 floor(sqrt(x))
+        const dist = Math.floor(Math.sqrt(dx * dx + dy * dy));
+        const radius_fp = width << 7;
+        const fade = radius_fp + 128 - dist;
+        if (fade > 0) {
+          const cov = fade >= 255 ? 255 : fade;
+          // 用 setEdgePixel 正确处理透明背景上的抗锯齿（保留 alpha 通道）
+          setEdgePixel(surf, px, py, color, cov, alpha);
+        }
+      }
+    }
+    return;
+  }
+
+  // 正常线段：SDF 算法
+  const extent = (width + 3) >> 1;
+  const minX = Math.max(surf.clip.x1, Math.min(px1, px2) - extent);
+  const maxX = Math.min(surf.clip.x2, Math.max(px1, px2) + extent);
+  const minY = Math.max(surf.clip.y1, Math.min(py1, py2) - extent);
+  const maxY = Math.min(surf.clip.y2, Math.max(py1, py2) + extent);
+
+  const radius_fp = width << 7;
+  const len_sq_shift16 = len_sq << 16;
+  const px1_q8 = (px1 << 8) + 128;
+  const py1_q8 = (py1 << 8) + 128;
+  const px2_q8 = (px2 << 8) + 128;
+  const py2_q8 = (py2 << 8) + 128;
+  const bax_q8 = bax << 8;
+  const bay_q8 = bay << 8;
+
+  for (let py = minY; py <= maxY; py++) {
+    for (let px = minX; px <= maxX; px++) {
+      const pcx = (px << 8) + 128;
+      const pcy = (py << 8) + 128;
+      const ax = pcx - px1_q8;
+      const ay = pcy - py1_q8;
+      // 点积（int64 运算，JS Number 可精确表示到 2^53）
+      const dot = ax * bax_q8 + ay * bay_q8;
+
+      let qx, qy;
+      if (dot <= 0) {
+        // 投影到起点
+        qx = px1_q8;
+        qy = py1_q8;
+      } else if (dot >= len_sq_shift16) {
+        // 投影到终点
+        qx = px2_q8;
+        qy = py2_q8;
+      } else {
+        // 投影到线段上（C int64 除法向零截断，用浮点近似避免溢出）
+        const t = dot / len_sq_shift16;
+        qx = px1_q8 + Math.trunc(bax_q8 * t);
+        qy = py1_q8 + Math.trunc(bay_q8 * t);
+      }
+
+      const dx = pcx - qx;
+      const dy = pcy - qy;
+      // sgl_sqrt 返回 floor(sqrt(x))
+      const dist = Math.floor(Math.sqrt(dx * dx + dy * dy));
+      const fade = radius_fp + 128 - dist;
+
+      if (fade > 0) {
+        const cov = fade >= 255 ? 255 : fade;
+        // 用 setEdgePixel 正确处理透明背景上的抗锯齿（保留 alpha 通道）
+        setEdgePixel(surf, px, py, color, cov, alpha);
+      }
+    }
+  }
+}
+
+// ============================================================
 // sgl_draw_polygon_border - 多边形边框（连接各顶点）
+// 调用 sgl_polygon_draw_border_line 绘制每条边
 // ============================================================
 
 /**
@@ -1531,11 +1663,14 @@ function drawFillPolygon(surf, points, color, alpha) {
  */
 function drawPolygonBorder(surf, points, borderColor, border, alpha) {
   if (border <= 0 || alpha <= 0 || !points || points.length < 2) return;
+  // SGL: if (polygon->border_color.full != 0) 才画边框
+  // RGB565 下黑色 (0,0,0) 的 .full = 0，跳过边框以保持 WYSIWYG
+  if (borderColor.r === 0 && borderColor.g === 0 && borderColor.b === 0) return;
   const n = points.length;
   for (let i = 0; i < n; i++) {
     const p1 = points[i];
     const p2 = points[(i + 1) % n];
-    drawLine(surf, p1.x, p1.y, p2.x, p2.y, border, borderColor, alpha);
+    drawPolygonBorderLine(surf, p1.x, p1.y, p2.x, p2.y, border, borderColor, alpha);
   }
 }
 
@@ -1559,10 +1694,18 @@ const SGL_COLOR_BLACK = { r: 0, g: 0, b: 0 };
 // ============================================================
 function drawWireframe(surf, x1, y1, x2, y2, radius, border, color, alpha) {
   if (border <= 0 || alpha <= 0) return;
-  drawHLine(surf, x1, x2, y1, border, color, alpha);
-  drawHLine(surf, x1, x2, y2, border, color, alpha);
-  drawVLine(surf, x1, y1, y2, border, color, alpha);
-  drawVLine(surf, x2, y1, y2, border, color, alpha);
+  if (radius === 0) {
+    // 直角框：与 SGL sgl_draw_wireframe radius==0 分支一致
+    const sOfs = Math.floor((border - 1) / 2);
+    const eOfs = Math.floor(border / 2);
+    drawHLine(surf, x1, x2, y1 + sOfs, border, color, alpha);
+    drawHLine(surf, x1, x2, y2 - eOfs, border, color, alpha);
+    drawVLine(surf, x1 + sOfs, y1, y2, border, color, alpha);
+    drawVLine(surf, x2 - eOfs, y1, y2, border, color, alpha);
+  } else {
+    // 圆角框：与 SGL sgl_draw_wireframe radius>0 分支一致，调用 drawFillRectBorder
+    drawFillRectBorder(surf, x1, y1, x2, y2, radius, color, border, alpha);
+  }
 }
 
 // ============================================================
@@ -1788,6 +1931,109 @@ function drawDashedLine(surf, x1, y1, x2, y2, dashLen, gapLen, color, alpha) {
 }
 
 // ============================================================
+// 位图绘制（按 pixmapFormat 量化像素，匹配 SGL 色彩降级）
+// ============================================================
+
+// 将 bits 位量化值扩展回 8 位（SGL 位深扩展算法）
+// 例如 5 位 0b11111(31) → 0b11111111(255)
+function _expandBits(v, bits) {
+  if (bits >= 8) return v & 0xff;
+  let result = 0;
+  let shift = 8 - bits;
+  while (shift >= 0) {
+    result |= v << shift;
+    shift -= bits;
+  }
+  if (shift < 0) {
+    result |= v >> (-shift);
+  }
+  return result & 0xff;
+}
+
+/**
+ * 按 pixmapFormat 量化绘制图片到 surface（WYSIWYG 色彩降级）
+ * RLE_* 格式为无损压缩，视觉与基础格式相同，按基础格式渲染
+ * 按最近邻算法缩放到目标尺寸
+ * @param {Object} surf - createSurface 返回的表面
+ * @param {number} x, y - 目标起始坐标（像素坐标）
+ * @param {number} destW, destH - 目标宽高（像素坐标）
+ * @param {ImageData} imgData - 图片像素数据
+ * @param {string} fmt - pixmapFormat (RGB565/ARGB4444/RGB888/ARGB8888/RGB332/ARGB2222 或 RLE_ 前缀)
+ * @param {number} alpha - 整体透明度 0-255
+ */
+function drawPixmap(surf, x, y, destW, destH, imgData, fmt, alpha) {
+  if (!imgData || alpha <= 0 || destW <= 0 || destH <= 0) return;
+  const srcW = imgData.width;
+  const srcH = imgData.height;
+  const srcData = imgData.data;
+
+  // 去掉 RLE_ 前缀（无损压缩，视觉相同）
+  const baseFmt = (fmt || 'RGB565').replace(/^RLE_/, '').toUpperCase();
+
+  // 各通道位深
+  let rBits, gBits, bBits, aBits;
+  switch (baseFmt) {
+    case 'RGB332':    rBits = 3; gBits = 3; bBits = 2; aBits = 0; break;
+    case 'ARGB2222':  rBits = 2; gBits = 2; bBits = 2; aBits = 2; break;
+    case 'RGB565':    rBits = 5; gBits = 6; bBits = 5; aBits = 0; break;
+    case 'ARGB4444':  rBits = 4; gBits = 4; bBits = 4; aBits = 4; break;
+    case 'RGB888':    rBits = 8; gBits = 8; bBits = 8; aBits = 0; break;
+    case 'ARGB8888':  rBits = 8; gBits = 8; bBits = 8; aBits = 8; break;
+    default:          rBits = 5; gBits = 6; bBits = 5; aBits = 0; break;
+  }
+
+  const rShift = 8 - rBits;
+  const gShift = 8 - gBits;
+  const bShift = 8 - bBits;
+  const aShift = aBits > 0 ? (8 - aBits) : 0;
+
+  for (let py = 0; py < destH; py++) {
+    const dy = y + py;
+    if (dy < surf.clip.y1 || dy > surf.clip.y2) continue;
+    // 最近邻：目标像素 → 源像素
+    const sy = ((py * srcH) / destH) | 0;
+    for (let px = 0; px < destW; px++) {
+      const dx = x + px;
+      if (dx < surf.clip.x1 || dx > surf.clip.x2) continue;
+      const sx = ((px * srcW) / destW) | 0;
+
+      const srcIdx = (sy * srcW + sx) * 4;
+      let r = srcData[srcIdx];
+      let g = srcData[srcIdx + 1];
+      let b = srcData[srcIdx + 2];
+      let a = srcData[srcIdx + 3];
+
+      // 按 SGL 位深量化：取高位再扩展回 8 位
+      if (rBits < 8) r = _expandBits(r >> rShift, rBits);
+      if (gBits < 8) g = _expandBits(g >> gShift, gBits);
+      if (bBits < 8) b = _expandBits(b >> bShift, bBits);
+      if (aBits === 0) {
+        a = 255; // 不带 alpha 的格式强制不透明
+      } else if (aBits < 8) {
+        a = _expandBits(a >> aShift, aBits);
+      }
+
+      const finalAlpha = (a * alpha) >> 8;
+      if (finalAlpha <= 0) continue;
+
+      const idx = dy * surf.w + dx;
+      if (finalAlpha >= 255) {
+        surf.buf32[idx] = 0xff000000 | (b << 16) | (g << 8) | r;
+      } else {
+        const existing = surf.buf32[idx];
+        const bg = {
+          r: existing & 0xff,
+          g: (existing >> 8) & 0xff,
+          b: (existing >> 16) & 0xff,
+        };
+        const mixed = colorMixer({ r, g, b }, bg, finalAlpha);
+        surf.buf32[idx] = 0xff000000 | (mixed.b << 16) | (mixed.g << 8) | mixed.r;
+      }
+    }
+  }
+}
+
+// ============================================================
 // 字体辅助（近似 SGL 字模）
 // ============================================================
 function fontHeight(fontSize) {
@@ -1877,6 +2123,8 @@ const SGLRenderer = {
   drawWireframe,
   drawIcon,
   drawDashedLine,
+  // 位图绘制（按 pixmapFormat 量化）
+  drawPixmap,
   DROPDOWN_ICON,
   CHECKBOX_UNCHECKED_ICON,
   CHECKBOX_CHECKED_ICON,

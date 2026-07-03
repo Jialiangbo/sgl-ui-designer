@@ -296,6 +296,31 @@ export const AppState = {
       widget.width = widget.radiusOut * 2;
       widget.height = widget.radiusOut * 2;
     }
+    // textline 控件：SGL 会根据文本自动计算高度 y2 = y1 + (string_height + 2*radius) - 1
+    // 新建时按默认文本和字号计算实际高度，与 SGL 仿真保持一致
+    if (type === 'textline') {
+      const tlFontSize = widget.fontSize != null ? widget.fontSize : 14;
+      const tlLineMargin = widget.lineMargin != null ? widget.lineMargin : 1;
+      const tlRadius = widget.radius || 0;
+      const tlText = widget.text || '';
+      // 简化行数计算：按 SGL sgl_font_get_string_height 算法近似（单行宽度估算）
+      const tlAvailWidth = widget.width - 2 * tlRadius;
+      let tlLines = 1;
+      if (tlText) {
+        const cv = document.createElement('canvas');
+        const ctx = cv.getContext('2d');
+        ctx.font = `${tlFontSize}px system-ui, sans-serif`;
+        let offset_x = 0;
+        for (let i = 0; i < tlText.length; i++) {
+          const ch = tlText[i];
+          if (ch === '\n') { tlLines++; offset_x = 0; continue; }
+          const chWidth = ctx.measureText(ch).width;
+          if (offset_x + chWidth >= tlAvailWidth) { offset_x = 0; tlLines++; }
+          offset_x += chWidth;
+        }
+      }
+      widget.height = tlLines * (tlFontSize + tlLineMargin) + 2 * tlRadius;
+    }
     page.widgets.push(widget);
     this.selectedWidgetIds.clear();
     this.selectedWidgetIds.add(id);

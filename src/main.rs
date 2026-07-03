@@ -52,6 +52,10 @@ struct Widget {
     knob_color: Option<String>,
     #[serde(rename = "textColor")]
     text_color: Option<String>,
+    #[serde(rename = "boxColor", default)]
+    box_color: Option<String>,
+    #[serde(rename = "checkColor", default)]
+    check_color: Option<String>,
     #[serde(rename = "onColor")]
     on_color: Option<String>,
     #[serde(rename = "knobRadius")]
@@ -91,6 +95,8 @@ struct Widget {
     event_cb: Option<String>,
     #[serde(rename = "parentId", default)]
     parent_id: Option<String>,
+    #[serde(default)]
+    locked: Option<bool>,
     #[serde(default)]
     x1: Option<i32>,
     #[serde(default)]
@@ -696,6 +702,28 @@ fn parse_hex_color(hex: &str) -> Option<(u8, u8, u8)> {
     Some((r, g, b))
 }
 
+/// 返回原始图片的 RGBA 像素数据（base64 编码），前端用 new ImageData 构建
+/// 避免 PNG 编解码开销和 Tauri WebView canvas 污染问题
+#[derive(Serialize)]
+struct ImageRgbaData {
+    width: u32,
+    height: u32,
+    data: String, // base64 编码的 RGBA 字节数组
+}
+
+#[tauri::command]
+fn get_image_data_url(path: String) -> Result<ImageRgbaData, String> {
+    let img = image::open(&path).map_err(|e| format!("无法打开图片 {}: {}", path, e))?;
+    let rgba = img.to_rgba8();
+    let (w, h) = rgba.dimensions();
+    let base64 = base64::engine::general_purpose::STANDARD.encode(rgba.as_raw());
+    Ok(ImageRgbaData {
+        width: w,
+        height: h,
+        data: base64,
+    })
+}
+
 #[tauri::command]
 fn get_opaque_image_data_url(path: String, fill_color: String) -> Result<String, String> {
     let img = image::open(&path).map_err(|e| format!("无法打开图片 {}: {}", path, e))?;
@@ -1001,7 +1029,7 @@ fn get_create_fn(t: &str) -> &'static str {
         "2dball" => "sgl_2dball_create",
         "sprite" => "sgl_sprite_create",
         "analogclock" => "sgl_analogclock_create",
-        "ext_img" => "sgl_ext_img_create",
+        "ext_img" => "sgl_img_ext_create",
         _ => "sgl_rect_create",
     }
 }
@@ -1173,7 +1201,6 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             cclr!("sgl_switch_set_border_color", w.border_color);
             c!( "sgl_switch_set_border_width", w.border_width.map(|v| v as i16));
             c!( "sgl_switch_set_radius", w.radius.map(|v| v as u16));
-            c!( "sgl_switch_set_knob_radius", w.knob_radius.map(|v| v as u8));
             c!( "sgl_switch_set_knob_margin", w.knob_margin.map(|v| v as u8));
             c!( "sgl_switch_set_alpha", w.alpha.map(|v| v as u8));
             if let Some(pix) = &w.pixmap {
@@ -1192,7 +1219,6 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             c!( "sgl_slider_set_border_width", w.border_width.map(|v| v as u8));
             c!( "sgl_slider_set_radius", w.radius.map(|v| v as u8));
             c!( "sgl_slider_set_thickness", w.thickness.map(|v| v as u8));
-            c!( "sgl_slider_set_alpha", w.alpha.map(|v| v as u8));
         }
         "progress" => {
             c!( "sgl_progress_set_value", w.value.map(|v| v as u8));
@@ -1203,7 +1229,8 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             c!( "sgl_progress_set_radius", w.radius.map(|v| v as u8));
             c!( "sgl_progress_set_fill_gap", w.fill_gap.map(|v| v as u8));
             c!( "sgl_progress_set_fill_radius", w.fill_radius.map(|v| v as u8));
-            c!( "sgl_progress_set_alpha", w.alpha.map(|v| v as u8));
+            c!( "sgl_progress_set_track_alpha", w.alpha.map(|v| v as u8));
+            c!( "sgl_progress_set_fill_alpha", w.alpha.map(|v| v as u8));
         }
         "gauge" => {
             cclr!("sgl_gauge_set_bg_color", w.bg_color);
@@ -1258,7 +1285,12 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
                 code.push_str(&format!("    sgl_checkbox_set_status({}, {});\n", obj, if s { "true" } else { "false" }));
             }
             cstr!("sgl_checkbox_set_text", w.text);
-            cclr!("sgl_checkbox_set_color", w.color);
+            // checkbox 新 API：拆分为 text_color / box_color / check_color
+            // text_color 优先用 textColor，回退到 color（兼容前端现有属性）
+            let cb_text_clr = w.text_color.clone().or_else(|| w.color.clone());
+            cclr!("sgl_checkbox_set_text_color", cb_text_clr);
+            cclr!("sgl_checkbox_set_box_color", w.box_color);
+            cclr!("sgl_checkbox_set_check_color", w.check_color);
             if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
                 let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
                 code.push_str(&format!("    sgl_checkbox_set_font({}, &{});\n", obj, fid));
@@ -1280,7 +1312,7 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             c!( "sgl_msgbox_set_alpha", w.alpha.map(|v| v as u8));
         }
         "dropdown" => {
-            cclr!("sgl_dropdown_set_color", w.color);
+            cclr!("sgl_dropdown_set_bg_color", w.color);
             cclr!("sgl_dropdown_set_selected_color", w.bg_color);
             cclr!("sgl_dropdown_set_border_color", w.border_color);
             cclr!("sgl_dropdown_set_text_color", w.text_color);
@@ -1382,12 +1414,7 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
                 let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
                 code.push_str(&format!("    sgl_polygon_set_font({}, &{});\n", obj, fid));
             }
-            if let Some(ref pixmap) = w.pixmap {
-                if !pixmap.is_empty() {
-                    let fmt = w.pixmap_format.as_deref().unwrap_or("RGB565");
-                    code.push_str(&format!("    sgl_polygon_set_pixmap({}, &{});\n", obj, pixmap_var_name(pixmap, fmt)));
-                }
-            }
+            // sgl_polygon_set_pixmap 在 sgl 头文件中声明被注释（waiting for support），暂不生成调用
         }
         "numberkbd" => {
             cclr!("sgl_numberkbd_set_color", w.color);
@@ -1431,7 +1458,7 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             c!( "sgl_2dball_set_alpha", w.alpha.map(|v| v as u8));
         }
         "ext_img" => {
-            c!( "sgl_ext_img_set_alpha", w.alpha.map(|v| v as u8));
+            c!( "sgl_img_ext_set_alpha", w.alpha.map(|v| v as u8));
         }
         "spectrum" => {
             cclr!("sgl_spectrum_set_bar_color", w.color);
@@ -1701,6 +1728,43 @@ fn copy_dir_contents(src: &std::path::Path, dst: &std::path::Path) -> Result<(),
     Ok(())
 }
 
+/// 递归同步 SGL 库源码（仅 .c 和 .h 文件，排除 sgl_config.h 以免覆盖 demo 同步的配置）
+/// 总是用 copy 覆盖目标文件（更新时间戳），确保 make 检测到 .c 比 .obj 新而重新编译
+/// 返回真正发生内容变化的文件数（用于决定是否清理 build 目录）
+fn sync_sgl_source(src: &std::path::Path, dst: &std::path::Path) -> Result<usize, String> {
+    std::fs::create_dir_all(dst)
+        .map_err(|e| format!("创建目录 {} 失败: {}", dst.to_string_lossy(), e))?;
+    let mut count = 0;
+    for entry in std::fs::read_dir(src)
+        .map_err(|e| format!("读取目录 {} 失败: {}", src.to_string_lossy(), e))?
+    {
+        let entry = entry.map_err(|e| format!("读取目录项失败: {}", e))?;
+        let src_path = entry.path();
+        let dst_path = dst.join(src_path.file_name().unwrap_or_default());
+        if src_path.is_dir() {
+            count += sync_sgl_source(&src_path, &dst_path)?;
+        } else if let Some(ext) = src_path.extension() {
+            if (ext == "c" || ext == "h")
+                && src_path.file_name() != Some(std::ffi::OsStr::new("sgl_config.h"))
+            {
+                let src_bytes = std::fs::read(&src_path)
+                    .map_err(|e| format!("读取源文件 {} 失败: {}", src_path.to_string_lossy(), e))?;
+                let dst_bytes = std::fs::read(&dst_path).unwrap_or_default();
+                let changed = src_bytes != dst_bytes;
+                // 总是覆盖文件以更新时间戳，确保 make 重新编译该文件
+                // 这解决了".c 内容已正确但 .obj 是旧版本"的时间戳问题
+                std::fs::write(&dst_path, &src_bytes).map_err(|e| {
+                    format!("同步 {} 失败: {}", src_path.to_string_lossy(), e)
+                })?;
+                if changed {
+                    count += 1;
+                }
+            }
+        }
+    }
+    Ok(count)
+}
+
 /// 导出代码到项目目录的 code/ 子文件夹
 #[tauri::command]
 fn export_code_to_project(mut project: Project, project_path: String, code: String) -> Result<String, String> {
@@ -1861,6 +1925,67 @@ fn sgl_submodule_branch(sgl_port_dir: &std::path::Path) -> String {
     }
 }
 
+/// 带超时的 git fetch（国内访问 GitHub 可能失败，设置 15 秒总超时 + 网络低速超时）
+/// GIT_HTTP_LOW_SPEED_TIME=5 表示连续 5 秒速度低于 GIT_HTTP_LOW_SPEED_LIMIT(1000 字节/秒) 即中止
+fn run_git_fetch_with_timeout(
+    submodule_path: &std::path::Path,
+    window: &tauri::Window,
+    timeout_secs: u64,
+) -> Result<std::process::ExitStatus, String> {
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+    use std::time::Duration;
+
+    let mut child = Command::new("git")
+        .current_dir(submodule_path)
+        .args(&["fetch", "origin"])
+        .env("GIT_HTTP_LOW_SPEED_TIME", "5")
+        .env("GIT_HTTP_LOW_SPEED_LIMIT", "1000")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("启动 git fetch 失败: {}", e))?;
+
+    let stdout = child.stdout.take().ok_or("无法捕获标准输出")?;
+    let stderr = child.stderr.take().ok_or("无法捕获标准错误")?;
+    let w_out = window.clone();
+    let w_err = window.clone();
+
+    std::thread::spawn(move || {
+        let reader = BufReader::new(stdout);
+        for line in reader.lines() {
+            if let Ok(l) = line {
+                let _ = w_out.emit("build-log", serde_json::json!({"message": l, "level": "info"}));
+            }
+        }
+    });
+
+    std::thread::spawn(move || {
+        let reader = BufReader::new(stderr);
+        for line in reader.lines() {
+            if let Ok(l) = line {
+                let _ = w_err.emit("build-log", serde_json::json!({"message": l, "level": "error"}));
+            }
+        }
+    });
+
+    // 轮询等待，超时则杀掉进程
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) => {
+                if start.elapsed() >= Duration::from_secs(timeout_secs) {
+                    let _ = child.kill();
+                    return Err(format!("git fetch 超时（{} 秒），可能无法访问 GitHub", timeout_secs));
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            }
+            Err(e) => return Err(format!("等待 git fetch 结束失败: {}", e)),
+        }
+    }
+}
+
 /// 检查 sgl 子模块本地版本是否与远程一致（git fetch 日志实时输出到控制台）
 fn is_sgl_submodule_up_to_date(
     sgl_port_dir: &std::path::Path,
@@ -1873,10 +1998,11 @@ fn is_sgl_submodule_up_to_date(
     }
     let branch = sgl_submodule_branch(sgl_port_dir);
 
-    let fetch_status = run_command_stream("git", &["fetch", "origin"], &submodule_path, window)
+    // 带超时的 fetch，避免国内访问 GitHub 长时间挂起
+    let fetch_status = run_git_fetch_with_timeout(&submodule_path, window, 15)
         .map_err(|e| format!("获取 sgl 子模块远程信息失败: {}", e))?;
     if !fetch_status.success() {
-        return Err("获取 sgl 子模块远程信息失败".to_string());
+        return Err("获取 sgl 子模块远程信息失败（可能无法访问 GitHub）".to_string());
     }
 
     let local = Command::new("git")
@@ -2145,6 +2271,33 @@ fn build_project(
         "已跳过 sgl 子模块更新".to_string()
     };
 
+    // 同步设计器内置 SGL 库源码（sgl/source/）到 sgl-port-windows-vscode/sgl/source/
+    // 确保设计器对 SGL 库的修改（如 sgl_draw_rect.c 格式解码、sgl_checkbox.h 新 API）在仿真器中生效
+    // 源路径使用编译时设计器项目根目录，而非用户项目目录（用户项目可能没有 sgl/ 子目录）
+    let app_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let local_sgl_source = app_dir.join("sgl").join("source");
+    let port_sgl_source = sgl_port_dir.join("sgl").join("source");
+    let mut sgl_source_changed = false;
+    if local_sgl_source.exists() {
+        match sync_sgl_source(&local_sgl_source, &port_sgl_source) {
+            Ok(n) => {
+                if n > 0 {
+                    sgl_source_changed = true;
+                    let _ = window.emit(
+                        "build-log",
+                        serde_json::json!({ "message": format!("已同步 {} 个 SGL 库源文件到仿真器", n), "level": "info" }),
+                    );
+                }
+            }
+            Err(e) => {
+                let _ = window.emit(
+                    "build-log",
+                    serde_json::json!({ "message": format!("同步 SGL 库源码失败: {}", e), "level": "warn" }),
+                );
+            }
+        }
+    }
+
     // 清理旧的 demo/bg.c 和 demo/test.c，只使用设计器生成的 ui.c
     let demo_dir = sgl_port_dir.join("demo");
     let _ = std::fs::remove_file(demo_dir.join("bg.c"));
@@ -2166,8 +2319,25 @@ fn build_project(
 
     // 字模文件可能新增或删除，强制重新 cmake configure 以确保 GLOB 收集最新源文件
     let build_dir = sgl_port_dir.join("build");
-    let _ = std::fs::remove_file(build_dir.join("CMakeCache.txt"));
-    let _ = std::fs::remove_file(build_dir.join("Makefile"));
+    if sgl_source_changed && build_dir.exists() {
+        // SGL 库源码有变化时，仅清理 sgl.dir 目录（SGL 库的 .obj），保留 sgl_simulator.dir（demo 的 .obj）
+        // 这样 SGL 库会重新编译，demo 文件走增量编译，兼顾正确性与速度
+        let sgl_obj_dir = build_dir.join("CMakeFiles").join("sgl.dir");
+        if sgl_obj_dir.exists() {
+            let _ = std::fs::remove_dir_all(&sgl_obj_dir);
+            let _ = window.emit(
+                "build-log",
+                serde_json::json!({ "message": "SGL 库源码已更新，清理 SGL 库 .obj 重新编译（demo 文件保留增量编译）", "level": "info" }),
+            );
+        }
+        // 删除缓存文件，触发重新 configure
+        let _ = std::fs::remove_file(build_dir.join("CMakeCache.txt"));
+        let _ = std::fs::remove_file(build_dir.join("Makefile"));
+    } else {
+        // 仅删除缓存文件，触发重新 configure，保留增量编译
+        let _ = std::fs::remove_file(build_dir.join("CMakeCache.txt"));
+        let _ = std::fs::remove_file(build_dir.join("Makefile"));
+    }
 
     // 检查 gcc
     if which_command_path("gcc").is_none() {
@@ -2758,6 +2928,7 @@ fn main() {
             read_sgl_config_from_file,
             write_sgl_config_to_file,
             append_log,
+            get_image_data_url,
             get_opaque_image_data_url,
             generate_font_c_content,
             exec_command

@@ -31,3 +31,19 @@ stderr.log
 # 桌面临时文件
 sgl_ui_designer_test.exe
 sgl_ui_designer_v2.exe
+
+# SGL 库源码（作为 submodule 或外部依赖管理，不直接提交）
+sgl/
+
+# 临时脚本与报告
+__pycache__/
+*.pyc
+_patch_label.js
+patch_label.cjs
+audit_rust.py
+audit_widgets.py
+scan_widget_apis.py
+build_and_run.bat
+SGL_Widget_API_Scan.md
+SGL_Widget_Comparison_Report.md
+src/_new_func.tmp.js

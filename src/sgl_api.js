@@ -110,7 +110,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="8" rx="1"/><polyline points="5,7 7,9 11,4"/></svg>',
     category: 'interactive',
     defaultSize: [120, 24],
-    properties: ['text', 'status', 'color', 'fontSize', 'fontFamily', 'fontBpp', 'alpha', 'radius', 'locked']
+    properties: ['text', 'status', 'color', 'textColor', 'boxColor', 'checkColor', 'fontSize', 'fontFamily', 'fontBpp', 'alpha', 'radius', 'locked']
   },
   {
     type: 'slider',
@@ -411,6 +411,8 @@ export const PROP_META = {
   color: { label: '颜色', type: 'color' },
   cellColor: { label: '单元颜色', type: 'color' },
   textColor: { label: '文字颜色', type: 'color' },
+  boxColor: { label: '盒子颜色', type: 'color' },
+  checkColor: { label: '勾选颜色', type: 'color' },
   titleColor: { label: '标题颜色', type: 'color' },
   titleTextColor: { label: '标题文本颜色', type: 'color' },
   titleBgColor: { label: '标题背景色', type: 'color' },
@@ -504,7 +506,7 @@ export const PROP_META = {
   scaleLength: { label: '刻度长度', type: 'number', min: 0, max: 50 },
   scaleStart: { label: '刻度起始值', type: 'number', min: -1000, max: 1000 },
   scaleStep: { label: '刻度步长', type: 'number', min: 1, max: 1000 },
-  scaleAngle: { label: '刻度角度', type: 'number', min: 0, max: 360 },
+  scaleAngle: { label: '刻度角度', type: 'number', min: 1, max: 360 },
   textInterval: { label: '文本间隔', type: 'number', min: 1, max: 50 },
   scaleWarning: { label: '警戒值', type: 'number', min: -1000, max: 1000 },
   pointerWidth: { label: '指针宽度', type: 'number', min: 1, max: 30 },
@@ -733,7 +735,7 @@ export function createWidgetDefaults(type) {
     case 'switch':
       return { ...base, status: false, onColor: '#FFFFFF', bgColor: '#000000', knobColor: '#808080', borderColor: '#000000', borderWidth: 2, radius: 0, knobRadius: 255, knobMargin: 2, pixmap: '', pixmapFormat: 'RGB565' };
     case 'checkbox':
-      return { ...base, text: '选项', color: '#000000', status: false, radius: 0, fontSize: 14, fontFamily: '', fontBpp: 4 };
+      return { ...base, text: '选项', color: '#000000', textColor: '#000000', boxColor: '#2196F3', checkColor: '#FFFFFF', status: false, radius: 0, fontSize: 14, fontFamily: '', fontBpp: 4 };
     case 'slider':
       return { ...base, value: 50, direct: 0, fillColor: '#8b5cf6', trackColor: '#313149', knobColor: '#ffffff', borderWidth: 2, radius: 4, thickness: 255 };
     case 'numberkbd':
@@ -747,7 +749,7 @@ export function createWidgetDefaults(type) {
     case 'textline':
       return { ...base, text: 'textline', textColor: '#000000', bgColor: '#FFFFFF', bgTransparent: false, radius: 0, fontSize: 14, fontFamily: '', fontBpp: 4, edgeMargin: 0, lineMargin: 1 };
     case 'textlist':
-      return { ...base, options: '选项1\\n选项2\\n选项3', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, fontSize: 12, fontFamily: '', fontBpp: 4, textColor: '#000000', selectedColor: '#808080', pixmap: '' };
+      return { ...base, options: '选项1\n选项2\n选项3', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, fontSize: 12, fontFamily: '', fontBpp: 4, textColor: '#000000', selectedColor: '#808080', pixmap: '' };
     case 'progress':
       return { ...base, value: 50, fillColor: '#FFFFFF', trackColor: '#000000', borderColor: '#000000', borderWidth: 2, radius: 0, fillGap: 4, fillRadius: 0, fillWidth: 4, direct: 0 };
     case 'bar':
@@ -813,7 +815,7 @@ export const WIDGET_DEFAULTS = {
   polygon: { fillColor: '#7F7F7F', borderColor: '#000000', borderWidth: 1, alpha: 255, vertices: '40,5;70,30;60,75;20,75;10,30', text: '', textColor: '#000000', fontFamily: '', fontSize: 14, fontBpp: 4 },
   button: { text: '按钮', color: '#ffffff', textColor: '#000000', borderColor: '#000000', borderWidth: 2, radius: 0, align: 'CENTER', fontSize: 14, fontFamily: '', fontBpp: 4, alpha: 255, pixmap: '', pixmapFormat: 'RGB565' },
   switch: { status: false, onColor: '#FFFFFF', bgColor: '#000000', knobColor: '#808080', borderColor: '#000000', borderWidth: 2, radius: 0, knobRadius: 255, knobMargin: 0, alpha: 255, pixmap: '', pixmapFormat: 'RGB565' },
-  checkbox: { text: '选项', color: '#000000', status: false, radius: 0, fontSize: 14, fontFamily: '', fontBpp: 4, alpha: 255 },
+  checkbox: { text: '选项', color: '#000000', textColor: '#000000', boxColor: '#2196F3', checkColor: '#FFFFFF', status: false, radius: 0, fontSize: 14, fontFamily: '', fontBpp: 4, alpha: 255 },
   slider: { value: 50, direct: 0, fillColor: '#000000', trackColor: '#808080', knobColor: '#000000', borderWidth: 2, radius: 4, thickness: 255, alpha: 255 },
   numberkbd: { cellColor: '#FFFFFF', borderColor: '#000000', borderWidth: 2, radius: 0, fontFamily: '', fontSize: 14, fontBpp: 4, btnColor: '#FFFFFF', textColor: '#000000', btnMargin: 1, btnBorderWidth: 1, btnBorderColor: '#000000', btnRadius: 0, btnPixmap: '', pixmap: '', pixmapFormat: 'RGB565', alpha: 255 },
   keyboard: { cellColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, mainAlpha: 255, borderAlpha: 255, fontFamily: '', fontSize: 14, fontBpp: 4, btnColor: '#404040', textColor: '#000000', btnRadius: 0, btnAlpha: 255, btnMainAlpha: 255, btnBorderColor: '#000000', btnBorderWidth: 0, btnBorderAlpha: 255, btnPixmap: '', pixmap: '', pixmapFormat: 'RGB565', textarea: '', alpha: 255 },
@@ -1423,17 +1425,18 @@ function getSglSetters(w) {
       if (shouldGenerateValue(w.borderColor, defaults, 'borderColor')) setters.push(`sgl_switch_set_border_color(${obj(w)}, ${hexToSglColor(w.borderColor)});`);
       if (shouldGenerateValue(w.borderWidth, defaults, 'borderWidth')) setters.push(`sgl_switch_set_border_width(${obj(w)}, ${w.borderWidth});`);
       if (shouldGenerateValue(w.radius, defaults, 'radius')) setters.push(`sgl_switch_set_radius(${obj(w)}, ${w.radius});`);
-      if (shouldGenerateValue(w.knobRadius, defaults, 'knobRadius')) setters.push(`sgl_switch_set_knob_radius(${obj(w)}, ${w.knobRadius});`);
       if (shouldGenerateValue(w.knobMargin, defaults, 'knobMargin')) setters.push(`sgl_switch_set_knob_margin(${obj(w)}, ${w.knobMargin});`);
       if (shouldGenerateValue(w.alpha, defaults, 'alpha')) setters.push(`sgl_switch_set_alpha(${obj(w)}, ${w.alpha});`);
       if (shouldGeneratePixmap(w.pixmap)) setters.push(`sgl_switch_set_pixmap(${obj(w)}, &${pixmapVarName(w.pixmap, w.pixmapFormat)});`);
       break;
 
     case 'checkbox': {
-      const cbColor = w.color || w.onColor || w.textColor;
+      const cbTextColor = w.textColor || w.color || w.onColor;
       if (shouldGenerateValue(w.status, defaults, 'status')) setters.push(`sgl_checkbox_set_status(${obj(w)}, ${w.status ? 'true' : 'false'});`);
       if (shouldGenerateValue(w.text, defaults, 'text')) setters.push(`sgl_checkbox_set_text(${obj(w)}, "${escapeStr(w.text)}");`);
-      if (shouldGenerateValue(cbColor, defaults, 'color') && cbColor) setters.push(`sgl_checkbox_set_color(${obj(w)}, ${hexToSglColor(cbColor)});`);
+      if (shouldGenerateValue(cbTextColor, defaults, 'color') && cbTextColor) setters.push(`sgl_checkbox_set_text_color(${obj(w)}, ${hexToSglColor(cbTextColor)});`);
+      if (shouldGenerateValue(w.boxColor, defaults, 'boxColor') && w.boxColor) setters.push(`sgl_checkbox_set_box_color(${obj(w)}, ${hexToSglColor(w.boxColor)});`);
+      if (shouldGenerateValue(w.checkColor, defaults, 'checkColor') && w.checkColor) setters.push(`sgl_checkbox_set_check_color(${obj(w)}, ${hexToSglColor(w.checkColor)});`);
       if (shouldGenerateValue(w.radius, defaults, 'radius')) setters.push(`sgl_checkbox_set_radius(${obj(w)}, ${w.radius});`);
       if (shouldGenerateFont(w, defaults)) {
         const fontId = getFontId(w.fontFamily, w.fontSize, w.fontBpp || 4);
@@ -1496,8 +1499,8 @@ function getSglSetters(w) {
       if (shouldGenerateValue(w.pointerWidth, defaults, 'pointerWidth')) setters.push(`sgl_gauge_set_pointer_width(${obj(w)}, ${w.pointerWidth});`);
       if (shouldGenerateValue(w.hubRadius, defaults, 'hubRadius')) setters.push(`sgl_gauge_set_hub_radiue(${obj(w)}, ${w.hubRadius});`);
       if (shouldGenerateValue(w.scaleStart, defaults, 'scaleStart')) setters.push(`sgl_gauge_set_scale_start_value(${obj(w)}, ${w.scaleStart});`);
-      if (shouldGenerateValue(w.scaleStep, defaults, 'scaleStep')) setters.push(`sgl_gauge_set_scale_step_value(${obj(w)}, ${w.scaleStep});`);
-      if (shouldGenerateValue(w.scaleAngle, defaults, 'scaleAngle')) setters.push(`sgl_gauge_set_scale_angle(${obj(w)}, ${w.scaleAngle});`);
+      if (shouldGenerateValue(w.scaleStep, defaults, 'scaleStep')) setters.push(`sgl_gauge_set_scale_step_value(${obj(w)}, ${Math.max(1, w.scaleStep || 1)});`);
+      if (shouldGenerateValue(w.scaleAngle, defaults, 'scaleAngle')) setters.push(`sgl_gauge_set_scale_angle(${obj(w)}, ${Math.max(1, w.scaleAngle || 1)});`);
       if (shouldGenerateValue(w.textInterval, defaults, 'textInterval')) setters.push(`sgl_gauge_set_text_interval(${obj(w)}, ${w.textInterval});`);
       if (shouldGenerateValue(w.scaleWarning, defaults, 'scaleWarning')) setters.push(`sgl_gauge_set_scale_warning_value(${obj(w)}, ${w.scaleWarning});`);
       if (shouldGenerateFont(w, defaults)) {

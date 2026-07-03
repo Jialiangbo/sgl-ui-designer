@@ -34,6 +34,64 @@ export function pixmapFormatHasAlpha(fmt) {
   return /^(RLE_)?ARGB/i.test(fmt || 'RGB565');
 }
 
+// ============ 图片 ImageData 缓存（用于 drawPixmap 像素级渲染）============
+const pixmapImageCache = new Map();
+
+/**
+ * 异步加载图片为 ImageData（带缓存）
+ * 通过后端命令获取 RGBA 像素数据，直接构建 ImageData，避免 canvas 污染问题
+ * @param {string} path - 图片路径
+ * @returns {Promise<ImageData|null>}
+ */
+export async function getPixmapImageData(path) {
+  if (!path) return null;
+  if (pixmapImageCache.has(path)) {
+    return pixmapImageCache.get(path);
+  }
+  try {
+    // 后端返回 { width, height, data(base64 RGBA) }
+    const result = await invoke('get_image_data_url', { path });
+    const binary = atob(result.data);
+    const arr = new Uint8ClampedArray(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      arr[i] = binary.charCodeAt(i);
+    }
+    const imgData = new ImageData(arr, result.width, result.height);
+    pixmapImageCache.set(path, imgData);
+    return imgData;
+  } catch (e) {
+    console.error('getPixmapImageData error:', e, path);
+    pixmapImageCache.set(path, null);
+    return null;
+  }
+}
+
+/**
+ * 同步获取已缓存的 ImageData（未缓存返回 null）
+ * @param {string} path
+ * @returns {ImageData|null}
+ */
+export function getCachedPixmapImageData(path) {
+  return pixmapImageCache.get(path) || null;
+}
+
+/**
+ * 预加载图片到缓存（异步，加载完成后调用回调触发重绘）
+ * @param {string} path
+ * @param {Function} [onLoaded] 加载完成回调，参数为 path
+ */
+export function preloadPixmapImage(path, onLoaded) {
+  if (!path || pixmapImageCache.has(path)) return;
+  getPixmapImageData(path).then(imgData => {
+    if (onLoaded && imgData) onLoaded(path);
+  });
+}
+
+/** 清空图片缓存（切换项目时调用） */
+export function clearPixmapImageCache() {
+  pixmapImageCache.clear();
+}
+
 const opaqueImageCache = new Map();
 
 // 通过 Rust 后端将带透明通道的图片按指定底色合成，生成不带 alpha 的 data URL，用于非 Alpha 格式预览

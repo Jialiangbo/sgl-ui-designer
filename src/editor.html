@@ -43,6 +43,7 @@
       <button class="nav-tab" data-nav="components">代码</button>
       <button class="nav-tab" data-nav="settings">SGL配置</button>
     </nav>
+    <button class="nav-tab nav-tab-action" id="btn-check-update" title="检查是否有新版本">🔄 检查更新</button>
 
     <div class="header-actions">
       <button class="btn btn-sm btn-action" id="btn-open" title="打开项目">
@@ -181,17 +182,6 @@
           <label class="form-label">背景图片</label>
           <select class="form-select" id="prop-page-pixmap">
             <option value="">无</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label class="form-label">图片格式</label>
-          <select class="form-select" id="prop-page-pixmap-format">
-            <option value="RGB565" selected>RGB565 (16-bit)</option>
-            <option value="ARGB4444">ARGB4444 (16-bit+透明度)</option>
-            <option value="RGB888">RGB888 (24-bit)</option>
-            <option value="ARGB8888">ARGB8888 (32-bit+透明度)</option>
-            <option value="RGB332">RGB332 (8-bit)</option>
-            <option value="ARGB2222">ARGB2222 (8-bit+透明度)</option>
           </select>
         </div>
         <div class="form-group" style="margin-bottom:0;">

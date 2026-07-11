@@ -1,8 +1,10 @@
-import { AppState, navigate, showToast, initNav } from './app.js';
+import { AppState, navigate, showToast, initNav, setupUpdateChecker, setupWindowControls } from './app.js';
 import { invoke } from '@tauri-apps/api/core';
 import { confirm } from '@tauri-apps/plugin-dialog';
 
 initNav('settings');
+setupWindowControls();
+setupUpdateChecker();
 AppState.init();
 
 const $ = id => document.getElementById(id);
@@ -13,17 +15,25 @@ function ensureSglConfig() {
       fbdev_pixel_depth: 16,
       fbdev_rotation: 0,
       fbdev_runtime_rotation: 0,
+      fbdev_even_coords: 0,
       use_fbdev_vram: 0,
       systick_ms: 10,
       event_queue_size: 16,
       dirty_area_num_max: 16,
       color16_swap: 0,
+      focused_color: '#00FF00',
+      focused_width: 1,
+      dirty_area_trace: 0,
+      dirty_area_trace_color: '#000000',
+      monitor_trace: 0,
+      pixmap_bilinear_interp: 0,
       animation: 1,
       debug: 1,
       log_color: 1,
       log_level: 0,
       obj_use_name: 0,
       font_compressed: 0,
+      font_small_table: 0,
       boot_logo: 0,
       theme_dark: 0,
       heap_algo: 'lwmem',
@@ -36,6 +46,17 @@ function ensureSglConfig() {
       font_consolas32: 0,
       font_consolas24_compress: 0
     };
+  } else {
+    // 补充新增字段默认值（兼容旧项目数据）
+    const cfg = AppState.project.sgl_config;
+    if (cfg.fbdev_even_coords == null) cfg.fbdev_even_coords = 0;
+    if (cfg.focused_color == null) cfg.focused_color = '#00FF00';
+    if (cfg.focused_width == null) cfg.focused_width = 1;
+    if (cfg.dirty_area_trace == null) cfg.dirty_area_trace = 0;
+    if (cfg.dirty_area_trace_color == null) cfg.dirty_area_trace_color = '#000000';
+    if (cfg.monitor_trace == null) cfg.monitor_trace = 0;
+    if (cfg.pixmap_bilinear_interp == null) cfg.pixmap_bilinear_interp = 0;
+    if (cfg.font_small_table == null) cfg.font_small_table = 0;
   }
 }
 
@@ -67,6 +88,9 @@ function refresh() {
     const val = AppState.project.sgl_config[key];
     if (el.type === 'checkbox') {
       el.checked = !!val;
+    } else if (el.type === 'color') {
+      // 颜色输入框需要 #RRGGBB 格式
+      el.value = (val && typeof val === 'string') ? val : '#000000';
     } else {
       el.value = val;
     }
@@ -93,6 +117,9 @@ document.querySelectorAll('.sgl-cfg').forEach(el => {
     const key = el.dataset.key;
     if (el.type === 'checkbox') {
       AppState.project.sgl_config[key] = el.checked ? 1 : 0;
+    } else if (el.type === 'color') {
+      // 颜色选择器值已经是 #RRGGBB 格式，直接存储
+      AppState.project.sgl_config[key] = el.value;
     } else if (el.tagName === 'SELECT' && el.dataset.key === 'heap_algo') {
       AppState.project.sgl_config[key] = el.value;
     } else {

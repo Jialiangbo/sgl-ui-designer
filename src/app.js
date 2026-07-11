@@ -17,27 +17,35 @@ export const AppState = {
     sgl_config: {
       fbdev_pixel_depth: 16,
       fbdev_rotation: 0,
+      fbdev_even_coords: 0,
       use_fbdev_vram: 0,
       systick_ms: 10,
       event_queue_size: 16,
       dirty_area_num_max: 16,
       color16_swap: 0,
+      focused_color: '#00FF00',
+      focused_width: 1,
+      dirty_area_trace: 0,
+      dirty_area_trace_color: '#000000',
+      monitor_trace: 0,
+      pixmap_bilinear_interp: 0,
       animation: 1,
       debug: 1,
       log_color: 1,
       log_level: 0,
       obj_use_name: 0,
       font_compressed: 0,
+      font_small_table: 0,
       boot_logo: 1,
       theme_dark: 0,
       heap_algo: 'lwmem',
       heap_memory_size: 102400,
-      font_song23: 1,
-      font_consolas14: 1,
-      font_consolas23: 1,
-      font_consolas24: 1,
-      font_consolas32: 1,
-      font_consolas24_compress: 1
+      font_song23: 0,
+      font_consolas14: 0,
+      font_consolas23: 0,
+      font_consolas24: 0,
+      font_consolas32: 0,
+      font_consolas24_compress: 0
     }
   },
   projectPath: null, // 项目文件保存路径（未保存时为 null）
@@ -45,6 +53,7 @@ export const AppState = {
   selectedWidgetIds: new Set(),
   zoom: 1,
   listeners: [],
+  logger: null, // 外部注册的日志函数 (msg, type) => void
 
   // ============ 撤销/恢复 ============
   _undoStack: [],
@@ -296,6 +305,11 @@ export const AppState = {
       widget.width = widget.radiusOut * 2;
       widget.height = widget.radiusOut * 2;
     }
+    // 2dball 控件：SGL circle_zoom 会将控件尺寸改为 2*radius，设计器同步
+    if (type === '2dball') {
+      widget.width = widget.radius * 2;
+      widget.height = widget.radius * 2;
+    }
     // textline 控件：SGL 会根据文本自动计算高度 y2 = y1 + (string_height + 2*radius) - 1
     // 新建时按默认文本和字号计算实际高度，与 SGL 仿真保持一致
     if (type === 'textline') {
@@ -321,11 +335,39 @@ export const AppState = {
       }
       widget.height = tlLines * (tlFontSize + tlLineMargin) + 2 * tlRadius;
     }
+    // numberkbd/keyboard 控件需要 ASCII 字模才能显示按键文字
+    // 添加时自动确保 ASCII 字模配置存在，避免用户手动配置
+    if (type === 'numberkbd' || type === 'keyboard') {
+      this._ensureAsciiFontForKbd(widget);
+    }
     page.widgets.push(widget);
     this.selectedWidgetIds.clear();
     this.selectedWidgetIds.add(id);
     this.notify();
     return widget;
+  },
+
+  // numberkbd/keyboard 控件需要 ASCII 字模显示按键文字
+  // 控件设置了自定义字体时 collect_fonts 会自动收集字符生成字模，无需额外处理
+  // 控件未设置字体（使用系统默认字体）时，需要确保 SGL 配置中启用了内置 ASCII 字模
+  _ensureAsciiFontForKbd(widget) {
+    const family = widget.fontFamily;
+    // 控件设置了自定义字体，collect_fonts 会自动生成字模，无需处理
+    if (family && family !== 'default' && family !== '') return;
+
+    // 控件未设置字体，需要确保内置 ASCII 字模启用
+    const cfg = this.project.sgl_config;
+    if (!cfg) return;
+
+    // 检查是否已启用任一内置 ASCII 字模
+    const builtinEnabled = cfg.font_consolas14 || cfg.font_consolas23 || cfg.font_consolas24 || cfg.font_consolas32 || cfg.font_consolas24_compress || cfg.font_song23;
+    if (builtinEnabled) return;
+
+    // 自动启用 consolas14（与 numberkbd 默认 fontSize=14 匹配）
+    cfg.font_consolas14 = 1;
+    if (this.logger) {
+      this.logger('已自动启用 SGL 内置 Consolas14 字模（数字键盘/键盘控件需要 ASCII 字模）', 'info');
+    }
   },
 
   removeWidget(id) {
@@ -396,6 +438,12 @@ export const AppState = {
           w.radiusOut = Math.round(newDiameter / 2);
           w.radiusIn = w.radiusOut - 2;
         }
+        w.width = newDiameter;
+        w.height = newDiameter;
+      } else if (w.type === '2dball') {
+        // 2dball 控件：SGL circle_zoom 将控件尺寸改为 2*radius，设计器同步
+        const newDiameter = Math.max(nw, nh);
+        w.radius = Math.round(newDiameter / 2);
         w.width = newDiameter;
         w.height = newDiameter;
       } else if (w.type === 'line') {
@@ -559,7 +607,7 @@ export const AppState = {
 
     try {
       const code = generateSGLCode(this.project);
-      const result = await invoke('export_code_to_project', { project: this.project, projectPath: this.projectPath, code });
+      const result = await invoke('export_code_to_project', { project: this.getProjectForRust(), projectPath: this.projectPath, code });
       showToast('代码已导出', 'success');
       return { ok: true, msg: result };
     } catch (e) {
@@ -581,11 +629,12 @@ export const AppState = {
         if (!filePath) return { ok: false, msg: '取消保存' };
         if (!filePath.endsWith('.sgl')) filePath += '.sgl';
       }
-      await invoke('save_project', { path: filePath, project: this.project });
+      await invoke('save_project', { path: filePath, project: this.getProjectForRust() });
       // 保存后重新加载，确保资源路径与文件一致（Rust端会将路径转为相对路径保存）
       const saved = await invoke('load_project', { path: filePath });
       if (saved) {
         this.project = saved;
+        this.migrateProject();
       }
       this.projectPath = filePath;
       this.save();
@@ -607,6 +656,7 @@ export const AppState = {
       const project = await invoke('load_project', { path: filePath });
       if (project && project.pages) {
         this.project = project;
+        this.migrateProject();
         this.projectPath = filePath;
         this.currentPageId = this.project.pages.length > 0 ? this.project.pages[0].id : null;
         this.selectedWidgetIds.clear();
@@ -630,6 +680,23 @@ export const AppState = {
     } catch (e) {}
   },
 
+  // 返回适合传给 Rust 命令的项目副本：把 Rust 期望为数字的字段中的空字符串转为 null
+  getProjectForRust() {
+    const project = JSON.parse(JSON.stringify(this.project));
+    if (Array.isArray(project.pages)) {
+      project.pages.forEach(page => {
+        if (!Array.isArray(page.widgets)) return;
+        page.widgets.forEach(w => {
+          if (w.type === 'ext_img') {
+            if (w.pivotX === '') w.pivotX = null;
+            if (w.pivotY === '') w.pivotY = null;
+          }
+        });
+      });
+    }
+    return project;
+  },
+
   load() {
     try {
       const proj = localStorage.getItem('sgl_project');
@@ -637,46 +704,7 @@ export const AppState = {
         const p = JSON.parse(proj);
         if (p && p.pages) {
           this.project = p;
-          if (!Array.isArray(this.project.ascii_fonts)) {
-            this.project.ascii_fonts = [];
-          }
-          // 迁移旧 ascii_fonts 字符串数组为对象数组，补充缺失的 compress 字段
-          this.project.ascii_fonts = this.project.ascii_fonts
-            .map(item => {
-              if (typeof item === 'string') {
-                return { name: item, size: 16, bpp: this.project.ascii_font_bpp || 4, compress: 0 };
-              }
-              if (item.compress === undefined) item.compress = 0;
-              return item;
-            })
-            .filter(item => item && typeof item === 'object');
-          if (!this.project.sgl_config) {
-            this.project.sgl_config = {
-              fbdev_pixel_depth: 16,
-              fbdev_rotation: 0,
-              use_fbdev_vram: 0,
-              systick_ms: 10,
-              event_queue_size: 16,
-              dirty_area_num_max: 16,
-              color16_swap: 0,
-              animation: 1,
-              debug: 1,
-              log_color: 1,
-              log_level: 0,
-              obj_use_name: 0,
-              font_compressed: 0,
-              boot_logo: 1,
-              theme_dark: 0,
-              heap_algo: 'lwmem',
-              heap_memory_size: 102400,
-              font_song23: 1,
-              font_consolas14: 1,
-              font_consolas23: 1,
-              font_consolas24: 1,
-              font_consolas32: 1,
-              font_consolas24_compress: 1
-            };
-          }
+          this.migrateProject();
           this.currentPageId = localStorage.getItem('sgl_current') || null;
           try {
             const sel = JSON.parse(localStorage.getItem('sgl_selected') || '[]');
@@ -687,6 +715,101 @@ export const AppState = {
         }
       }
     } catch (e) {}
+  },
+
+  // 项目迁移：补充缺失的属性字段（向后兼容旧项目文件）
+  migrateProject() {
+    const p = this.project;
+    if (!p) return;
+    // 补充 resources 字段（旧项目可能缺少）
+    if (!p.resources) p.resources = { fonts: [], images: [] };
+    if (!Array.isArray(p.resources.fonts)) p.resources.fonts = [];
+    if (!Array.isArray(p.resources.images)) p.resources.images = [];
+    if (!Array.isArray(p.ascii_fonts)) {
+      p.ascii_fonts = [];
+    }
+    // 迁移旧 ascii_fonts 字符串数组为对象数组，补充缺失的 compress 字段
+    p.ascii_fonts = p.ascii_fonts
+      .map(item => {
+        if (typeof item === 'string') {
+          return { name: item, size: 16, bpp: p.ascii_font_bpp || 4, compress: 0 };
+        }
+        if (item.compress === undefined) item.compress = 0;
+        return item;
+      })
+      .filter(item => item && typeof item === 'object');
+    if (!p.sgl_config) {
+      p.sgl_config = {
+        fbdev_pixel_depth: 16,
+        fbdev_rotation: 0,
+        fbdev_even_coords: 0,
+        use_fbdev_vram: 0,
+        systick_ms: 10,
+        event_queue_size: 16,
+        dirty_area_num_max: 16,
+        color16_swap: 0,
+        focused_color: '#00FF00',
+        focused_width: 1,
+        dirty_area_trace: 0,
+        dirty_area_trace_color: '#000000',
+        monitor_trace: 0,
+        pixmap_bilinear_interp: 0,
+        animation: 1,
+        debug: 1,
+        log_color: 1,
+        log_level: 0,
+        obj_use_name: 0,
+        font_compressed: 0,
+        font_small_table: 0,
+        boot_logo: 1,
+        theme_dark: 0,
+        heap_algo: 'lwmem',
+        heap_memory_size: 102400,
+        font_song23: 1,
+        font_consolas14: 1,
+        font_consolas23: 1,
+        font_consolas24: 1,
+        font_consolas32: 1,
+        font_consolas24_compress: 1
+      };
+    } else {
+      // 补充新增字段默认值（兼容旧项目数据）
+      const cfg = p.sgl_config;
+      if (cfg.fbdev_even_coords == null) cfg.fbdev_even_coords = 0;
+      if (cfg.focused_color == null) cfg.focused_color = '#00FF00';
+      if (cfg.focused_width == null) cfg.focused_width = 1;
+      if (cfg.dirty_area_trace == null) cfg.dirty_area_trace = 0;
+      if (cfg.dirty_area_trace_color == null) cfg.dirty_area_trace_color = '#000000';
+      if (cfg.monitor_trace == null) cfg.monitor_trace = 0;
+      if (cfg.pixmap_bilinear_interp == null) cfg.pixmap_bilinear_interp = 0;
+      if (cfg.font_small_table == null) cfg.font_small_table = 0;
+    }
+    // 为每个 widget 补充缺失的默认属性（不覆盖已有值）
+    // 解决旧项目文件因结构体字段缺失导致属性丢失的问题
+    if (Array.isArray(p.pages)) {
+      p.pages.forEach(page => {
+        if (!Array.isArray(page.widgets)) return;
+        page.widgets.forEach(w => {
+          const defaults = createWidgetDefaults(w.type);
+          if (defaults) {
+            Object.keys(defaults).forEach(key => {
+              if (w[key] === undefined || w[key] === null) {
+                w[key] = defaults[key];
+              }
+            });
+          }
+          // 2dball 控件：SGL circle_zoom 将控件尺寸改为 2*radius，同步 width/height
+          if (w.type === '2dball' && w.radius != null && w.radius > 0) {
+            w.width = w.radius * 2;
+            w.height = w.radius * 2;
+          }
+          // sprite 控件：SGL 只支持 ARGB4444 格式，强制重置 pixmapFormat
+          if (w.type === 'sprite') {
+            w.pixmapFormat = 'ARGB4444';
+          }
+        });
+      });
+    }
   },
   
 
@@ -708,17 +831,25 @@ export const AppState = {
       sgl_config: {
         fbdev_pixel_depth: 16,
         fbdev_rotation: 0,
+        fbdev_even_coords: 0,
         use_fbdev_vram: 0,
         systick_ms: 10,
         event_queue_size: 16,
         dirty_area_num_max: 16,
         color16_swap: 0,
+        focused_color: '#00FF00',
+        focused_width: 1,
+        dirty_area_trace: 0,
+        dirty_area_trace_color: '#000000',
+        monitor_trace: 0,
+        pixmap_bilinear_interp: 0,
         animation: 1,
         debug: 1,
         log_color: 1,
         log_level: 0,
         obj_use_name: 0,
         font_compressed: 0,
+        font_small_table: 0,
         boot_logo: 1,
         theme_dark: 0,
         heap_algo: 'lwmem',
@@ -772,6 +903,90 @@ export function initNav(activePage) {
   navTabs.forEach(tab => {
     if (tab.dataset.nav === activePage) tab.classList.add('active');
   });
+}
+
+// ============ 应用更新检查（绑定按钮 + 启动自动检查） ============
+// 在每个页面入口调用一次。按钮位于 nav-tabs 中"SGL配置"之后。
+export async function setupUpdateChecker() {
+  const btn = document.getElementById('btn-check-update');
+  if (!btn || btn.dataset.bound) return;
+  btn.dataset.bound = '1';
+
+  const { checkForUpdates, autoCheckOnStartup } = await import('./updater.js');
+  btn.addEventListener('click', () => {
+    checkForUpdates(false).catch(() => {});
+  });
+  // 启动时静默检查一次
+  autoCheckOnStartup();
+}
+
+// ============ 自定义窗口标题栏（最小化/最大化/关闭 + 拖拽区域） ============
+// decorations:false 时由前端接管窗口控制
+let _windowControlsInjected = false;
+export async function setupWindowControls() {
+  if (_windowControlsInjected) return;
+  const header = document.querySelector('.app-header');
+  if (!header) return;
+  _windowControlsInjected = true;
+
+  const { getCurrentWindow } = await import('@tauri-apps/api/window');
+  const win = getCurrentWindow();
+
+  // 拖拽移动窗口：在 header 空白区域按下鼠标时触发
+  // 排除按钮、输入框等交互元素，避免影响正常点击
+  header.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return; // 仅左键
+    const t = e.target;
+    // 点击落在交互元素上时不触发拖拽
+    if (t.closest('button, input, select, textarea, .nav-tab, .nav-tab-action, .header-actions, .window-controls, .toolbar-divider')) return;
+    win.startDragging();
+  });
+
+  // 双击 header 空白区域切换最大化/还原
+  header.addEventListener('dblclick', (e) => {
+    const t = e.target;
+    if (t.closest('button, input, select, textarea, .nav-tab, .nav-tab-action, .header-actions, .window-controls, .toolbar-divider')) return;
+    win.toggleMaximize();
+  });
+
+  const controls = document.createElement('div');
+  controls.className = 'window-controls';
+  controls.innerHTML = `
+    <button class="win-btn win-minimize" title="最小化">
+      <svg width="12" height="12" viewBox="0 0 12 12"><rect x="2" y="5.5" width="8" height="1" fill="currentColor"/></svg>
+    </button>
+    <button class="win-btn win-maximize" title="最大化/还原">
+      <svg class="icon-max" width="12" height="12" viewBox="0 0 12 12"><rect x="2.5" y="2.5" width="7" height="7" fill="none" stroke="currentColor" stroke-width="1"/></svg>
+      <svg class="icon-restore" width="12" height="12" viewBox="0 0 12 12" style="display:none;"><rect x="2.5" y="4" width="5.5" height="5.5" fill="none" stroke="currentColor" stroke-width="1"/><path d="M4 4 V2.5 H9.5 V8 H8" fill="none" stroke="currentColor" stroke-width="1"/></svg>
+    </button>
+    <button class="win-btn win-close" title="关闭">
+      <svg width="12" height="12" viewBox="0 0 12 12"><path d="M2.5 2.5 L9.5 9.5 M9.5 2.5 L2.5 9.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+    </button>
+  `;
+  header.appendChild(controls);
+
+  // 初始化最大化图标状态
+  const updateMaxIcon = async () => {
+    try {
+      const maximized = await win.isMaximized();
+      controls.querySelector('.icon-max').style.display = maximized ? 'none' : '';
+      controls.querySelector('.icon-restore').style.display = maximized ? '' : 'none';
+    } catch (_) { /* 非 Tauri 环境 */ }
+  };
+  await updateMaxIcon();
+
+  controls.querySelector('.win-minimize').addEventListener('click', () => win.minimize());
+  controls.querySelector('.win-maximize').addEventListener('click', async () => {
+    await win.toggleMaximize();
+    await updateMaxIcon();
+  });
+  controls.querySelector('.win-close').addEventListener('click', () => win.close());
+
+  // 监听窗口大小变化，同步最大化图标
+  try {
+    const { listen } = await import('@tauri-apps/api/event');
+    await listen('tauri://resize', updateMaxIcon);
+  } catch (_) { /* 非 Tauri 环境 */ }
 }
 
 export function escapeHtml(str) {

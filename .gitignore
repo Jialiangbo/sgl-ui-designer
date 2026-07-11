@@ -31,6 +31,7 @@ stderr.log
 # 桌面临时文件
 sgl_ui_designer_test.exe
 sgl_ui_designer_v2.exe
+sgl-ui-designer.exe
 
 # SGL 库源码（作为 submodule 或外部依赖管理，不直接提交）
 sgl/

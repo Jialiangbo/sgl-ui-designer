@@ -1,17 +1,72 @@
-import { AppState, navigate, initNav, escapeHtml } from './app.js';
-import { SGL_WIDGET_TYPES, WIDGET_DEFAULTS } from './sgl_api.js';
+import { AppState, navigate, initNav, escapeHtml, setupUpdateChecker, setupWindowControls } from './app.js';
+import { SGL_WIDGET_TYPES, WIDGET_DEFAULTS, getWidgetVarName } from './sgl_api.js';
 import { getCheckboxIconDataUrl } from './checkbox_icon.js';
 import { invoke } from '@tauri-apps/api/core';
 import {
   setFontLoadCallback, getCssFontStack, getFontBppCss, applyBppFilter,
   mixColors, hexToRgba, getWidgetAbsPos, sortWidgetsByHierarchy, flexAlign,
   toAssetUrl, pixmapFormatHasAlpha, getOpaqueImageUrl,
-  getCachedPixmapImageData, preloadPixmapImage
+  getCachedPixmapImageData, preloadPixmapImage, getSglFontData, loadSglFontData,
+  preloadProjectFonts
 } from './render_common.js';
+import qrcodeGenerator from 'qrcode-generator';
 
 initNav('preview');
+setupWindowControls();
+setupUpdateChecker();
 AppState.init();
 setFontLoadCallback(() => render());
+
+// 递归收集控件及其子控件需要生成的字模字符
+function collectWidgetFontChars(w, fontTextMap) {
+  const fam = w.fontFamily;
+  if (fam && fam !== 'default') {
+    const sz = w.fontSize || 14;
+    const bpp = w.fontBpp || 4;
+    const key = `${fam}|${sz}|${bpp}`;
+    if (!fontTextMap.has(key)) fontTextMap.set(key, new Set());
+    const chars = fontTextMap.get(key);
+    const texts = [w.text, w.titleText, w.options, w.leftSlots, w.rightSlots];
+    for (const t of texts) {
+      if (t) for (const ch of String(t)) { if (ch.charCodeAt(0) >= 0x20) chars.add(ch); }
+    }
+  }
+  for (const child of (w.widgets || [])) {
+    collectWidgetFontChars(child, fontTextMap);
+  }
+}
+
+// 预加载项目所有字体的 SGL 字模数据（用于像素级 WYSIWYG 文本渲染）
+// 收集所有页面所有控件（含子控件）的文本字符作为 symbols，确保字模覆盖所有文本
+// 返回 Promise，所有字体加载完成后 resolve，避免多次触发 render 导致卡顿
+async function preloadSglFontData() {
+  if (!window.SGLRenderer || !window.SGLRenderer.parseFontCFile) return;
+  const project = AppState.project;
+  if (!project || !project.pages) return;
+  const fontTextMap = new Map();
+  for (const page of project.pages) {
+    for (const w of (page.widgets || [])) {
+      collectWidgetFontChars(w, fontTextMap);
+    }
+  }
+  const promises = [];
+  for (const [key, charSet] of fontTextMap) {
+    if (!window.SGLRenderer.getFontData(key)) {
+      const [fam, sz, bpp] = key.split('|');
+      const symbols = Array.from(charSet).join('');
+      promises.push(loadSglFontData(fam, parseInt(sz), parseInt(bpp), symbols));
+    }
+  }
+  if (promises.length > 0) {
+    await Promise.all(promises);
+  }
+}
+
+// 项目加载后预加载字体资源，然后渲染
+preloadProjectFonts(AppState.project.resources?.fonts).then(async () => {
+  await preloadSglFontData();
+  render();
+});
 
 let currentIndex = 0;
 
@@ -42,7 +97,7 @@ function colorOr(w, prop, def) {
 }
 
 /** 创建控件 canvas + surface，自动挂到 el 上 */
-function createWidgetCanvas(el, w, z) {
+function createWidgetCanvas(el, w, z, renderSize) {
   const R = getR();
   // 清除原有子元素
   el.innerHTML = '';
@@ -50,8 +105,11 @@ function createWidgetCanvas(el, w, z) {
   el.style.background = 'transparent';
   el.style.border = 'none';
   el.style.borderRadius = '0';
+  // scroll 绑定对象时用重算的渲染尺寸
+  const cw = renderSize ? renderSize.domW : w.width;
+  const ch = renderSize ? renderSize.domH : w.height;
   const canvas = document.createElement('canvas');
-  const surf = R.createSurface(canvas, w.width, w.height, z);
+  const surf = R.createSurface(canvas, cw, ch, z);
   // CSS 尺寸 = 像素尺寸，1:1 显示，避免 CSS 缩放导致右边框/下边框像素被压缩或丢失（与 editor.js sglSurface 一致）
   canvas.style.cssText = `position:absolute;left:0;top:0;width:${surf.w}px;height:${surf.h}px;display:block;pointer-events:none;`;
   el.appendChild(canvas);
@@ -121,12 +179,46 @@ function render() {
     const el = document.createElement('div');
     el.style.position = 'absolute';
     // 使用绝对位置（累加父控件位置），乘以缩放因子
-    const absPos = getWidgetAbsPos(w, page);
+    let absPos = getWidgetAbsPos(w, page);
+
+    // scroll 绑定对象时，SGL 运行时强制重置 scroll 坐标贴到目标边缘
+    // 设计器模拟此行为以实现 WYSIWYG（垂直贴右侧，水平贴底部）
+    // 注意：scroll 的 width 属性是滚动条宽度，不能覆盖，只重算 DOM 尺寸
+    let domW = w.width;
+    let domH = w.height;
+    // 2dball 控件：SGL circle_zoom 将控件尺寸改为 2*radius，DOM 尺寸跟随球体
+    if (w.type === '2dball' && w.radius != null && w.radius > 0) {
+      domW = w.radius * 2;
+      domH = w.radius * 2;
+    }
+    // arc_label 旋转模式：el 用原始 w×h，整体旋转（与 editor.js 一致）
+    // SGL obj->coords 中心 = 原始 w×h 中心，所以 el 旋转中心 = SGL 旋转中心
+    // domW/domH 保持原始 w×h，不调整
+    if (w.type === 'scroll' && w.bindTarget) {
+      const bindWidget = page.widgets.find(wt => getWidgetVarName(wt) === w.bindTarget);
+      if (bindWidget) {
+        const bindAbs = getWidgetAbsPos(bindWidget, page);
+        const scDirect = w.direct != null ? w.direct : 1;
+        const scWidth = w.width != null ? w.width : 10;
+        // 仿真效果：scroll 完全位于绑定目标边框内部，四边均不覆盖目标边框
+        const bindBorder = bindWidget.borderWidth != null ? bindWidget.borderWidth : 1;
+        if (scDirect === 1) {
+          absPos = { x: bindAbs.x + bindWidget.width - scWidth - bindBorder, y: bindAbs.y + bindBorder };
+          domW = scWidth;
+          domH = bindWidget.height - 2 * bindBorder;
+        } else {
+          absPos = { x: bindAbs.x + bindBorder, y: bindAbs.y + bindWidget.height - scWidth - bindBorder };
+          domW = bindWidget.width - 2 * bindBorder;
+          domH = scWidth;
+        }
+      }
+    }
+
     el.style.left = (absPos.x * z) + 'px';
     el.style.top = (absPos.y * z) + 'px';
     // SGL 闭区间坐标缩放，与 createSurface 一致，避免 cv 溢出 el 被 overflow:hidden 裁切
-    el.style.width = (Math.round((w.width - 1) * z) + 1) + 'px';
-    el.style.height = (Math.round((w.height - 1) * z) + 1) + 'px';
+    el.style.width = (Math.round((domW - 1) * z) + 1) + 'px';
+    el.style.height = (Math.round((domH - 1) * z) + 1) + 'px';
     el.style.boxSizing = 'border-box';
     el.style.overflow = 'hidden';
 
@@ -151,7 +243,7 @@ function render() {
       }
     }
 
-    renderPreviewWidget(el, w, z);
+    renderPreviewWidget(el, w, z, { domW, domH }, page);
 
     frame.appendChild(el);
   });
@@ -161,7 +253,9 @@ function render() {
   $('status-page-size').textContent = page.width + '×' + page.height;
 }
 
-function renderPreviewWidget(el, w, z) {
+function renderPreviewWidget(el, w, z, renderSize, page) {
+  // renderSize: scroll 绑定对象时的实际渲染尺寸 { domW, domH }，其他控件为 undefined
+  // page: 当前页面（用于 scroll 查找绑定对象）
   // 检查控件是否选择了有效字体（项目已添加该字体且控件 fontFamily 非空非 default）
   function widgetHasFont(widget) {
     const fonts = (AppState.project.resources && AppState.project.resources.fonts) || [];
@@ -267,7 +361,7 @@ function renderPreviewWidget(el, w, z) {
           el.style.opacity = 1;
           const bgColor = hasAlpha ? R.hexToColor(w.color || '#FFFFFF') : R.hexToColor('#000000');
           R.drawFillRect(surf, 0, 0, w.width - 1, w.height - 1, w.radius || 0, bgColor, 255);
-          R.drawPixmap(surf, 0, 0, surf.w, surf.h, imgData, pixmapFormat, Math.min(alpha, mainAlpha));
+          R.drawPixmap(surf, 0, 0, w.width, w.height, imgData, pixmapFormat, Math.min(alpha, mainAlpha));
           R.drawFillRectBorder(surf, 0, 0, w.width - 1, w.height - 1, w.radius || 0, R.hexToColor(w.borderColor || '#000000'), w.borderWidth != null ? w.borderWidth : 2, alpha);
           flushWidget(surf);
         } else {
@@ -317,7 +411,7 @@ function renderPreviewWidget(el, w, z) {
           const pr = Math.floor(Math.min(surf.w, surf.h) / 2);
           const bgColor = hasAlpha ? R.hexToColor(w.color || '#FFFFFF') : R.hexToColor('#000000');
           R.drawFillCircle(surf, pcx, pcy, pr, bgColor, 255);
-          R.drawPixmap(surf, 0, 0, surf.w, surf.h, imgData, pixmapFormat, alpha);
+          R.drawPixmap(surf, 0, 0, w.width, w.height, imgData, pixmapFormat, alpha);
           // 清除圆外像素
           const r2 = pr * pr;
           for (let yy = 0; yy < surf.h; yy++) {
@@ -495,7 +589,7 @@ function renderPreviewWidget(el, w, z) {
           el.style.opacity = 1;
           const bgColor = hasAlpha ? R.hexToColor(w.bgColor || w.color || '#8b5cf6') : R.hexToColor('#000000');
           R.drawFillRect(surf, 0, 0, w.width - 1, w.height - 1, w.radius != null ? w.radius : 8, bgColor, 255);
-          R.drawPixmap(surf, 0, 0, surf.w, surf.h, imgData, pixmapFormat, alpha);
+          R.drawPixmap(surf, 0, 0, w.width, w.height, imgData, pixmapFormat, alpha);
           R.drawFillRectBorder(surf, 0, 0, w.width - 1, w.height - 1, w.radius != null ? w.radius : 8, R.hexToColor(w.borderColor || '#7c3aed'), w.borderWidth != null ? w.borderWidth : 1, alpha);
           flushWidget(surf);
         } else {
@@ -638,7 +732,7 @@ function renderPreviewWidget(el, w, z) {
           el.style.opacity = 1;
           const bgColor = hasAlpha ? R.hexToColor(swOn ? (w.onColor || '#FFFFFF') : (w.bgColor || '#000000')) : R.hexToColor('#000000');
           R.drawFillRect(surf, 0, 0, w.width - 1, w.height - 1, w.radius || 0, bgColor, 255);
-          R.drawPixmap(surf, 0, 0, surf.w, surf.h, imgData, pixmapFormat, alpha);
+          R.drawPixmap(surf, 0, 0, w.width, w.height, imgData, pixmapFormat, alpha);
           R.drawFillRectBorder(surf, 0, 0, w.width - 1, w.height - 1, w.radius || 0, R.hexToColor(w.borderColor || '#000000'), w.borderWidth != null ? w.borderWidth : 2, alpha);
           flushWidget(surf);
         } else {
@@ -915,12 +1009,7 @@ function renderPreviewWidget(el, w, z) {
     }
 
     case 'gauge': {
-      // SGL gauge: 严格移植自 sgl_gauge.c
-      // 角度系统：sgl_draw_fill_arc 使用 0°=上顺时针；sgl_sin/sgl_cos 使用 0°=右顺时针
-      //   弧用原始 angle_start/angle_end（0°=上系统）
-      //   刻度/指针用 calc_angle = angle + 90（转为 0°=右系统）
-      // 指针坐标 +1 偏移（SGL: +cx+1, +cy+1）
-      // text 位置：txt_x = tx - text_len/2 - 2, txt_y = ty - font_h/2
+      // SGL gauge: 严格移植自 sgl_gauge.c（全部使用 SGL 整数算法）
       const { surf, R } = createWidgetCanvas(el, w, z);
       el.style.opacity = 1;
       const alpha = w.alpha != null ? w.alpha : 255;
@@ -928,7 +1017,7 @@ function renderPreviewWidget(el, w, z) {
       const startAngle = w.startAngle != null ? w.startAngle : 30;
       const endAngle = w.endAngle != null ? w.endAngle : 330;
       const scaleAngle = Math.max(1, w.scaleAngle || 15);
-      const scaleStep = w.scaleStep || 10;
+      const scaleStep = Math.max(1, w.scaleStep || 10);
       const scaleStart = w.scaleStart || 0;
       const scaleLen = Math.max(w.scaleLength || 0, 4);
       const arcW = w.arcWidth || 2;
@@ -938,31 +1027,38 @@ function renderPreviewWidget(el, w, z) {
       const arcCol = R.hexToColor(w.arcColor || '#FFFFFF');
       const scaleCol = R.hexToColor(w.scaleColor || '#FFFFFF');
       const ptrCol = R.hexToColor(w.pointerColor || '#FF0000');
-      const textCol = R.hexToColor(w.textColor || '#FFFFFF');
+      const textCol = w.textColor || '#FFFFFF';
       const hubCol = R.hexToColor(w.hubColor || '#FFFFFF');
       const redCol = R.SGL_COLOR_RED;
       const fontSize = w.fontSize || 12;
-      const fontHeight = fontSize + 8; // SGL sgl_font_get_height
-      const fontFamily = getCssFontStack(w.fontFamily || '');
+      const fontBpp = w.fontBpp != null ? w.fontBpp : 4;
 
-      const cx = w.width / 2;
-      const cy = w.height / 2;
-      const r = Math.max(w.radius || 0, w.width / 2 - 1);
-      const hubRz = Math.max((r + 8) / 8, w.hubRadius || 0);
+      // 获取 SGL 字模数据
+      const gFontFamily = w.fontFamily || '';
+      const sglFont = getSglFontData(gFontFamily, fontSize, fontBpp);
+      const sglFontH = sglFont ? R.fontGetHeight(sglFont) : fontSize;
+      const sglStrWidth = (text) => {
+        if (sglFont) return R.fontGetStringWidth(text, sglFont);
+        return R.stringWidth(text, fontSize);
+      };
+
+      // SGL: cx = (x1 + x2) / 2, 整数除法
+      const cx = Math.floor((0 + (w.width - 1)) / 2);
+      const cy = Math.floor((0 + (w.height - 1)) / 2);
+      // SGL: r = sgl_max(radius, width / 2 - 1), 整数除法
+      const r = Math.max(w.radius || 0, Math.floor(w.width / 2) - 1);
+      const hubRz = Math.max(Math.floor((r + 8) / 8), w.hubRadius || 0);
       const scaleOut = arcW + 6;
       const scaleIn = scaleOut + scaleLen;
-      const textCr = r - scaleIn - fontHeight / 2 - 4;
+      const textCr = r - scaleIn - Math.floor(sglFontH / 2) - 4;
       const ptrStart = scaleIn + 4 + ptrW;
       const ptrEnd = r - hubRz - ptrW;
 
-      // deg2rad: 0°=右系统（与 Math.sin/cos 一致，SGL sgl_sin/sgl_cos 同此）
-      const deg2rad = d => d * Math.PI / 180;
-
       // 1. 背景圆
       R.drawFillCircle(surf, cx, cy, r, bgCol, alpha);
-      // 2. 中心轴圆（hubColor）
+      // 2. 中心轴圆
       R.drawFillCircle(surf, cx, cy, Math.max(1, hubRz), hubCol, alpha);
-      // 3. 外圈弧（arcColor）- 使用 0°=上系统，与 SGL drawFillArc 一致
+      // 3. 外圈弧
       R.drawFillArc(surf, {
         cx, cy,
         radius_in: Math.max(0, r - arcW - 1),
@@ -974,7 +1070,7 @@ function renderPreviewWidget(el, w, z) {
         bg_color: bgCol,
         alpha: alpha
       });
-      // 4. 刻度线 - SGL: calc_angle = angle + 90（转为 0°=右系统）
+      // 4. 刻度线 - SGL: sglSin/sglCos 定点整数
       const textInterval = w.textInterval != null ? w.textInterval : 3;
       const scaleWarning = w.scaleWarning != null ? w.scaleWarning : 32767;
       let scaleMask = scaleStart;
@@ -983,42 +1079,40 @@ function renderPreviewWidget(el, w, z) {
       for (let angle = startAngle; angle <= endAngle + 0.01; angle += scaleAngle) {
         const isMajor = (count & textInterval) === 0;
         const sc = scaleMask < scaleWarning ? scaleCol : redCol;
-        const rad = deg2rad(angle + 90);
-        const cosA = Math.cos(rad), sinA = Math.sin(rad);
-        const xo = cx + (r - scaleOut) * cosA;
-        const yo = cy + (r - scaleOut) * sinA;
-        const xi = cx + (r - scaleIn) * cosA;
-        const yi = cy + (r - scaleIn) * sinA;
-        R.drawLine(surf, xo, yo, xi, yi, isMajor ? scaleW * 2 : scaleW, sc, alpha);
+        const calcAngle = angle + 90;
+        const sinVal = R.sglSin(calcAngle);
+        const cosVal = R.sglCos(calcAngle);
+        const xOut = Math.floor((r - scaleOut) * cosVal / R.SGL_SIN_FIXED_ONE) + cx;
+        const yOut = Math.floor((r - scaleOut) * sinVal / R.SGL_SIN_FIXED_ONE) + cy;
+        const xIn = Math.floor((r - scaleIn) * cosVal / R.SGL_SIN_FIXED_ONE) + cx;
+        const yIn = Math.floor((r - scaleIn) * sinVal / R.SGL_SIN_FIXED_ONE) + cy;
+        R.drawLine(surf, xOut, yOut, xIn, yIn, isMajor ? scaleW * 2 : scaleW, sc, alpha);
         if (isMajor && (angle - startAngle) < 360) {
-          majorTexts.push({
-            x: cx + textCr * cosA,
-            y: cy + textCr * sinA,
-            text: String(scaleMask),
-          });
+          const tx = Math.floor(textCr * cosVal / R.SGL_SIN_FIXED_ONE) + cx;
+          const ty = Math.floor(textCr * sinVal / R.SGL_SIN_FIXED_ONE) + cy;
+          majorTexts.push({ tx, ty, text: String(scaleMask) });
         }
         scaleMask += scaleStep;
         count++;
       }
-      // 5. 指针 - SGL: needle_angle = 90 + angle_start + value * scale_angle / scale_step
-      const needleAngle = ((90 + startAngle + gValue * scaleAngle / scaleStep) % 360 + 360) % 360;
-      const nRad = deg2rad(needleAngle);
-      const nCos = Math.cos(nRad), nSin = Math.sin(nRad);
-      // SGL: +cx+1, +cy+1 偏移
-      const px = cx + (r - ptrStart) * nCos + 1;
-      const py = cy + (r - ptrStart) * nSin + 1;
-      const nx = cx + (r - ptrEnd) * nCos + 1;
-      const ny = cy + (r - ptrEnd) * nSin + 1;
+      // 5. 指针 - SGL: sgl_mod360 + 整数除法
+      const needleAngle = R.sglMod360(90 + startAngle + Math.floor(gValue * scaleAngle / scaleStep));
+      const nSin = R.sglSin(needleAngle);
+      const nCos = R.sglSin(needleAngle + 90);
+      const px = Math.floor((r - ptrStart) * nCos / R.SGL_SIN_FIXED_ONE) + cx + 1;
+      const py = Math.floor((r - ptrStart) * nSin / R.SGL_SIN_FIXED_ONE) + cy + 1;
+      const nx = Math.floor((r - ptrEnd) * nCos / R.SGL_SIN_FIXED_ONE) + cx + 1;
+      const ny = Math.floor((r - ptrEnd) * nSin / R.SGL_SIN_FIXED_ONE) + cy + 1;
       if (ptrEnd > 0) {
         R.drawLine(surf, px, py, nx, ny, Math.max(1, ptrW), ptrCol, alpha);
       }
       flushWidget(surf);
-      // 6. 刻度数字（必须在 flush 之后）
-      // SGL: txt_x = tx - text_len/2 - 2, txt_y = ty - font_h/2
-      const fH = R.fontHeight(fontSize);
+      // 6. 刻度数字
       majorTexts.forEach(mt => {
-        const tw = R.stringWidth(mt.text, fontSize);
-        overlayTextAt({ text: mt.text, color: (w.textColor || '#FFFFFF'), fontSize, fontFamily: (w.fontFamily || ''), x: mt.x - tw / 2 - 2, y: mt.y - fH / 2, align: 'CENTER' });
+        const textLen = sglStrWidth(mt.text);
+        const txtX = mt.tx - Math.floor(textLen / 2) - 2;
+        const txtY = mt.ty - Math.floor(sglFontH / 2);
+        overlayTextAt({ text: mt.text, color: textCol, fontSize, fontFamily: gFontFamily, x: txtX, y: txtY, align: 'CENTER' });
       });
       break;
     }
@@ -1492,54 +1586,119 @@ function renderPreviewWidget(el, w, z) {
     }
 
     case 'win': {
-      // SGLRenderer 像素级渲染：主体 + 标题栏 + 关闭按钮 + 标题文字
+      // SGL win: 严格移植自 sgl_win.c sgl_win_construct_cb
       const { surf, R } = createWidgetCanvas(el, w, z);
       el.style.opacity = 1;
       const alpha = w.alpha != null ? w.alpha : 255;
       const winFontSize = w.fontSize != null ? w.fontSize : 14;
-      const winFontHeight = winFontSize + 8;
+      const winFontBppVal = w.fontBpp || 4;
+      const winFontFamilyVal = w.fontFamily || '';
       const winBorder = w.borderWidth != null ? w.borderWidth : 0;
       const winRadius = w.radius || 0;
       const winW = w.width;
       const winH = w.height;
       const winBg = R.hexToColor(w.bgColor || '#FFFFFF');
       const winBorderCol = R.hexToColor(w.borderColor || '#000000');
-      const winFontFamily = getCssFontStack(w.fontFamily || '');
+      // SGL: title_h = sgl_max3(obj->radius, win->title_h, sgl_font_get_height(win->title_font))
+      // 必须优先使用已加载的真实字模 font_height，否则设计器与仿真 title_h 不一致会导致文本错位
+      const winSglFontForMetrics = getSglFontData(winFontFamilyVal, winFontSize, winFontBppVal);
+      const winFontHeight = winSglFontForMetrics ? winSglFontForMetrics.font_height : winFontSize;
       const winTitleH = Math.max(winRadius, w.titleHeight || 0, winFontHeight);
-      const winTitleBg = R.colorMixer(R.hexToColor(w.titleBgColor || '#808080'), winBg, 128);
       const winTitleTextCol = R.hexToColor(w.titleTextColor || '#000000');
       const winCloseCol = R.hexToColor(w.closeBtnColor || '#FF5A50');
-      // 1. 主体背景 + 边框
-      R.drawRect(surf, 0, 0, winW - 1, winH - 1, {
-        alpha: alpha, border: winBorder, border_alpha: alpha, border_mask: 0,
-        color: winBg, border_color: winBorderCol, radius: winRadius
-      });
-      // 2. 标题栏背景（混合色，从对象顶部覆盖到 title_h，含边框区域）
-      if (winTitleH > 0) {
-        R.drawFillRect(surf, 0, 0, winW - 1, winTitleH - 1, winRadius, winTitleBg, alpha);
+
+      // pixmap 背景图片
+      const winPixmapPath = w.pixmap || '';
+      const winPixmapFormat = w.pixmapFormat || 'RGB565';
+      let winPixmapImg = null;
+      if (winPixmapPath) {
+        winPixmapImg = getCachedPixmapImageData(winPixmapPath);
+        if (!winPixmapImg) {
+          preloadPixmapImage(winPixmapPath, () => render());
+        }
       }
-      // 3. 关闭按钮（红色实心圆）SGL: close_cx=x2-border-title_h/2, close_cy=y1+title_h/2+border/2
-      const winCloseR = winTitleH / 3;
-      const winCloseCx = winW - 1 - winBorder - winTitleH / 2;
-      const winCloseCy = winTitleH / 2 + winBorder / 2;
+
+      // SGL: body_area = {x1, y1+title_h, x2, y2}
+      // 1. 主体背景（标题栏以下区域，使用 bg.color 和 bg.pixmap）
+      R.drawRect(surf, 0, winTitleH, winW - 1, winH - 1, {
+        alpha: alpha, border: winBorder, border_alpha: alpha, border_mask: 0,
+        color: winBg, border_color: winBorderCol, radius: winRadius,
+        pixmap: winPixmapImg, pixmapFormat: winPixmapFormat
+      });
+      // SGL: title_area = {x1, y1, x2, y1+title_h}
+      // SGL: desc.color = win->title_bg_color（直接使用，不再混合）, pixmap = NULL
+      // 2. 标题栏背景（直接使用 titleBgColor）
+      if (winTitleH > 0) {
+        R.drawRect(surf, 0, 0, winW - 1, winTitleH, {
+          alpha: alpha, border: winBorder, border_alpha: alpha, border_mask: 0,
+          color: R.hexToColor(w.titleBgColor || '#808080'), border_color: winBorderCol, radius: winRadius,
+          pixmap: null, pixmapFormat: winPixmapFormat
+        });
+      }
+      // SGL: close_r = title_h/3, close_cx = x2 - border - title_h/2, close_cy = y1 + title_h/2 + border/2
+      // 3. 关闭按钮
+      const winCloseR = Math.floor(winTitleH / 3);
+      const winCloseCx = winW - 1 - winBorder - Math.floor(winTitleH / 2);
+      const winCloseCy = Math.floor(winTitleH / 2) + Math.floor(winBorder / 2);
       if (winCloseR > 0) {
         R.drawFillCircle(surf, winCloseCx, winCloseCy, winCloseR, winCloseCol, alpha);
       }
-      flushWidget(surf);
-      // 4. 标题文本（flush 之后，默认 LEFT_MID）
-      // SGL: title_area.x1+=border, LEFT_MID 时 align_pos.x+=radius, 绘制 y+=border
+      // 4. 标题文本
+      // SGL: title_area 内缩 border, LEFT_MID 时 align_pos.x += radius, 绘制 y = align_pos.y + border
       const winTitleAlign = w.titleAlign || 'LEFT_MID';
-      const winTitlePad = winTitleAlign === 'LEFT_MID' ? winRadius : 0;
       const titleStr = w.titleText || '窗口标题';
-      const coords = { x1: winBorder + winTitlePad, y1: winBorder, x2: winW - 1 - winBorder - winTitleH, y2: winBorder + winTitleH - 1 };
-      const pos = R.getTextPos(coords, titleStr, winFontSize, 4, alignStrToNum(winTitleAlign));
-      overlayText({ text: titleStr, color: (w.titleTextColor || '#000000'), fontSize: winFontSize, fontFamily: (w.fontFamily || ''), align: winTitleAlign, x: winBorder + winTitlePad, y: winBorder, w: w.width - 1 - winBorder - winTitleH - (winBorder + winTitlePad), h: winTitleH });
+      const winHasFont = widgetHasFont(w);
+      const winCssFamily = getCssFontStack(winFontFamilyVal);
+
+      if (winHasFont && titleStr) {
+        // 有字体：使用 SGL 字模数据像素级渲染（真正 WYSIWYG）
+        // SGL win.c: title_area.x1+=border, title_area.x2-=border（不减 title_h）
+        const titleTextCoords = {
+          x1: winBorder, y1: 0,
+          x2: winW - 1 - winBorder, y2: winTitleH
+        };
+        const titleAlignId = alignStrToNum(winTitleAlign);
+        // 复用前面计算 title_h 时获取的字模数据
+        const winSglFont = winSglFontForMetrics || getSglFontData(winFontFamilyVal, winFontSize, winFontBppVal);
+        let titleDrawX, titleDrawY;
+        if (winSglFont) {
+          // 使用真实字模宽高计算位置 + 字模数据渲染
+          const titlePos = R.getTextPosSGL(titleTextCoords, titleStr, winSglFont, 0, titleAlignId);
+          titleDrawX = titlePos.x;
+          if (winTitleAlign === 'LEFT_MID') titleDrawX += winRadius;
+          titleDrawY = titlePos.y + winBorder;
+          R.drawStringSGL(surf, titleDrawX, titleDrawY, titleStr,
+            winTitleTextCol, alpha, winSglFont);
+        } else {
+          // fallback: 字模数据未加载时用 Canvas fillText 近似
+          const titlePos = R.getTextPosRealtime(titleTextCoords, titleStr, winFontSize, winCssFamily, 0, titleAlignId);
+          titleDrawX = titlePos.x;
+          if (winTitleAlign === 'LEFT_MID') titleDrawX += winRadius;
+          titleDrawY = titlePos.y + winBorder;
+          R.drawString(surf, titleDrawX, titleDrawY, titleStr,
+            winTitleTextCol, alpha, winFontSize, winCssFamily, winFontBppVal);
+        }
+      }
+
+      flushWidget(surf);
+
+      if (!winHasFont) {
+        // 无字体：DOM 叠加（系统默认字体）
+        const winTitlePad = winTitleAlign === 'LEFT_MID' ? winRadius : 0;
+        overlayText({ text: titleStr, color: (w.titleTextColor || '#000000'), fontSize: winFontSize, fontFamily: winFontFamilyVal, align: winTitleAlign, x: winBorder + winTitlePad, y: winBorder, w: winW - 1 - winBorder - winTitleH - (winBorder + winTitlePad), h: winTitleH });
+      }
       break;
     }
 
     case 'msgbox': {
-      // SGLRenderer 像素级渲染：主体 + 分隔线 + 左右按钮 + 标题/消息/按钮文本
-      // SGL: font_height = fontSize + 8, lbtn_color = mixer(白,黑,200) = #C7C7C7
+      // SGL msgbox: 严格移植自 sgl_msgbox.c sgl_msgbox_construct_cb
+      // 坐标系: x1=0, y1=0, x2=W-1, y2=H-1 (闭区间)
+      // font_height = fontSize + 8
+      // button_coords = {x1, x2, y2-font_height, y2}  (整个按钮带, 作为 clip)
+      // left_coords  = {x1+border, (x1+x2)/2-border/2-1, y2-2*font_height, y2-border}
+      // right_coords = {(x1+x2)/2+border/2+1, x2-border, y2-2*font_height, y2-border}
+      // 分隔线: sgl_draw_fill_hline(y=y1+title_height+4, x1=x1+border, x2=x2-border, width=border)
+      // 按钮: sgl_draw_fill_rect(clip=button_coords, rect=left/right_coords, radius=obj->radius)
       const { surf, R } = createWidgetCanvas(el, w, z);
       el.style.opacity = 1;
       const alpha = w.alpha != null ? w.alpha : 255;
@@ -1551,67 +1710,99 @@ function renderPreviewWidget(el, w, z) {
       const mbH = w.height;
       const mbBg = R.hexToColor(w.bgColor || '#FFFFFF');
       const mbBorderCol = R.hexToColor(w.borderColor || '#000000');
-      const mbFontFamily = getCssFontStack(w.fontFamily || '');
       const mbTitleH = (w.titleHeight || 0) || mbFontHeight;
-      const mbTitleTextCol = R.hexToColor(w.titleTextColor || '#000000');
-      const mbMsgCol = R.hexToColor(w.msgColor || w.textColor || '#000000');
-      const mbLineMargin = w.msgLineMargin != null ? w.msgLineMargin : 1;
       const mbMsgOffsetX = w.msgOffsetX || 0;
       const mbMsgOffsetY = w.msgOffsetY || 0;
-      // SGL 默认按钮颜色 mixer(白,黑,200)=#C7C7C7
+      const mbLineMargin = w.msgLineMargin != null ? w.msgLineMargin : 1;
+      // SGL 默认按钮颜色 mixer(白,黑,200)
       const mbDefBtnCol = R.colorMixer(R.hexToColor('#FFFFFF'), R.hexToColor('#000000'), 200);
       const mbLeftBtnCol = w.leftBtnColor ? R.hexToColor(w.leftBtnColor) : mbDefBtnCol;
-      const mbLeftBtnTextCol = R.hexToColor(w.leftBtnTextColor || '#000000');
       const mbRightBtnCol = w.rightBtnColor ? R.hexToColor(w.rightBtnColor) : mbDefBtnCol;
-      const mbRightBtnTextCol = R.hexToColor(w.rightBtnTextColor || '#000000');
-      // 1. 主体背景 + 边框
+
+      // SGL 整数除法: (x1+x2)/2, x1=0, x2=width-1
+      const mbMidX = Math.trunc((0 + (mbW - 1)) / 2);
+
+      // 1. 主体背景 + 边框 (SGL: sgl_draw_rect)
       R.drawRect(surf, 0, 0, mbW - 1, mbH - 1, {
         alpha: alpha, border: mbBorder, border_alpha: alpha, border_mask: 0,
         color: mbBg, border_color: mbBorderCol, radius: mbRadius
       });
-      // 2. 分隔线 SGL: y=title_h+4, x1=border, x2=width-1-border, width=border
+
+      // 2. 标题分隔线 (SGL: sgl_draw_fill_hline)
+      //    y = y1 + title_height + 4, x1 = x1+border, x2 = x2-border, width = border
       const mbSepY = mbTitleH + 4;
-      R.drawHLine(surf, mbBorder, mbW - 1 - mbBorder, mbSepY, Math.max(1, mbBorder), mbBorderCol, alpha);
-      // 3. 左右按钮背景 SGL: y1=height-2*font_height, y2=height-1-border
-      const mbBtnTop = mbH - 2 * mbFontHeight;
-      const mbBtnBottom = mbH - 1 - mbBorder;
-      const mbMidX = mbW / 2;
+      R.drawHLine(surf, mbBorder, (mbW - 1) - mbBorder, mbSepY, mbBorder, mbBorderCol, alpha);
+
+      // 3. 左右按钮背景 (SGL: sgl_draw_fill_rect 带 button_coords clip 和 obj->radius 圆角)
+      //    button_coords = {x1=0, x2=width-1, y1=height-1-font_height, y2=height-1}
+      //    left_coords  = {x1=border, x2=midX-border/2-1, y1=height-1-2*font_height, y2=height-1-border}
+      //    right_coords = {x1=midX+border/2+1, x2=width-1-border, y1=height-1-2*font_height, y2=height-1-border}
+      const mbBtnTop = (mbH - 1) - 2 * mbFontHeight;
+      const mbBtnBottom = (mbH - 1) - mbBorder;
+      const mbBtnClipY1 = (mbH - 1) - mbFontHeight;
       const mbLeftBtnX1 = mbBorder;
-      const mbLeftBtnX2 = Math.floor(mbMidX - mbBorder / 2 - 1);
-      const mbRightBtnX1 = Math.floor(mbMidX + mbBorder / 2 + 1);
-      const mbRightBtnX2 = mbW - 1 - mbBorder;
+      const mbLeftBtnX2 = mbMidX - Math.trunc(mbBorder / 2) - 1;
+      const mbRightBtnX1 = mbMidX + Math.trunc(mbBorder / 2) + 1;
+      const mbRightBtnX2 = (mbW - 1) - mbBorder;
+
+      // 保存原始 clip, 临时设置 button_coords 作为 clip (SGL: sgl_draw_fill_rect 的 area 参数)
+      const mbOldClip = surf.clip;
+      const mbBtnClip = {
+        x1: Math.round(0 * z),
+        y1: Math.round(mbBtnClipY1 * z),
+        x2: Math.round((mbW - 1) * z),
+        y2: Math.round((mbH - 1) * z),
+      };
+      mbBtnClip.x1 = Math.max(mbBtnClip.x1, mbOldClip.x1);
+      mbBtnClip.y1 = Math.max(mbBtnClip.y1, mbOldClip.y1);
+      mbBtnClip.x2 = Math.min(mbBtnClip.x2, mbOldClip.x2);
+      mbBtnClip.y2 = Math.min(mbBtnClip.y2, mbOldClip.y2);
+
       if (mbLeftBtnX2 >= mbLeftBtnX1) {
-        R.drawFillRect(surf, mbLeftBtnX1, mbBtnTop, mbLeftBtnX2, mbBtnBottom, 0, mbLeftBtnCol, alpha);
+        surf.clip = mbBtnClip;
+        R.drawFillRect(surf, mbLeftBtnX1, mbBtnTop, mbLeftBtnX2, mbBtnBottom, mbRadius, mbLeftBtnCol, alpha);
+        surf.clip = mbOldClip;
       }
       if (mbRightBtnX2 >= mbRightBtnX1) {
-        R.drawFillRect(surf, mbRightBtnX1, mbBtnTop, mbRightBtnX2, mbBtnBottom, 0, mbRightBtnCol, alpha);
+        surf.clip = mbBtnClip;
+        R.drawFillRect(surf, mbRightBtnX1, mbBtnTop, mbRightBtnX2, mbBtnBottom, mbRadius, mbRightBtnCol, alpha);
+        surf.clip = mbOldClip;
       }
       flushWidget(surf);
-      // 4. 标题文本（居中，flush 之后）
-      // SGL: title_coords x1=border+2, x2=width-1-border+2, y1=1, y2=title_h+border
+
+      // 4. 标题文本（居中）
+      //    SGL: title_coords x1=border+2, x2=x2-border+2, y1=1, y2=title_h+border
       const titleStr = w.titleText || 'Message Box';
-      const titleCoords = { x1: mbBorder + 2, y1: 1, x2: mbW - 1 - mbBorder + 2, y2: mbTitleH + mbBorder };
-      const titlePos = R.getTextPos(titleCoords, titleStr, mbFontSize, 4, alignStrToNum('CENTER'));
-      overlayText({ text: titleStr, color: (w.titleTextColor || '#000000'), fontSize: mbFontSize, fontFamily: (w.fontFamily || ''), align: 'CENTER', x: mbBorder + 2, y: 1, w: w.width - 2 * mbBorder, h: mbTitleH + mbBorder });
-      // 5. 消息文本（多行左对齐）SGL: x1=border+2+offsetX, y1=title_h+border+offsetY+2
+      overlayText({ text: titleStr, color: (w.titleTextColor || '#000000'), fontSize: mbFontSize, fontFamily: (w.fontFamily || ''), align: 'CENTER', x: mbBorder + 2, y: 1, w: (mbW - 1) - mbBorder + 2 - (mbBorder + 2) + 1, h: mbTitleH + mbBorder });
+
+      // 5. 消息文本（多行左对齐）
+      //    SGL: text_coords x1=border+2+offsetX, x2=x2-border-2, y1=title_h+border+offsetY, y2=y2-(font_height+border)
+      //    sgl_draw_string_mult_line(x=text_coords.x1, y=text_coords.y1+2)
       const mbMsgTop = mbTitleH + mbBorder + mbMsgOffsetY + 2;
       const mbMsgLeft = mbBorder + 2 + mbMsgOffsetX;
+      const mbMsgRight = (mbW - 1) - mbBorder - 2;
+      const mbMsgBottom = (mbH - 1) - (mbFontHeight + mbBorder);
       const mbMsgText = w.msgText || 'NULL';
       if (mbMsgText && mbMsgText !== 'NULL') {
-        overlayText({ text: mbMsgText, color: (w.msgColor || w.textColor || '#000000'), fontSize: mbFontSize, fontFamily: (w.fontFamily || ''), x: mbMsgLeft, y: mbMsgTop, w: mbW - 2 * mbBorder - 4, h: mbH - mbMsgTop - 2 * mbFontHeight, multiline: true, lineMargin: mbLineMargin, maxWidth: mbW - 2 * mbBorder - 4, align: 'LEFT_MID' });
+        overlayText({ text: mbMsgText, color: (w.msgColor || w.textColor || '#000000'), fontSize: mbFontSize, fontFamily: (w.fontFamily || ''), x: mbMsgLeft, y: mbMsgTop, w: mbMsgRight - mbMsgLeft + 1, h: mbMsgBottom - mbMsgTop + 1, multiline: true, lineMargin: mbLineMargin, maxWidth: mbMsgRight - mbMsgLeft + 1, align: 'LEFT_MID' });
       }
-      // 6. 左右按钮文本（居中）SGL: y_offset = font_height/2
+
+      // 6. 左右按钮文本
+      //    SGL: msgbox_draw_text(coords, font, text, 0, SGL_ALIGN_CENTER, y_offset=font_height/2)
+      //    offY = SGL文本中心 - 按钮中心 (整数除法)
       const leftTxt = w.leftBtnText || 'YES';
       const rightTxt = w.rightBtnText || 'NO';
+      const mkBtnTextPv = (x1, x2, txt, col) => {
+        const coordsW = x2 - x1 + 1;
+        const coordsH = mbBtnBottom - mbBtnTop + 1;
+        const sglOffY = Math.trunc((coordsH - mbFontSize) / 2) + Math.trunc(mbFontHeight / 2) + Math.trunc(mbFontSize / 2) - Math.trunc(coordsH / 2);
+        overlayText({ text: txt, color: col, fontSize: mbFontSize, fontFamily: (w.fontFamily || ''), align: 'CENTER', x: x1, y: mbBtnTop, w: coordsW, h: coordsH, offY: sglOffY });
+      };
       if (mbLeftBtnX2 >= mbLeftBtnX1) {
-        const leftCoords = { x1: mbLeftBtnX1, y1: mbBtnTop, x2: mbLeftBtnX2, y2: mbBtnBottom };
-        const leftPos = R.getTextPos(leftCoords, leftTxt, mbFontSize, 4, alignStrToNum('CENTER'));
-        overlayText({ text: leftTxt, color: (w.leftBtnTextColor || '#000000'), fontSize: mbFontSize, fontFamily: (w.fontFamily || ''), align: 'CENTER', x: mbLeftBtnX1, y: mbBtnTop, w: mbLeftBtnX2 - mbLeftBtnX1 + 1, h: mbBtnBottom - mbBtnTop + 1 });
+        mkBtnTextPv(mbLeftBtnX1, mbLeftBtnX2, leftTxt, (w.leftBtnTextColor || '#000000'));
       }
       if (mbRightBtnX2 >= mbRightBtnX1) {
-        const rightCoords = { x1: mbRightBtnX1, y1: mbBtnTop, x2: mbRightBtnX2, y2: mbBtnBottom };
-        const rightPos = R.getTextPos(rightCoords, rightTxt, mbFontSize, 4, alignStrToNum('CENTER'));
-        overlayText({ text: rightTxt, color: (w.rightBtnTextColor || '#000000'), fontSize: mbFontSize, fontFamily: (w.fontFamily || ''), align: 'CENTER', x: mbRightBtnX1, y: mbBtnTop, w: mbRightBtnX2 - mbRightBtnX1 + 1, h: mbBtnBottom - mbBtnTop + 1 });
+        mkBtnTextPv(mbRightBtnX1, mbRightBtnX2, rightTxt, (w.rightBtnTextColor || '#000000'));
       }
       break;
     }
@@ -1620,43 +1811,60 @@ function renderPreviewWidget(el, w, z) {
       // SGL scroll: 严格移植自 sgl_scroll.c
       // direct: 0=水平, 1=垂直 (SGL_DIRECT_HORIZONTAL=0, SGL_DIRECT_VERTICAL=1)
       // track=整个控件区域, 滑块颜色=mixer(color, BG黑, 128), 滑块圆角=radius-border
-      const { surf, R } = createWidgetCanvas(el, w, z);
+      const { surf, R } = createWidgetCanvas(el, w, z, renderSize);
       el.style.opacity = 1;
       const alpha = w.alpha != null ? w.alpha : 255;
       const scDirect = w.direct != null ? w.direct : 1; // 默认垂直
       const scValue = w.value != null ? w.value : 0;
-      const scWidth = w.width != null ? w.width : 10; // SGL_SCROLL_DEFAULT_WIDTH
+      const scWidth = w.width != null ? w.width : 10; // SGL_SCROLL_DEFAULT_WIDTH（滚动条宽度属性）
       const scColor = R.hexToColor(w.color || '#FFFFFF'); // SGL_THEME_COLOR
       const scBorderColor = R.hexToColor(w.borderColor || '#000000'); // SGL_THEME_BORDER_COLOR
       const scBorder = w.borderWidth != null ? w.borderWidth : 2;
       const scRadius = Math.min(w.radius != null ? w.radius : 0, Math.floor(scWidth / 2));
 
-      // 1. track: 整个控件区域（含边框、填充）
-      R.drawRect(surf, 0, 0, w.width - 1, w.height - 1, {
-        alpha: alpha, border: scBorder, border_alpha: alpha, border_mask: 0,
-        color: scColor, border_color: scBorderColor, radius: scRadius
-      });
+      // 绑定对象时用重算的渲染尺寸，否则用控件自身尺寸
+      const rw = renderSize ? renderSize.domW : w.width;
+      const rh = renderSize ? renderSize.domH : w.height;
 
-      // 2. 滑块: 颜色 = sgl_color_mixer(color, SGL_THEME_BG_COLOR(黑), 128)
+      // 绑定对象时,scroll 应视觉上融入绑定目标,与仿真图片一致:
+      // track 颜色 = 目标背景色,不显示 scroll 自己的独立边框,只保留滑块
+      // 未绑定时,scroll 作为独立控件画完整 track(含边框、填充)
+      const bindWidget = (w.bindTarget && page && page.widgets) ? page.widgets.find(wt => getWidgetVarName(wt) === w.bindTarget) : null;
+
+      if (bindWidget) {
+        // 融入目标:用目标背景色填充整个 scroll 区域,覆盖目标右侧/底侧边框
+        const trackColor = R.hexToColor(bindWidget.bgColor || bindWidget.color || '#FFFFFF');
+        R.drawFillRect(surf, 0, 0, rw - 1, rh - 1, scRadius, trackColor, alpha);
+      } else {
+        // 未绑定:画完整 track（含边框、填充）
+        R.drawRect(surf, 0, 0, rw - 1, rh - 1, {
+          alpha: alpha, border: scBorder, border_alpha: alpha, border_mask: 0,
+          color: scColor, border_color: scBorderColor, radius: scRadius
+        });
+      }
+
+      // 滑块: 颜色 = sgl_color_mixer(color, SGL_THEME_BG_COLOR(黑), 128)
       const thumbCol = R.colorMixer(scColor, R.hexToColor('#000000'), 128);
-      const thumbRadius = Math.max(0, scRadius - scBorder);
+      // 绑定时滑块占满整个 scroll 区域,未绑定时按 SGL 逻辑缩进 border
+      const thumbBorder = bindWidget ? 0 : scBorder;
+      const thumbRadius = Math.max(0, scRadius - thumbBorder);
       let len, pos, fx1, fy1, fx2, fy2;
       if (scDirect === 1) {
         // 垂直: 长度方向 = y
-        len = Math.max(Math.floor(w.height / 8), scRadius * 2 + 1);
-        pos = Math.floor(scValue * (w.height - len) / 100);
-        fx1 = scBorder;
-        fx2 = w.width - 1 - scBorder;
-        fy1 = pos + scBorder;
-        fy2 = pos + len - scBorder;
+        len = Math.max(Math.floor(rh / 8), scRadius * 2 + 1);
+        pos = Math.floor(scValue * (rh - len) / 100);
+        fx1 = thumbBorder;
+        fx2 = rw - 1 - thumbBorder;
+        fy1 = pos + thumbBorder;
+        fy2 = pos + len - thumbBorder;
       } else {
         // 水平: 长度方向 = x
-        len = Math.max(Math.floor(w.width / 8), scRadius * 2 + 1);
-        pos = Math.floor(scValue * (w.width - len) / 100);
-        fy1 = scBorder;
-        fy2 = w.height - 1 - scBorder;
-        fx1 = pos + scBorder;
-        fx2 = pos + len - scBorder;
+        len = Math.max(Math.floor(rw / 8), scRadius * 2 + 1);
+        pos = Math.floor(scValue * (rw - len) / 100);
+        fy1 = thumbBorder;
+        fy2 = rh - 1 - thumbBorder;
+        fx1 = pos + thumbBorder;
+        fx2 = pos + len - thumbBorder;
       }
       R.drawFillRect(surf, fx1, fy1, fx2, fy2, thumbRadius, thumbCol, alpha);
       flushWidget(surf);
@@ -1688,6 +1896,9 @@ function renderPreviewWidget(el, w, z) {
         alpha: alpha, border: boxBorderW, border_alpha: alpha, border_mask: 0,
         color: boxBg, border_color: boxBorderCol, radius: boxRadius
       });
+      // SGL 核心：box 默认 focus=1，渲染完控件后额外画绿色焦点 wireframe
+      // SGL_FOCUSED_COLOR = sgl_rgb(0x00, 0xFF, 0x00)，SGL_FOCUSED_WIDTH = 1
+      R.drawWireframe(surf, 0, 0, w.width - 1, w.height - 1, boxRadius, 1, R.hexToColor('#00FF00'), 255);
 
       // 2. 滚动条
       if (scrollEnable && scrollMode) {
@@ -1723,14 +1934,20 @@ function renderPreviewWidget(el, w, z) {
     case 'numberkbd': {
       // SGLRenderer 像素级渲染：主体 + 各按钮 + 4bpp 图标 + 文字
       // 严格移植自 sgl_numberkbd.c: enter/backspace 使用 4bpp 位图，icon 在 flush 前，文字在 flush 后
-      const { surf, R } = createWidgetCanvas(el, w, z);
-      el.style.opacity = 1;
       const alpha = w.alpha != null ? w.alpha : 255;
       const COL = 4, ROW = 5;
       const nkMargin = w.btnMargin != null ? w.btnMargin : 5;
-      const bodyW = w.width, bodyH = w.height;
-      const boxW = (bodyW - (COL + 1) * nkMargin) / COL;
-      const boxH = (bodyH - (ROW + 1) * nkMargin) / ROW;
+      // SGL DRAW_INIT: 根据初始尺寸算出 box_w/box_h，再重算精确尺寸
+      // SGL: obj->coords.x2 = x1 + new_width (闭区间), body_w = new_width + 1
+      const rawBoxW = Math.floor((w.width - (COL + 1) * nkMargin) / COL);
+      const rawBoxH = Math.floor((w.height - (ROW + 1) * nkMargin) / ROW);
+      const bodyW = rawBoxW * COL + (COL + 1) * nkMargin + 1;
+      const bodyH = rawBoxH * ROW + (ROW + 1) * nkMargin + 1;
+      const boxW = rawBoxW;
+      const boxH = rawBoxH;
+      // 用 DRAW_INIT 后的精确尺寸创建 surface，而非 w.width/w.height
+      const { surf, R } = createWidgetCanvas(el, w, z, { domW: bodyW, domH: bodyH });
+      el.style.opacity = 1;
       const nkCellCol = R.hexToColor(w.cellColor || '#FFFFFF');
       const nkBorderCol = R.hexToColor(w.borderColor || '#000000');
       const nkBorderW = w.borderWidth != null ? w.borderWidth : 2;
@@ -1751,11 +1968,13 @@ function renderPreviewWidget(el, w, z) {
         ['.', '0', '%', '\r']
       ];
       // 1. 主体背景 + 边框（buf32，flush 前）
+      // SGL: body_desc.border_alpha 未设置(memset=0)，边框完全透明不可见
       R.drawRect(surf, 0, 0, bodyW - 1, bodyH - 1, {
-        alpha: alpha, border: nkBorderW, border_alpha: alpha, border_mask: 0,
+        alpha: alpha, border: nkBorderW, border_alpha: 0, border_mask: 0,
         color: nkCellCol, border_color: nkBorderCol, radius: nkRadius
       });
       // 2. 各按钮（背景+边框）+ 4bpp 图标（buf32，flush 前）
+      //    SGL: btn.x2 = btn.x1 + box_w (闭区间，width = box_w + 1), btn.y2 = btn.y1 + box_h
       //    SGL: btn_col==3 && btn_row==2 → backspace_icon
       //         btn_col==3 && btn_row==3 → btn.y2 += margin+box_h, enter_icon（跨 row3+row4）
       //         btn_col==3 && btn_row==4 → 跳过（已合并到 enter）
@@ -1767,41 +1986,71 @@ function renderPreviewWidget(el, w, z) {
           const isOk = (r === 3 && c === 3);
           const bx = nkMargin + c * (boxW + nkMargin);
           const by = nkMargin + r * (boxH + nkMargin);
-          const bw = boxW;
-          const bh = isOk ? (2 * boxH + nkMargin) : boxH;
-          R.drawRect(surf, bx, by, bx + bw - 1, by + bh - 1, {
-            alpha: alpha, border: nkBtnBorderW, border_alpha: alpha, border_mask: 0,
+          // SGL: btn.x2 = btn.x1 + box_w, btn.y2 = btn.y1 + box_h (闭区间 width=box_w+1)
+          const bx2 = bx + boxW;
+          const by2 = isOk ? (by + 2 * boxH + nkMargin) : (by + boxH);
+          // SGL: btn_desc.border_alpha 未设置(memset=0)，边框完全透明不可见
+          R.drawRect(surf, bx, by, bx2, by2, {
+            alpha: alpha, border: nkBtnBorderW, border_alpha: 0, border_mask: 0,
             color: nkBtnCol, border_color: nkBtnBorderCol, radius: nkBtnRadius
           });
           if (isBack) {
             // backspace icon 30×13: text_x = x1 + (boxW - 30) / 2, text_y = y1 + (boxH - 13 + 1) / 2
-            const iconX = bx + Math.floor((bw - R.NUMBERKBD_BACKSPACE_ICON.width) / 2);
+            const iconX = bx + Math.floor((boxW - R.NUMBERKBD_BACKSPACE_ICON.width) / 2);
             const iconY = by + Math.floor((boxH - R.NUMBERKBD_BACKSPACE_ICON.height + 1) / 2);
             R.drawIcon(surf, iconX, iconY, nkTextCol, alpha, R.NUMBERKBD_BACKSPACE_ICON);
           } else if (isOk) {
             // enter icon 30×20: text_x = x1 + (boxW - 30) / 2, text_y = y1 + (2*boxH - 20) / 2
-            const iconX = bx + Math.floor((bw - R.NUMBERKBD_ENTER_ICON.width) / 2);
+            const iconX = bx + Math.floor((boxW - R.NUMBERKBD_ENTER_ICON.width) / 2);
             const iconY = by + Math.floor((2 * boxH - R.NUMBERKBD_ENTER_ICON.height) / 2);
             R.drawIcon(surf, iconX, iconY, nkTextCol, alpha, R.NUMBERKBD_ENTER_ICON);
           } else {
-            // 文字按钮：用 "0" 字符宽度居中
+            // 文字按钮：记录位置，flush 后用 "0" 宽度居中绘制
             const ch = kbdDigits[r][c];
-            textBtns.push({ x1: bx, y1: by, x2: bx + bw - 1, y2: by + bh - 1, ch: ch });
+            textBtns.push({ x1: bx, y1: by, ch: ch });
           }
         }
       }
+      // 3. 文字按钮文本
+      //    SGL: text_x = btn.x1 + (boxW - font_width("0")) / 2  ← 用 "0" 宽度居中
+      //         text_y = btn.y1 + (boxH - font_height) / 2
+      //    有字体时用 SGL drawString 像素级渲染到 buf32（flush 前），与 SGL 仿真一致
+      //    无字体时用 DOM span 叠加（flush 后），使用系统默认字体
+      const nkHasFont = widgetHasFont(w);
+      const nkFontBpp = w.fontBpp != null ? w.fontBpp : 4;
+      const zeroWidth = R.measureTextWidth('0', nkFontSize, nkFontFamily);
+      const fontHeight = nkFontSize;
+      const textOffsetX = Math.floor((boxW - zeroWidth) / 2);
+      const textOffsetY = Math.floor((boxH - fontHeight) / 2);
+
+      // 有字体：SGL drawString 像素级渲染到 buf32（flush 前）
+      if (nkHasFont) {
+        for (const btn of textBtns) {
+          const tx = btn.x1 + textOffsetX;
+          const ty = btn.y1 + textOffsetY;
+          R.drawString(surf, tx, ty, btn.ch, nkTextCol, alpha, nkFontSize, nkFontFamily, nkFontBpp);
+        }
+      }
+
       flushWidget(surf);
-      // 3. 文字按钮文本（drawString，flush 之后，居中）
-      for (const btn of textBtns) {
-        const coords = { x1: btn.x1, y1: btn.y1, x2: btn.x2, y2: btn.y2 };
-        const pos = R.getTextPos(coords, btn.ch, nkFontSize, 4, alignStrToNum('CENTER'));
-        overlayTextAt({ text: btn.ch, color: (w.textColor || '#000000'), fontSize: nkFontSize, fontFamily: (w.fontFamily || ''), x: pos.x, y: pos.y, align: 'CENTER' });
+
+      // 无字体：DOM span 叠加（flush 后），使用系统默认字体
+      if (!nkHasFont) {
+        for (const btn of textBtns) {
+          const tx = btn.x1 + textOffsetX;
+          const ty = btn.y1 + textOffsetY;
+          overlayTextAt({ text: btn.ch, color: (w.textColor || '#000000'), fontSize: nkFontSize, fontFamily: (w.fontFamily || ''), x: tx, y: ty, align: 'LEFT' });
+        }
       }
       break;
     }
 
     case 'keyboard': {
-      // SGLRenderer 像素级渲染：主体 + 4 行按键 + 按键文字（用 splitLen 切分）
+      // SGL keyboard 严格移植自 sgl_keyboard.c DRAW_MAIN
+      // 默认展示 LOWER 模式 (key_mode=1, layout_mode=0)
+      // 1. splitLen 计算行高和列宽
+      // 2. icon 按键 (backspace/enter/newline/keybd/left/right) 用 drawIcon 渲染
+      // 3. 文字按键: 有字体时用 drawString 像素级渲染, 无字体时 DOM span 叠加
       const { surf, R } = createWidgetCanvas(el, w, z);
       el.style.opacity = 1;
       const alpha = w.alpha != null ? w.alpha : 255;
@@ -1815,73 +2064,118 @@ function renderPreviewWidget(el, w, z) {
       const kbBtnBorderCol = R.hexToColor(w.btnBorderColor || '#000000');
       const kbBtnBorderW = w.btnBorderWidth != null ? w.btnBorderWidth : 0;
       const kbBtnBorderAlpha = w.btnBorderAlpha != null ? w.btnBorderAlpha : 255;
-      const kbBtnRadius = w.btnRadius || 0;
       const kbTextCol = R.hexToColor(w.textColor || '#000000');
       const kbFontSize = w.fontSize || 14;
+      const kbFontBpp = w.fontBpp != null ? w.fontBpp : 4;
       const kbFontFamily = getCssFontStack(w.fontFamily || '');
       const bodyW = w.width, bodyH = w.height;
-      const kbMargin = 2;     // 按键之间以及与主体边的间距
-      const kbRowGap = 2;     // 行间距
-      const kbRows = [
-        ['1','2','3','4','5','6','7','8','9','0'],
-        ['Q','W','E','R','T','Y','U','I','O','P'],
-        ['A','S','D','F','G','H','J','K','L'],
-        ['Z','X','C','V','B','N','M','⌫']
-      ];
-      const ROW = kbRows.length;
-      const rowH = (bodyH - kbBorderW * 2 - (ROW + 1) * kbRowGap) / ROW;
+      // SGL DRAW_INIT: key_margin = max(body_w/128, 1) if 0; btn_radius = max(key_margin, 2) if 0
+      let kbKeyMargin = w.btnMargin != null ? w.btnMargin : 0;
+      if (kbKeyMargin === 0) kbKeyMargin = Math.max(Math.floor(bodyW / 128), 1);
+      let kbBtnRadius = w.btnRadius || 0;
+      if (kbBtnRadius === 0) kbBtnRadius = Math.max(kbKeyMargin, 2);
+      // 默认 LOWER 模式
+      const kbKeyMode = 1;
+      const kbLayoutMode = kbKeyMode >> 1;  // 0 = upper/lower layout
+      const kbHasFont = widgetHasFont(w);
+      const kbCssFamily = kbHasFont ? kbFontFamily : 'system-ui, -apple-system, "Segoe UI", sans-serif';
+
       // 1. 主体背景 + 边框
       R.drawRect(surf, 0, 0, bodyW - 1, bodyH - 1, {
         alpha: Math.min(alpha, kbMainAlpha), border: kbBorderW, border_alpha: Math.min(alpha, kbBorderAlpha), border_mask: 0,
         color: kbCellCol, border_color: kbBorderCol, radius: kbRadius
       });
-      // 2. 各按键（用 splitLen 按等权切分宽度）
-      const btnRects = [];
-      const innerX1 = kbBorderW + kbMargin;
-      const innerX2 = bodyW - 1 - kbBorderW - kbMargin;
-      const innerW = innerX2 - innerX1 + 1;
-      for (let r = 0; r < ROW; r++) {
-        const row = kbRows[r];
-        const n = row.length;
-        const widths = new Array(n);
-        const weights = new Array(n).fill(1);
-        R.splitLen(weights, n, innerW, kbMargin, widths);
-        const by = kbBorderW + kbMargin + r * (rowH + kbRowGap);
-        let bx = innerX1;
-        for (let c = 0; c < n; c++) {
-          const bw = widths[c];
-          R.drawRect(surf, bx, by, bx + bw - 1, by + rowH - 1, {
+
+      // 2. splitLen 计算行高
+      const btnHeight = new Array(4);
+      R.splitLen(R.KEYBD_BTN_HEIGHT, 4, bodyH, kbKeyMargin, btnHeight);
+
+      // 3. 遍历 4 行按键
+      let btnIndex = 0;
+      const textBtns = [];
+      let btnY1 = 0;
+      for (let i = 0; i < 4; i++) {
+        const btnWidth = new Array(12);
+        const rowCount = R.KEYBOARD_BTN_COUNT[kbLayoutMode][i];
+        R.splitLen(R.KEYBD_BTN_WIDTH[kbLayoutMode][i], rowCount, bodyW, kbKeyMargin, btnWidth);
+
+        btnY1 += kbKeyMargin;
+        const btnY2 = btnY1 + btnHeight[i] - 1;
+        let btnX1 = 0;
+
+        for (let j = 0; j < rowCount; j++) {
+          btnX1 += kbKeyMargin;
+          const btnX2 = btnX1 + btnWidth[j] - 1;
+
+          // 画按键矩形
+          R.drawRect(surf, btnX1, btnY1, btnX2, btnY2, {
             alpha: alpha, border: kbBtnBorderW, border_alpha: Math.min(alpha, kbBtnBorderAlpha), border_mask: 0,
             color: kbBtnCol, border_color: kbBtnBorderCol, radius: kbBtnRadius
           });
-          btnRects.push({ x1: bx, y1: by, x2: bx + bw - 1, y2: by + rowH - 1, text: row[c] });
-          bx += bw + kbMargin;
+
+          // 判断是否为 icon
+          const iconName = R.keyindexIsIcon(kbKeyMode, btnIndex);
+          if (iconName) {
+            // icon 按键: 用 drawKeyboardIcon 渲染（严格移植 sgl_draw_character）
+            const meta = R.KEYBOARD_ICON_META[iconName];
+            const textX = btnX1 + Math.floor((btnWidth[j] - meta.advW) / 2);
+            const textY = btnY1 + Math.floor((btnHeight[i] - meta.fontHeight) / 2);
+            R.drawKeyboardIcon(surf, textX, textY, kbTextCol, R.SGL_ALPHA_MAX, meta);
+          } else {
+            // 文字按键: 记录位置
+            const text = R.KEYBD_BTN_MAP[kbKeyMode][btnIndex];
+            textBtns.push({ x1: btnX1, y1: btnY1, w: btnWidth[j], h: btnHeight[i], text: text });
+          }
+
+          btnX1 += btnWidth[j];
+          btnIndex++;
+        }
+        btnY1 = btnY2 + 1;
+      }
+
+      // 有字体: drawString 像素级渲染到 buf32（flush 前）
+      if (kbHasFont) {
+        for (const btn of textBtns) {
+          const textW = R.measureTextWidth(btn.text, kbFontSize, kbCssFamily);
+          const textX = btn.x1 + Math.floor((btn.w - textW) / 2);
+          const textY = btn.y1 + Math.floor((btn.h - kbFontSize) / 2);
+          R.drawString(surf, textX, textY, btn.text, kbTextCol, alpha, kbFontSize, kbCssFamily, kbFontBpp);
         }
       }
+
       flushWidget(surf);
-      // 3. 按键文字（flush 之后，居中）
-      for (const btn of btnRects) {
-        const coords = { x1: btn.x1, y1: btn.y1, x2: btn.x2, y2: btn.y2 };
-        const pos = R.getTextPos(coords, btn.text, kbFontSize, 4, alignStrToNum('CENTER'));
-        overlayTextAt({ text: btn.text, color: (w.textColor || '#000000'), fontSize: kbFontSize, fontFamily: (w.fontFamily || ''), x: pos.x, y: pos.y, align: 'CENTER' });
+
+      // 无字体: DOM span 叠加（flush 后）
+      if (!kbHasFont) {
+        for (const btn of textBtns) {
+          const textW = R.measureTextWidth(btn.text, kbFontSize, kbCssFamily);
+          const textX = btn.x1 + Math.floor((btn.w - textW) / 2);
+          const textY = btn.y1 + Math.floor((btn.h - kbFontSize) / 2);
+          overlayTextAt({ text: btn.text, color: (w.textColor || '#000000'), fontSize: kbFontSize, fontFamily: (w.fontFamily || ''), x: textX, y: textY });
+        }
       }
       break;
     }
 
     case 'scope': {
-      // SGL scope: 严格移植自 sgl_scope.c
+      // SGL scope: 严格移植自 sgl_scope.c scope_construct_cb
       // 默认: bg=黑, grid=(50,50,50), border_width=0, waveform=绿(0,255,0), line_width=2
-      // 网格: 中心十字线 + 10 条垂直 + 10 条水平网格线 (i=1..9)
+      // 网格: 中心十字线 + 9 条垂直 + 9 条水平网格线 (i=1..9)
       // 波形: 从右向左画, Y 轴反转 (y = y2 - (value-min)*height/(max-min))
       const { surf, R } = createWidgetCanvas(el, w, z);
       el.style.opacity = 1;
       const alpha = w.alpha != null ? w.alpha : 255;
-      const scBgCol = R.hexToColor(w.bgColor || '#000000'); // SGL: (0,0,0)
-      const scBorderCol = R.hexToColor(w.borderColor || '#969696'); // SGL: (150,150,150)
+      const scBgCol = R.hexToColor(w.bgColor || '#000000');
+      const scBorderCol = R.hexToColor(w.borderColor || '#969696');
       const scBorderW = w.borderWidth != null ? w.borderWidth : 0;
-      const scGridCol = R.hexToColor(w.gridColor || '#323232'); // SGL: (50,50,50)
+      const scGridCol = R.hexToColor(w.gridColor || '#323232');
       const scLineW = w.lineWidth != null ? w.lineWidth : 2;
-      const scGridStyle = w.gridStyle != null ? w.gridStyle : 0; // 0=实线, >0=虚线
+      // SGL grid_style: 0=实线, >0=虚线 (gap 长度, dash=gap, 周期 2*gap)
+      const scGridStyle = w.gridLine != null ? w.gridLine : 0;
+      const scRangeMin = Number(w.rangeMin != null ? w.rangeMin : 0);
+      const scRangeMax = Number(w.rangeMax != null ? w.rangeMax : 65535);
+      const scShowYLabels = w.showYLabels != null ? w.showYLabels : false;
+      const scYLabelColor = w.yLabelColor || '#FFFFFF';
       const bodyW = w.width, bodyH = w.height;
 
       // 1. 主体背景 + 边框（radius=0）
@@ -1890,87 +2184,121 @@ function renderPreviewWidget(el, w, z) {
         color: scBgCol, border_color: scBorderCol, radius: 0
       });
 
-      // 2. 中心十字线
-      const xCenter = Math.floor((bodyW - 1) / 2);
-      const yCenter = Math.floor((bodyH - 1) / 2);
+      // SGL 坐标系: x1=0, y1=0, x2=bodyW-1, y2=bodyH-1 (闭区间)
+      const x1 = 0, y1 = 0, x2 = bodyW - 1, y2 = bodyH - 1;
+      const width = x2 - x1;     // SGL: width = x2 - x1
+      const height = y2 - y1;    // SGL: height = y2 - y1
+
+      // 2. display_min / display_max (设计时无真实数据, 用 range)
+      const displayMin = scRangeMin;
+      const displayMax = scRangeMax;
+      const actualMin = displayMin;
+      const actualMax = displayMax;
+      const rangeSpan = Math.max(1, displayMax - displayMin);
+
+      // 3. 中心十字线 (SGL: x_center=(x1+x2)/2, y_center 按 display 中点)
+      //    y_center = y1 + (height * (display_max - (min+max)/2)) / (max-min)
+      const xCenter = Math.trunc((x1 + x2) / 2);
+      const yCenter = y1 + Math.trunc((height * (displayMax - Math.trunc((displayMin + displayMax) / 2))) / rangeSpan);
       if (scGridStyle > 0) {
-        R.drawDashedLine(surf, 0, yCenter, bodyW - 1, yCenter, scGridStyle, scGridStyle, scGridCol, alpha);
-        R.drawDashedLine(surf, xCenter, 0, xCenter, bodyH - 1, scGridStyle, scGridStyle, scGridCol, alpha);
+        R.drawDashedLine(surf, x1, yCenter, x2, yCenter, scGridStyle, scGridStyle, scGridCol, alpha);
+        R.drawDashedLine(surf, xCenter, y1, xCenter, y2, scGridStyle, scGridStyle, scGridCol, alpha);
       } else {
-        R.drawHLine(surf, 0, bodyW - 1, yCenter, 1, scGridCol, alpha);
-        R.drawVLine(surf, xCenter, 0, bodyH - 1, 1, scGridCol, alpha);
+        R.drawHLine(surf, x1, x2, yCenter, 1, scGridCol, alpha);
+        R.drawVLine(surf, xCenter, y1, y2, 1, scGridCol, alpha);
       }
 
-      // 3. 10 条垂直网格线 (i=1..9)
+      // 4. 9 条垂直网格线 (SGL: i=1..9, x_pos = x1 + width*i/10, 整数除法)
       for (let i = 1; i < 10; i++) {
-        const x = Math.floor(bodyW * i / 10);
+        const xPos = x1 + Math.trunc(width * i / 10);
         if (scGridStyle > 0) {
-          R.drawDashedLine(surf, x, 0, x, bodyH - 1, scGridStyle, scGridStyle, scGridCol, alpha);
+          R.drawDashedLine(surf, xPos, y1, xPos, y2, scGridStyle, scGridStyle, scGridCol, alpha);
         } else {
-          R.drawVLine(surf, x, 0, bodyH - 1, 1, scGridCol, alpha);
+          R.drawVLine(surf, xPos, y1, y2, 1, scGridCol, alpha);
         }
       }
 
-      // 4. 10 条水平网格线 (i=1..9)
+      // 5. 9 条水平网格线 (SGL: i=1..9, y_pos = y1 + height*i/10, 整数除法)
       for (let i = 1; i < 10; i++) {
-        const y = Math.floor(bodyH * i / 10);
+        const yPos = y1 + Math.trunc(height * i / 10);
         if (scGridStyle > 0) {
-          R.drawDashedLine(surf, 0, y, bodyW - 1, y, scGridStyle, scGridStyle, scGridCol, alpha);
+          R.drawDashedLine(surf, x1, yPos, x2, yPos, scGridStyle, scGridStyle, scGridCol, alpha);
         } else {
-          R.drawHLine(surf, 0, bodyW - 1, y, 1, scGridCol, alpha);
+          R.drawHLine(surf, x1, x2, yPos, 1, scGridCol, alpha);
         }
       }
 
-      // 5. 波形: 从右向左画, Y 轴反转
-      // SGL: start.x = x2; start.y = y2 - (value-min)*height/(max-min)
+      // 6. 波形: 从右向左画, 多通道, Y 轴反转
+      // SGL: start.x = x2, start.y = y2 - (value-min)*height/(max-min)
       //      end.x = x2 - i*width/(data_points-1)
-      // 解析通道数据
       const chBufStr = w.channelBuffers || '';
       const chColStr = w.channelWaveformColors || '#00FF00';
       const channels = chBufStr ? chBufStr.split('|') : [];
       const chCols = chColStr.split(';').map(s => s.trim()).filter(s => s);
-      const rangeMin = Number(w.rangeMin != null ? w.rangeMin : 0);
-      const rangeMax = Number(w.rangeMax != null ? w.rangeMax : 65535);
-      const rangeSpan = Math.max(1, rangeMax - rangeMin);
+      // SGL 默认通道颜色: ch0=绿, ch1=红, ch2=蓝, ch3=黄
+      const defaultChCols = ['#00FF00', '#FF0000', '#0000FF', '#FFFF00'];
+
       if (channels.length > 0) {
-        // 有用户数据时按用户数据绘制
+        // 有用户数据: 按用户数据绘制
         channels.forEach((bufStr, ci) => {
           const points = bufStr.split(',').map(s => parseFloat(s.trim())).filter(v => !isNaN(v));
           if (points.length < 2) return;
-          const col = R.hexToColor(chCols[ci] || chCols[0] || '#00FF00');
+          const col = R.hexToColor(chCols[ci] || defaultChCols[ci] || '#00FF00');
           const n = points.length;
-          // SGL: start.x = x2, 然后逐步向左
-          //      end.x = x2 - i*width/(data_points-1)
-          let prevX = bodyW - 1;
-          let prevV = Math.max(rangeMin, Math.min(rangeMax, points[n - 1]));
-          let prevY = (bodyH - 1) - Math.round((bodyH - 1) * (prevV - rangeMin) / rangeSpan);
+          let prevX = x2;
+          let prevV = Math.max(displayMin, Math.min(displayMax, points[n - 1]));
+          let prevY = y2 - Math.trunc((prevV - displayMin) * height / rangeSpan);
           for (let i = 1; i < n; i++) {
-            // 当前点 (从倒数第二个开始)
             const idx = n - 1 - i;
-            const curV = Math.max(rangeMin, Math.min(rangeMax, points[idx]));
-            const curX = (bodyW - 1) - Math.floor(i * (bodyW - 1) / (n - 1));
-            const curY = (bodyH - 1) - Math.round((bodyH - 1) * (curV - rangeMin) / rangeSpan);
+            const curV = Math.max(displayMin, Math.min(displayMax, points[idx]));
+            const curX = x2 - Math.trunc(i * width / (n - 1));
+            const curY = y2 - Math.trunc((curV - displayMin) * height / rangeSpan);
             R.drawLine(surf, prevX, prevY, curX, curY, scLineW, col, alpha);
             prevX = curX;
             prevY = curY;
           }
         });
       } else {
-        // 无用户数据, 模拟正弦波
+        // 无用户数据: 模拟正弦波 (值域映射到 [displayMin, displayMax])
         const dataPoints = Math.min(bodyW, 64);
         const pts = [];
         for (let i = 0; i < dataPoints; i++) {
-          const v = Math.floor((Math.sin(i * 0.2) * 0.4 + 0.5) * (bodyH - 1));
-          const px = bodyW - 1 - Math.floor(i * (bodyW - 1) / (dataPoints - 1));
-          const py = (bodyH - 1) - v;
+          const norm = Math.sin(i * 0.2) * 0.4 + 0.5;
+          const v = Math.trunc(displayMin + norm * rangeSpan);
+          const px = x2 - Math.trunc(i * width / (dataPoints - 1));
+          const py = y2 - Math.trunc((v - displayMin) * height / rangeSpan);
           pts.push({ x: px, y: py });
         }
-        const col = R.hexToColor(chCols[0] || '#00FF00');
+        const col = R.hexToColor(chCols[0] || defaultChCols[0] || '#00FF00');
         for (let i = 1; i < pts.length; i++) {
           R.drawLine(surf, pts[i-1].x, pts[i-1].y, pts[i].x, pts[i].y, scLineW, col, alpha);
         }
       }
       flushWidget(surf);
+
+      // 7. Y 轴标签 (SGL: showYLabels && y_label_font 时画 max/min/mid)
+      // 预览时用 DOM span 模拟 (有字用字体, 无字用系统默认)
+      if (scShowYLabels) {
+        const hasFont = widgetHasFont(w);
+        const cssFamily = hasFont ? getCssFontStack(w.fontFamily || '') : 'system-ui, -apple-system, "Segoe UI", sans-serif';
+        const fs = Math.max(8, Math.round(11 * z));
+        const labelColor = scYLabelColor || '#FFFFFF';
+        const wrap = document.createElement('div');
+        wrap.style.cssText = `position:absolute;left:${2 * z}px;top:0;width:${50 * z}px;height:${bodyH * z}px;pointer-events:none;box-sizing:border-box;overflow:hidden;`;
+        const top = document.createElement('span');
+        top.style.cssText = `position:absolute;left:0;top:${2 * z}px;color:${labelColor};font-size:${fs}px;font-family:${cssFamily};white-space:nowrap;`;
+        top.textContent = String(actualMax);
+        const mid = document.createElement('span');
+        mid.style.cssText = `position:absolute;left:0;top:${Math.trunc((yCenter - 6) * z)}px;color:${labelColor};font-size:${fs}px;font-family:${cssFamily};white-space:nowrap;`;
+        mid.textContent = String(Math.trunc((actualMax + actualMin) / 2));
+        const bot = document.createElement('span');
+        bot.style.cssText = `position:absolute;left:0;bottom:${2 * z}px;color:${labelColor};font-size:${fs}px;font-family:${cssFamily};white-space:nowrap;`;
+        bot.textContent = String(actualMin);
+        wrap.appendChild(top);
+        wrap.appendChild(mid);
+        wrap.appendChild(bot);
+        el.appendChild(wrap);
+      }
       break;
     }
 
@@ -2051,192 +2379,78 @@ function renderPreviewWidget(el, w, z) {
     }
 
     case 'qrcode': {
-      // SGLRenderer 像素级渲染：白底 + 黑色单元格 + 三角定位标记（简化模拟）
+      // SGL qrcode: 严格移植自 sgl_qrcode.c
       const { surf, R } = createWidgetCanvas(el, w, z);
       el.style.opacity = 1;
       const alpha = w.alpha != null ? w.alpha : 255;
+      const qrText = String(w.qrText || 'hello');
+      const qrVersion = w.version || 5;
+      const qrEcc = w.ecc || 0;
+      const qrScale = w.scale || 4;
+      const qrZone = w.zone != null ? w.zone : 1;
+      const qrCellRadius = w.cellRadius || 0;
+      const qrObjRadius = w.radius || 0;
       const qrBgCol = R.hexToColor(w.bgColor || '#ffffff');
       const qrCellCol = R.hexToColor(w.cellColor || '#000000');
-      const qrScale = w.scale || 4;
-      const bodyW = w.width, bodyH = w.height;
-      // 1. 白底
-      R.drawFillRect(surf, 0, 0, bodyW - 1, bodyH - 1, 0, qrBgCol, alpha);
-      // 2. 用 qrText 生成确定性伪随机位图
-      const qrText = String(w.qrText || 'hello');
-      let hash = 5381;
-      for (let i = 0; i < qrText.length; i++) hash = ((hash << 5) + hash + qrText.charCodeAt(i)) >>> 0;
-      // 总单元格数（按 scale 切分）
-      const cellsX = Math.max(7, Math.floor(bodyW / qrScale));
-      const cellsY = Math.max(7, Math.floor(bodyH / qrScale));
-      const grid = [];
-      for (let r = 0; r < cellsY; r++) {
-        grid.push([]);
-        for (let c = 0; c < cellsX; c++) {
-          hash = ((hash << 5) + hash + (r * 31 + c)) >>> 0;
-          grid[r].push((hash & 1) === 1);
+      const qrLogoPath = w.logo || '';
+
+      // SGL ecc 0-3 → qrcode-generator 'L'/'M'/'Q'/'H'
+      const eccMap = ['L', 'M', 'Q', 'H'];
+      const eccLevel = eccMap[qrEcc] || 'L';
+
+      let qrSize = 0;
+      let isDark = () => false;
+      try {
+        const qr = qrcodeGenerator(qrVersion, eccLevel);
+        qr.addData(qrText || ' ');
+        qr.make();
+        qrSize = qr.getModuleCount();
+        isDark = (x, y) => qr.isDark(y, x);
+      } catch (e) {
+        qrSize = 4 * qrVersion + 17;
+        isDark = () => false;
+      }
+
+      // logo 图片：已缓存则同步渲染，未缓存则异步加载后重绘
+      let logoImg = null;
+      const qrLogoFormat = w.pixmapFormat || 'RGB565';
+      if (qrLogoPath) {
+        logoImg = getCachedPixmapImageData(qrLogoPath);
+        if (!logoImg) {
+          preloadPixmapImage(qrLogoPath, () => render());
         }
       }
-      // 3. 三个定位标记（7x7，外框 + 3x3 中心）
-      const finder = (grid, gr, gc) => {
-        for (let r = 0; r < 7; r++) {
-          for (let c = 0; c < 7; c++) {
-            const isOuter = (r === 0 || r === 6 || c === 0 || c === 6);
-            const isInner = (r >= 2 && r <= 4 && c >= 2 && c <= 4);
-            grid[gr + r][gc + c] = isOuter || isInner;
-          }
-        }
-      };
-      if (cellsX >= 7 && cellsY >= 7) {
-        finder(grid, 0, 0);
-        finder(grid, 0, cellsX - 7);
-        finder(grid, cellsY - 7, 0);
-      }
-      // 4. 绘制单元格
-      for (let r = 0; r < cellsY; r++) {
-        for (let c = 0; c < cellsX; c++) {
-          if (grid[r][c]) {
-            const x1 = c * qrScale;
-            const y1 = r * qrScale;
-            R.drawFillRect(surf, x1, y1, x1 + qrScale - 1, y1 + qrScale - 1, 0, qrCellCol, alpha);
-          }
-        }
-      }
+
+      R.drawQrcode(surf, 0, 0, w.width, w.height, {
+        qrSize, isDark, scale: qrScale, zone: qrZone,
+        cellRadius: qrCellRadius, bgColor: qrBgCol, cellColor: qrCellCol,
+        alpha: alpha, objRadius: qrObjRadius, ecc: qrEcc, logoImg, logoFormat: qrLogoFormat
+      });
       flushWidget(surf);
       break;
     }
 
     case 'chart': {
-      // SGLRenderer 像素级渲染：背景 + 网格 + 折线/柱形/饼图
+      // SGL chart: 严格移植 SGL 算法，用 SGLRenderer 像素级渲染
       const { surf, R } = createWidgetCanvas(el, w, z);
       el.style.opacity = 1;
       const alpha = w.alpha != null ? w.alpha : 255;
-      const chBgCol = R.hexToColor(w.bgColor || '#000000');
-      const chBorderCol = R.hexToColor(w.borderColor || '#000000');
-      const chBorderW = w.borderWidth != null ? w.borderWidth : 0;
-      const chGridCol = R.hexToColor(w.gridColor || '#3C3C3C');
-      const chTextCol = R.hexToColor(w.textColor || '#000000');
-      const chFontSize = w.fontSize || 12;
-      const chFontFamily = getCssFontStack(w.fontFamily || '');
-      const chType = w.chartType || 'linechart';
-      const bodyW = w.width, bodyH = w.height;
-      // 1. 主体背景 + 边框
-      R.drawRect(surf, 0, 0, bodyW - 1, bodyH - 1, {
-        alpha: alpha, border: chBorderW, border_alpha: alpha, border_mask: 0,
-        color: chBgCol, border_color: chBorderCol, radius: 0
+      const chFontFamily = w.fontFamily || '';
+      // 当未设置字体时，SGL使用系统字体(consolas14, font_height=14)，设计器需与之匹配
+      const chFontSize = chFontFamily ? (w.fontSize || 12) : 14;
+      const overlays = R.drawChart(surf, w, R, {
+        alpha: alpha,
+        fontSize: chFontSize,
+        fontFamily: chFontFamily,
+        hasFont: widgetHasFont(w)
       });
-      const inX1 = chBorderW + 2, inY1 = chBorderW + 2;
-      const inX2 = bodyW - 1 - chBorderW - 2, inY2 = bodyH - 1 - chBorderW - 2;
-      const inW = Math.max(1, inX2 - inX1 + 1);
-      const inH = Math.max(1, inY2 - inY1 + 1);
-
-      if (chType === 'piechart') {
-        // 饼图：从 startAngle 起按 sliceValues 切分
-        const sliceVals = (w.sliceValues || '30;50;20').split(';').map(s => parseFloat(s.trim()) || 0);
-        const sliceCols = (w.sliceColors || '#ff0000;#00ff00;#0000ff').split(';').map(s => s.trim());
-        const sliceLabs = (w.sliceLabels || 'A;B;C').split(';').map(s => s.trim());
-        let total = sliceVals.reduce((a, b) => a + b, 0);
-        if (total <= 0) total = 1;
-        const cx = bodyW / 2, cy = bodyH / 2;
-        const rOut = w.radius && w.radius > 0 ? w.radius : Math.min(bodyW, bodyH) / 2 - 1;
-        const rIn = w.innerRadiusRate > 0 ? Math.round(rOut * w.innerRadiusRate / 100) : 0;
-        let curAng = w.startAngle || 0;
-        const labelRects = [];
-        for (let i = 0; i < sliceVals.length; i++) {
-          const span = sliceVals[i] * 360 / total;
-          const endAng = curAng + span;
-          const col = R.hexToColor(sliceCols[i] || sliceCols[0] || '#FFFFFF');
-          R.drawFillArc(surf, {
-            cx, cy, radius_in: rIn, radius_out: rOut,
-            start_angle: curAng, end_angle: endAng, mode: 0,
-            color: col, bg_color: col, alpha: alpha
-          });
-          // 标签位置（在扇形中部偏外）
-          const midAng = (curAng + endAng) / 2;
-          const rad = midAng * Math.PI / 180;
-          const lx = cx + (rOut * 0.7) * Math.sin(rad);
-          const ly = cy - (rOut * 0.7) * Math.cos(rad);
-          labelRects.push({ x: lx, y: ly, text: sliceLabs[i] || '' });
-          curAng = endAng;
-        }
-        flushWidget(surf);
-        // 文字（flush 之后）
-        for (const lbl of labelRects) {
-          if (lbl.text) {
-            const coords = { x1: lbl.x - chFontSize, y1: lbl.y - chFontSize / 2, x2: lbl.x + chFontSize, y2: lbl.y + chFontSize / 2 };
-            const pos = R.getTextPos(coords, lbl.text, chFontSize, 1, alignStrToNum('CENTER'));
-            overlayTextAt({ text: lbl.text, color: (w.textColor || '#000000'), fontSize: chFontSize, fontFamily: (w.fontFamily || ''), x: pos.x, y: pos.y, align: 'CENTER' });
-          }
-        }
-      } else {
-        // linechart / barchart 共用坐标轴
-        // 网格（4 横 4 竖）
-        const gridN = 4;
-        for (let i = 1; i < gridN; i++) {
-          const gy = inY1 + Math.round(inH * i / gridN);
-          R.drawHLine(surf, inX1, inX2, gy, 1, chGridCol, alpha);
-        }
-        for (let i = 1; i < gridN; i++) {
-          const gx = inX1 + Math.round(inW * i / gridN);
-          R.drawVLine(surf, gx, inY1, inY2, 1, chGridCol, alpha);
-        }
-        // 解析序列数据
-        const seriesArr = (w.seriesData || '').split(';').filter(s => s.length > 0);
-        const seriesCols = (w.seriesColors || '#FFFFFF').split(';').map(s => s.trim());
-        const valMin = Number(w.minValue != null ? w.minValue : 0);
-        const valMax = Number(w.maxValue != null ? w.maxValue : 100);
-        const valSpan = Math.max(1, valMax - valMin);
-        if (chType === 'barchart') {
-          // 柱形图：每条序列在每个 x 位置画一组柱形
-          const groupCount = seriesArr.length > 0 ? seriesArr[0].split(',').filter(s => s !== '').length : 0;
-          const seriesCount = seriesArr.length;
-          if (groupCount > 0 && seriesCount > 0) {
-            const groupW = inW / groupCount;
-            const barW = Math.max(1, Math.floor(groupW * 0.8 / seriesCount));
-            for (let gi = 0; gi < groupCount; gi++) {
-              const groupX = inX1 + Math.round(groupW * (gi + 0.5));
-              const barsStartX = groupX - Math.round(barW * seriesCount / 2);
-              for (let si = 0; si < seriesCount; si++) {
-                const vals = seriesArr[si].split(',').map(s => parseFloat(s.trim())).filter(v => !isNaN(v));
-                const v = Math.max(valMin, Math.min(valMax, vals[gi] || 0));
-                const bh = Math.max(1, Math.round(inH * (v - valMin) / valSpan));
-                const bx = barsStartX + si * barW;
-                const by = inY2 - bh;
-                const col = R.hexToColor(seriesCols[si] || seriesCols[0] || '#FFFFFF');
-                R.drawFillRect(surf, bx, by, bx + barW - 1, inY2, 0, col, alpha);
-              }
-            }
-          }
-        } else {
-          // linechart：每条序列画折线
-          for (let si = 0; si < seriesArr.length; si++) {
-            const vals = seriesArr[si].split(',').map(s => parseFloat(s.trim())).filter(v => !isNaN(v));
-            if (vals.length < 1) continue;
-            const col = R.hexToColor(seriesCols[si] || seriesCols[0] || '#FFFFFF');
-            const n = vals.length;
-            for (let i = 0; i < n - 1; i++) {
-              const x1 = inX1 + Math.round(inW * i / Math.max(1, n - 1));
-              const x2 = inX1 + Math.round(inW * (i + 1) / Math.max(1, n - 1));
-              const v1 = Math.max(valMin, Math.min(valMax, vals[i]));
-              const v2 = Math.max(valMin, Math.min(valMax, vals[i + 1]));
-              const y1 = inY2 - Math.round(inH * (v1 - valMin) / valSpan);
-              const y2 = inY2 - Math.round(inH * (v2 - valMin) / valSpan);
-              R.drawLine(surf, x1, y1, x2, y2, 2, col, alpha);
-            }
-          }
-        }
-        flushWidget(surf);
-        // X 轴标签
-        const xLabels = (w.xLabels || '').split(';').map(s => s.trim()).filter(s => s);
-        if (xLabels.length > 0) {
-          const n = xLabels.length;
-          for (let i = 0; i < n; i++) {
-            const lx = inX1 + Math.round(inW * (i + 0.5) / n);
-            const ly = inY2 + 2;
-            const coords = { x1: lx - 20, y1: ly, x2: lx + 20, y2: ly + chFontSize + 2 };
-            const pos = R.getTextPos(coords, xLabels[i], chFontSize, 1, alignStrToNum('CENTER'));
-            overlayTextAt({ text: xLabels[i], color: (w.textColor || '#000000'), fontSize: chFontSize, fontFamily: (w.fontFamily || ''), x: pos.x, y: pos.y, align: 'CENTER' });
-          }
-        }
+      flushWidget(surf);
+      // 文本叠加（坐标轴标签、图例文本）
+      for (const o of overlays) {
+        overlayTextAt({
+          text: o.text, color: o.color, fontSize: o.fontSize,
+          fontFamily: o.fontFamily, x: o.x, y: o.y
+        });
       }
       break;
     }
@@ -2270,13 +2484,21 @@ function renderPreviewWidget(el, w, z) {
     }
 
     case 'analogclock': {
-      // SGL analogclock: 严格移植自 sgl_analogclock.c
-      // 角度系统：所有角度 -90（转为 0°=右系统，与 sgl_sin/sgl_cos 一致）
-      // 指针长度：时针 h_len=inner_r/2, 分针 m_len=inner_r*160/256
-      //   秒针前端 s_len_1=inner_r*217/256, 尾部 s_len_2=inner_r*39/256
-      // 两段式指针：细柄(中心→尾部, sec_ptr_width) + 粗头(尾部→前端, hour/min_ptr_width)
-      // 秒针：反向尾部 -s_len_2 → 前端 s_len_1
-      // hub 三层内凹（坐标 cx-1, cy-1）：r+1 min_ptr_color, r hub_color, r-2 bg_color
+      // SGL analogclock: 严格移植自 sgl_analogclock.c sgl_analogclock_construct_cb
+      // 坐标系: x1=0, y1=0, x2=W-1, y2=H-1 (闭区间)
+      // cx=(x1+x2)/2, cy=(y1+y2)/2, r=max(obj.radius, width/2 - 1) (整数除法)
+      // 指针长度: h_len=inner_r/2, m_len=inner_r*160/256,
+      //   s_len_1=inner_r*217/256, s_len_2=inner_r*39/256
+      // 两段式指针: 粗头(尾部→前端, hour/min_ptr_width) + 细柄(中心→尾部, sec_ptr_width)
+      //   尾部细柄颜色 = 前端颜色 (hour_ptr_color / min_ptr_color)
+      // 秒针: 反向尾部 -s_len_2 → 前端 s_len_1
+      // hub 三层内凹 (坐标 cx-1, cy-1):
+      //   第一层 hub_r+1 min_ptr_color (秒针前画)
+      //   第二层 hub_r hub_color (秒针后画)
+      //   第三层 hub_r-2 bg_color (内凹)
+      // 刻度: 60 个, j 计数器, j==5 时主刻度(scale_color)并 j=0, 其余次刻度(sub_scale_color)
+      //   所有刻度宽度都是 scale_width (主刻度不翻倍)
+      //   j==0 时画数字 (i==0 显示 12, 其余 i/5)
       const { surf, R } = createWidgetCanvas(el, w, z);
       el.style.opacity = 1;
       const alpha = w.alpha != null ? w.alpha : 255;
@@ -2294,175 +2516,400 @@ function renderPreviewWidget(el, w, z) {
       const acSecW = w.secPtrWidth != null ? w.secPtrWidth : 2;
       const acHubR = Math.max(5, w.hubRadius != null ? w.hubRadius : 6);
       const acFontSize = w.fontSize || 12;
-      const acFontH = acFontSize + 8; // SGL sgl_font_get_height
-      const acFontFamily = getCssFontStack(w.fontFamily || '');
+      const acFontH = acFontSize + 8;
       const hour = w.hour || 0, minute = w.minute || 0, second = w.second || 0;
 
-      const cx = w.width / 2;
-      const cy = w.height / 2;
-      const r = Math.max(0, Math.max((w.radius || 0), w.width / 2 - 1));
+      // SGL: cx=(x1+x2)/2, cy=(y1+y2)/2, r=max(radius, width/2 - 1) 整数除法
+      const cx = Math.trunc((0 + (w.width - 1)) / 2);
+      const cy = Math.trunc((0 + (w.height - 1)) / 2);
+      const r = Math.max(0, Math.max((w.radius || 0), Math.trunc(w.width / 2) - 1));
       const acBorderW = Math.min((w.borderWidth || 0), r);
       const innerR = Math.max(0, r - acBorderW);
       const scaleOut = Math.max(0, innerR - 2);
       const scaleIn = Math.max(0, scaleOut - acScaleLen);
-      // SGL: h_len=inner_r/2, m_len=inner_r*160/256, s_len_1=inner_r*217/256, s_len_2=inner_r*39/256
-      const hLen = innerR / 2;
+      const hLen = Math.trunc(innerR / 2);
       const mLen = (innerR * 160) >> 8;
       const sLen1 = (innerR * 217) >> 8;
       const sLen2 = (innerR * 39) >> 8;
       const subScaleCol = R.colorMixer(acScaleCol, acBg, 128);
 
-      // deg2rad: 0°=右系统（与 Math.sin/cos 一致，SGL sgl_sin/sgl_cos 同此）
-      const deg2rad = d => d * Math.PI / 180;
-
       // 1. 背景圆
       R.drawFillCircle(surf, cx, cy, r, acBg, alpha);
-      // 2. 边框环（如 borderWidth > 0）
+      // 2. 边框环 (SGL: border_w>0 时画 ring, 颜色=bg_color)
       if (acBorderW > 0) {
         R.drawFillRing(surf, cx, cy, innerR, r, acBg, alpha);
       }
 
-      // 3. 60 刻度 - SGL: calc_angle = i*6 - 90
+      // SGL 用定点整数三角函数 sgl_sin/sgl_cos (SGL_SIN_FIXED_ONE=32768)
+      // 坐标计算: (len * sin_val) / SGL_SIN_FIXED_ONE + cx (整数除法向零截断)
+      const SIN_FIXED = R.SGL_SIN_FIXED_ONE;
+
+      // 3. 60 刻度 + 数字 (SGL: 同一循环, 顺序: 画刻度 → if(j==5)j=0 → if(j==0)画数字 → j++)
+      //    j==5 时主刻度(scale_color)并 j=0, 其余次刻度(sub_scale_color)
+      //    j==0 时画数字 (i==0 显示 12, 其余 i/5)
+      //    所有刻度宽度都是 scale_width (主/次只是颜色不同)
+      const textR = Math.max(0, scaleIn - acFontH - 2);
+      let j = 0;
       for (let i = 0; i < 60; i++) {
         const angle = i * 6 - 90;
-        const rad = deg2rad(angle);
-        const cos = Math.cos(rad), sin = Math.sin(rad);
-        const xo = cx + scaleOut * cos;
-        const yo = cy + scaleOut * sin;
-        const xi = cx + scaleIn * cos;
-        const yi = cy + scaleIn * sin;
-        const isMain = (i % 5 === 0);
-        R.drawLine(surf, xo, yo, xi, yi, isMain ? acScaleW * 2 : acScaleW,
-                   isMain ? acScaleCol : subScaleCol, alpha);
+        const sinVal = R.sglSin(angle);
+        const cosVal = R.sglCos(angle);
+        // SGL C 整数运算: (scale_out * cos_val) / SGL_SIN_FIXED_ONE + cx
+        // 必须先做整数除法 (向零截断), 再加 cx, 不能先加 cx 再截断
+        const xo = Math.trunc((scaleOut * cosVal) / SIN_FIXED) + cx;
+        const yo = Math.trunc((scaleOut * sinVal) / SIN_FIXED) + cy;
+        const xi = Math.trunc((scaleIn * cosVal) / SIN_FIXED) + cx;
+        const yi = Math.trunc((scaleIn * sinVal) / SIN_FIXED) + cy;
+
+        // 1. 画刻度
+        if (j === 5) {
+          R.drawLine(surf, xo, yo, xi, yi, acScaleW, acScaleCol, alpha);
+          j = 0;
+        } else {
+          R.drawLine(surf, xo, yo, xi, yi, acScaleW, subScaleCol, alpha);
+        }
+
+        // 2. j==0 时画数字 (SGL: if (clock->font && j == 0))
+        //    SGL 中只有设置了字体(clock->font != NULL)才画数字, 否则不画
+        //    设计器匹配此行为: 未设置字体时不画数字, 实现所见即所得
+        if (j === 0 && widgetHasFont(w)) {
+          const text = i === 0 ? '12' : String(Math.trunc(i / 5));
+          const tx = Math.trunc((textR * cosVal) / SIN_FIXED) + cx;
+          const ty = Math.trunc((textR * sinVal) / SIN_FIXED) + cy;
+          const tw = R.stringWidth(text, acFontSize);
+          const th = R.fontHeight(acFontSize);
+          overlayTextAt({ text, color: (w.textColor || '#FFFFFF'), fontSize: acFontSize, fontFamily: (w.fontFamily || ''), x: Math.trunc(tx - tw / 2), y: Math.trunc(ty - th / 2), align: 'CENTER' });
+        }
+
+        j++;
       }
 
-      // 4. 时针、分针（两段式：粗头 尾部→前端 + 细柄 中心→尾部）
-      const hAngle = ((hour % 12) * 30 + Math.floor(minute / 2)) - 90;
+      // 4. 时针、分针 (两段式: 粗头 尾部→前端 + 细柄 中心→尾部)
+      //    SGL: 尾部细柄颜色 = 前端颜色 (不是 sec_ptr_color)
+      //    SGL: 尾部细柄无条件绘制 (sgl_draw_line_fill_slanted 两次调用)
+      const hAngle = ((hour % 12) * 30 + Math.trunc(minute / 2)) - 90;
       const mAngle = (minute * 6) - 90;
       const sAngle = (second * 6) - 90;
       function drawHand(angleDeg, tailLen, tipLen, mainWidth, tailWidth, color) {
-        const rad = deg2rad(angleDeg);
-        const cos = Math.cos(rad), sin = Math.sin(rad);
-        const sx = cx + tailLen * cos;
-        const sy = cy + tailLen * sin;
-        const px = cx + tipLen * cos;
-        const py = cy + tipLen * sin;
-        // SGL: 先画 尾部→前端（粗），再画 中心→尾部（细）
+        const sinVal = R.sglSin(angleDeg);
+        const cosVal = R.sglCos(angleDeg);
+        // SGL C 整数运算: 先整数除法, 再加 cx/cy
+        const sx = cx + Math.trunc((tailLen * cosVal) / SIN_FIXED);
+        const sy = cy + Math.trunc((tailLen * sinVal) / SIN_FIXED);
+        const px = Math.trunc((tipLen * cosVal) / SIN_FIXED) + cx;
+        const py = Math.trunc((tipLen * sinVal) / SIN_FIXED) + cy;
+        // SGL: 先画前端粗头 (sx,sy)→(px,py), 宽度 mainWidth
         R.drawLine(surf, sx, sy, px, py, mainWidth, color, alpha);
-        if (tailWidth > 0 && tailLen > 0) {
-          R.drawLine(surf, cx, cy, sx, sy, tailWidth, color, alpha);
-        }
+        // SGL: 再画尾部细柄 (cx,cy)→(sx,sy), 宽度 tailWidth (无条件)
+        R.drawLine(surf, cx, cy, sx, sy, tailWidth, color, alpha);
       }
       drawHand(hAngle, sLen2, hLen, acHourW, acSecW, acHourCol);
       drawHand(mAngle, sLen2, mLen, acMinW, acSecW, acMinCol);
 
-      // 5. hub 第一层（minPtrColor, hub_r+1，坐标 cx-1, cy-1）- 在秒针前画
+      // 5. hub 第一层 (minPtrColor, hub_r+1, 坐标 cx-1, cy-1) - 秒针前画
       R.drawFillCircle(surf, cx - 1, cy - 1, acHubR + 1, acMinCol, alpha);
 
-      // 6. 秒针（反向尾部 -s_len_2 → 前端 s_len_1）
+      // 6. 秒针 (反向尾部 -s_len_2 → 前端 s_len_1)
       {
-        const rad = deg2rad(sAngle);
-        const cos = Math.cos(rad), sin = Math.sin(rad);
-        R.drawLine(surf, cx - sLen2 * cos, cy - sLen2 * sin, cx + sLen1 * cos, cy + sLen1 * sin, acSecW, acSecCol, alpha);
+        const sinVal = R.sglSin(sAngle);
+        const cosVal = R.sglCos(sAngle);
+        const sx = cx - Math.trunc((sLen2 * cosVal) / SIN_FIXED);
+        const sy = cy - Math.trunc((sLen2 * sinVal) / SIN_FIXED);
+        const px = Math.trunc((sLen1 * cosVal) / SIN_FIXED) + cx;
+        const py = Math.trunc((sLen1 * sinVal) / SIN_FIXED) + cy;
+        R.drawLine(surf, sx, sy, px, py, acSecW, acSecCol, alpha);
       }
 
-      // 7. hub 第二层（hubColor, hub_r，坐标 cx-1, cy-1）- 在秒针后画
+      // 7. hub 第二层 (hubColor, hub_r) + 第三层 (bgColor, hub_r-2) - 秒针后画
       R.drawFillCircle(surf, cx - 1, cy - 1, acHubR, acHubCol, alpha);
-      // 8. hub 第三层（bgColor, hub_r-2，坐标 cx-1, cy-1）- 内凹效果
       if (acHubR - 2 > 0) {
         R.drawFillCircle(surf, cx - 1, cy - 1, acHubR - 2, acBg, alpha);
       }
 
       flushWidget(surf);
-
-      // 9. 数字（flush 后绘制）- SGL: i==0 显示 12, 其他显示 i/5
-      const textR = Math.max(0, scaleIn - acFontH - 2);
-      for (let i = 0; i < 60; i++) {
-        if (i % 5 !== 0) continue;
-        const angle = i * 6 - 90;
-        const rad = deg2rad(angle);
-        const cos = Math.cos(rad), sin = Math.sin(rad);
-        const tx = cx + textR * cos;
-        const ty = cy + textR * sin;
-        const text = i === 0 ? '12' : String(i / 5);
-        const tw = R.stringWidth(text, acFontSize);
-        const th = R.fontHeight(acFontSize);
-        overlayTextAt({ text, color: (w.textColor || '#FFFFFF'), fontSize: acFontSize, fontFamily: (w.fontFamily || ''), x: Math.round(tx - tw / 2), y: Math.round(ty - th / 2), align: 'CENTER' });
-      }
       break;
     }
 
     case '2dball': {
-      // SGL 2dball: 线性渐变球体, SGL 默认 color=白, bg=黑, radius=width/2
-      const { surf, R } = createWidgetCanvas(el, w, z);
+      // SGL 2dball: 严格移植自 sgl_2dball.c
+      // SGL: sgl_2dball_set_radius 调用 sgl_obj_circle_zoom，控件 coords 改为 2*radius
+      // 设计器用 w.radius 属性，不用 w.width/2
+      const ballRadius = w.radius || 20;
+      const ballSize = ballRadius * 2;
+      const { surf, R } = createWidgetCanvas(el, w, z, { domW: ballSize, domH: ballSize });
       el.style.opacity = 1;
       const alpha = w.alpha != null ? w.alpha : 255;
-      const cx = w.width / 2;
-      const cy = w.height / 2;
-      // SGL: radius = sgl_obj_get_width(obj) / 2
-      const radius = w.width / 2;
+      const cx = Math.floor((ballSize - 1) / 2);
+      const cy = Math.floor((ballSize - 1) / 2);
       const bgCol = R.hexToColor(w.bgColor || '#000000');
       const ballCol = R.hexToColor(w.color || '#FFFFFF');
-      // 球体线性渐变
-      R.draw2dBall(surf, cx, cy, radius, ballCol, bgCol, alpha);
+      R.draw2dBall(surf, cx, cy, ballRadius, ballCol, bgCol, alpha);
       flushWidget(surf);
       break;
     }
 
-    case 'icon':
+    case 'icon': {
+      // SGL icon: 4bpp alpha 蒙版图标，用 color 颜色混合绘制
+      // 移植自 sgl_icon.c → sgl_get_icon_pos + sgl_draw_icon
+      const iconPath = w.icon || '';
+      const iconColor = (w.color || '#000000');
+      const iconAlign = (w.align || 'CENTER');
+      const iconAlpha = w.alpha != null ? w.alpha : 255;
+      if (iconPath) {
+        const imgData = getCachedPixmapImageData(iconPath);
+        if (imgData) {
+          const { surf, R } = createWidgetCanvas(el, w, z);
+          el.style.opacity = 1;
+          // 构造 4bpp alpha 蒙版（每字节2像素，高4位为偶数像素，低4位为奇数像素）
+          const iw = imgData.width;
+          const ih = imgData.height;
+          const bytesPerRow = (iw + 1) >> 1;
+          const bitmap = new Uint8Array(bytesPerRow * ih);
+          for (let yy = 0; yy < ih; yy++) {
+            for (let xx = 0; xx < iw; xx++) {
+              const alphaVal = imgData.data[(yy * iw + xx) * 4 + 3] >> 4;
+              const byteIdx = yy * bytesPerRow + (xx >> 1);
+              if (xx & 1) {
+                bitmap[byteIdx] |= alphaVal;
+              } else {
+                bitmap[byteIdx] |= alphaVal << 4;
+              }
+            }
+          }
+          const iconObj = { width: iw, height: ih, bitmap };
+          // 按 SGL sgl_get_align_pos 算法计算 icon 在控件内的位置
+          const pw = w.width;
+          const ph = w.height;
+          let ix = 0, iy = 0;
+          switch (iconAlign) {
+            case 'CENTER':       ix = (pw - iw) / 2;       iy = (ph - ih) / 2;       break;
+            case 'TOP_MID':      ix = (pw - iw) / 2;       iy = 0;                    break;
+            case 'TOP_LEFT':     ix = 0;                    iy = 0;                    break;
+            case 'TOP_RIGHT':    ix = pw - iw;              iy = 0;                    break;
+            case 'BOT_MID':      ix = (pw - iw) / 2;       iy = ph - ih;              break;
+            case 'BOT_LEFT':     ix = 0;                    iy = ph - ih;              break;
+            case 'BOT_RIGHT':    ix = pw - iw;              iy = ph - ih;              break;
+            case 'LEFT_MID':     ix = 0;                    iy = (ph - ih) / 2;       break;
+            case 'RIGHT_MID':    ix = pw - iw;              iy = (ph - ih) / 2;       break;
+          }
+          R.drawIcon(surf, ix, iy, R.hexToColor(iconColor), iconAlpha, iconObj);
+          flushWidget(surf);
+        } else {
+          // 图片未缓存：CSS 占位 + 异步加载，加载完成后重绘
+          const { surf, R } = createWidgetCanvas(el, w, z);
+          el.style.opacity = 1;
+          flushWidget(surf);
+          preloadPixmapImage(iconPath, () => render());
+        }
+      } else {
+        // 无图片时显示占位符
+        const { surf, R } = createWidgetCanvas(el, w, z);
+        el.style.opacity = 1;
+        flushWidget(surf);
+        const iconFontSize = Math.round(Math.min(w.width, w.height) * 0.5);
+        if (iconFontSize > 0) {
+          overlayText({ text: '★', color: (w.color || '#8b5cf6'), fontSize: iconFontSize, fontFamily: '', align: 'CENTER', x: 0, y: 0, w: w.width, h: w.height });
+        }
+      }
+      break;
+    }
+
     case 'sprite': {
-      // SGLRenderer 像素级渲染：背景 + 边框 + 居中占位文本
-      const { surf, R } = createWidgetCanvas(el, w, z);
-      el.style.opacity = 1;
-      const alpha = w.alpha != null ? w.alpha : 255;
-      const iconBg = R.hexToColor(w.bgColor || '#000000');
-      const iconBorderCol = R.hexToColor(w.borderColor || '#000000');
-      const iconBorderW = w.borderWidth != null ? w.borderWidth : 0;
-      const iconRadius = w.radius != null ? w.radius : 4;
-      const iconColor = R.hexToColor(w.color || '#8b5cf6');
-      // 背景 + 边框
-      R.drawRect(surf, 0, 0, w.width - 1, w.height - 1, {
-        alpha: alpha, border: iconBorderW, border_alpha: alpha, border_mask: 0,
-        color: iconBg, border_color: iconBorderCol, radius: iconRadius
-      });
-      flushWidget(surf);
-      // 占位文本居中绘制
-      const iconMap = { 'icon': '★', 'sprite': '◆' };
-      const iconText = iconMap[w.type] || '●';
-      const iconFontSize = Math.round(Math.min(w.width, w.height) * 0.5);
-      if (iconFontSize > 0) {
-        const tw = R.stringWidth(iconText, iconFontSize);
-        const th = R.fontHeight(iconFontSize);
-        const tx = Math.round((w.width - tw) / 2);
-        const ty = Math.round((w.height - th) / 2);
-        overlayText({ text: iconText, color: (w.color || '#8b5cf6'), fontSize: iconFontSize, fontFamily: (w.fontFamily || ''), align: 'CENTER', x: 0, y: 0, w: w.width, h: w.height });
+      // SGL sprite: 严格移植自 sgl_sprite.c，只支持 ARGB4444，不缩放，与现有帧缓冲混合
+      const spPixmap = w.pixmap || '';
+      const spAlpha = w.alpha != null ? w.alpha : 255;
+      if (spPixmap) {
+        const imgData = getCachedPixmapImageData(spPixmap);
+        if (imgData) {
+          const { surf, R } = createWidgetCanvas(el, w, z);
+          el.style.opacity = 1;
+          R.drawSprite(surf, imgData, spAlpha);
+          flushWidget(surf);
+        } else {
+          // 图片未缓存：CSS 占位 + 异步加载
+          el.style.backgroundImage = `url('${toAssetUrl(spPixmap)}')`;
+          el.style.backgroundSize = '100% 100%';
+          preloadPixmapImage(spPixmap, () => render());
+        }
+      } else {
+        // 无图片时显示占位符
+        const { surf, R } = createWidgetCanvas(el, w, z);
+        el.style.opacity = 1;
+        flushWidget(surf);
+        const iconFontSize = Math.round(Math.min(w.width, w.height) * 0.5);
+        if (iconFontSize > 0) {
+          overlayText({ text: '◆', color: '#8b5cf6', fontSize: iconFontSize, fontFamily: '', align: 'CENTER', x: 0, y: 0, w: w.width, h: w.height });
+        }
       }
       break;
     }
 
     case 'ext_img': {
-      // SGLRenderer 像素级渲染：背景 + 边框 + 居中占位文本
+      // SGL ext_img WYSIWYG 渲染：按 SGL 算法居中/旋转/缩放绘制图片
       const { surf, R } = createWidgetCanvas(el, w, z);
       el.style.opacity = 1;
-      const alpha = w.alpha != null ? w.alpha : 255;
-      const eiBg = R.hexToColor('#313149');
-      const eiBorderCol = R.hexToColor('#3d3d5c');
-      // 背景 + 边框
-      R.drawRect(surf, 0, 0, w.width - 1, w.height - 1, {
-        alpha: alpha, border: 1, border_alpha: alpha, border_mask: 0,
-        color: eiBg, border_color: eiBorderCol, radius: 4
-      });
-      flushWidget(surf);
-      // 占位文本（rotation/scale 在像素级渲染中无法直接应用，仅绘制居中图标）
-      const eiText = 'IMG';
-      const eiFontSize = Math.max(8, Math.round(Math.min(w.width, w.height) * 0.3));
-      const eiColor = R.hexToColor('#8b5cf6');
-      const eiAlphaEff = Math.round(alpha * 0.4);
-      const tw = R.stringWidth(eiText, eiFontSize);
-      const th = R.fontHeight(eiFontSize);
-      const tx = Math.round((w.width - tw) / 2);
-      const ty = Math.round((w.height - th) / 2);
-      overlayText({ text: eiText, color: `rgba(139,92,246,${eiAlphaEff / 255})`, fontSize: eiFontSize, fontFamily: (w.fontFamily || ''), align: 'CENTER', x: 0, y: 0, w: w.width, h: w.height });
+      const eiAlpha = w.alpha != null ? w.alpha : 255;
+      const eiPixmap = w.pixmap;
+
+      function drawExtImgPlaceholderPreview() {
+        const eiBg = R.hexToColor('#313149');
+        const eiBorderCol = R.hexToColor('#3d3d5c');
+        R.drawRect(surf, 0, 0, w.width - 1, w.height - 1, {
+          alpha: eiAlpha, border: 1, border_alpha: eiAlpha, border_mask: 0,
+          color: eiBg, border_color: eiBorderCol, radius: 4
+        });
+        flushWidget(surf);
+        const eiText = 'IMG';
+        const eiFontSize = Math.max(8, Math.round(Math.min(w.width, w.height) * 0.3));
+        const eiAlphaEff = Math.round(eiAlpha * 0.4);
+        overlayText({ text: eiText, color: `rgba(139,92,246,${eiAlphaEff / 255})`, fontSize: eiFontSize, fontFamily: (w.fontFamily || ''), align: 'CENTER', x: 0, y: 0, w: w.width, h: w.height });
+      }
+
+      if (eiPixmap) {
+        const imgData = getCachedPixmapImageData(eiPixmap);
+        if (imgData) {
+          // 使用严格移植的 SGL ext_img 像素级渲染算法
+          // SGL ext_img 设置 pixmap 后 coords 会被强制设为图片尺寸，绘制区域由图片决定
+          R.drawExtImg(surf, imgData, imgData.width, imgData.height, w.rotation, w.scaleUniform, w.pivotX, w.pivotY, eiAlpha, w.pixmapFormat);
+          flushWidget(surf);
+        } else {
+          preloadPixmapImage(eiPixmap, () => render());
+          drawExtImgPlaceholderPreview();
+        }
+      } else {
+        drawExtImgPlaceholderPreview();
+      }
+      break;
+    }
+
+    case 'img': {
+      // SGL img WYSIWYG 渲染：1:1像素映射，按pixmap格式解码
+      const { surf, R } = createWidgetCanvas(el, w, z);
+      el.style.opacity = 1;
+      const imgAlpha = w.alpha != null ? w.alpha : 255;
+      const imgPixmap = w.pixmap;
+
+      function drawImgPlaceholderPreview() {
+        const imgBg = R.hexToColor('#313149');
+        const imgBorderCol = R.hexToColor('#3d3d5c');
+        R.drawRect(surf, 0, 0, w.width - 1, w.height - 1, {
+          alpha: imgAlpha, border: 1, border_alpha: imgAlpha, border_mask: 0,
+          color: imgBg, border_color: imgBorderCol, radius: 4
+        });
+        flushWidget(surf);
+        const imgText = 'IMG';
+        const imgFontSize = Math.max(8, Math.round(Math.min(w.width, w.height) * 0.3));
+        const imgAlphaEff = Math.round(imgAlpha * 0.4);
+        overlayText({ text: imgText, color: `rgba(139,92,246,${imgAlphaEff / 255})`, fontSize: imgFontSize, fontFamily: (w.fontFamily || ''), align: 'CENTER', x: 0, y: 0, w: w.width, h: w.height });
+      }
+
+      if (imgPixmap) {
+        const imgData = getCachedPixmapImageData(imgPixmap);
+        if (imgData) {
+          R.drawImg(surf, 0, 0, imgData, w.pixmapFormat, imgAlpha);
+          flushWidget(surf);
+        } else {
+          preloadPixmapImage(imgPixmap, () => render());
+          drawImgPlaceholderPreview();
+        }
+      } else {
+        drawImgPlaceholderPreview();
+      }
+      break;
+    }
+
+    case 'arc_label': {
+      // SGL arc_label WYSIWYG 渲染：文本绘制 + 旋转
+      const alText = w.text || '标签';
+      const alTextColor = w.textColor || '#000000';
+      const alBgFlag = w.bgFlag === true;
+      const alBgColor = w.bgColor || '#FFFFFF';
+      const alRadius = w.radius != null ? w.radius : 0;
+      const alAlign = w.align || 'CENTER';
+      const alFontSize = w.fontSize || 14;
+      const alFontFamily = w.fontFamily || '';
+      const alFontBpp = w.fontBpp || 4;
+      const alAngle = w.angle || 0;
+      const alOffsetX = w.offsetX || 0;
+      const alOffsetY = w.offsetY || 0;
+      const alAlpha = w.alpha != null ? w.alpha : 255;
+      const alHasFont = widgetHasFont(w);
+      const alCssFamily = getCssFontStack(alFontFamily);
+
+      if (alAngle && alAngle !== 0) {
+        // SGL arc_label 旋转模式渲染（与 editor.js 一致）
+        // el 用原始 w×h 并整体旋转，选中框、背景、文本块都跟着旋转
+        const R = getR();
+
+        // el 整体旋转
+        el.style.transform = `rotate(${alAngle}deg)`;
+        el.style.transformOrigin = 'center center';
+        el.style.opacity = alAlpha / 255;
+
+        // 1. 背景矩形（如果 bg_flag）：画在原始 w×h 上，跟着 el 旋转
+        const { surf } = createWidgetCanvas(el, w, z);
+        if (alBgFlag) {
+          R.drawFillRect(surf, 0, 0, w.width - 1, w.height - 1, alRadius, R.hexToColor(alBgColor), alAlpha);
+        }
+        flushWidget(surf);
+
+        // 2. 临时缓冲（文本块）
+        const alMeasureFamily = alHasFont ? alCssFamily : 'system-ui, -apple-system, "Segoe UI", sans-serif';
+        const alTextWidth = Math.ceil(R.measureTextWidth(alText, alFontSize, alMeasureFamily));
+        const alTextHeight = alFontSize;
+        const alMargin = alTextHeight * 2;
+        const alBufW = alTextWidth + alMargin * 2;
+        const alBufH = alTextHeight + alMargin * 2;
+
+        // 3. 创建内部 div（文本块），居中放置，跟着 el 旋转
+        const alTextBlock = document.createElement('div');
+        alTextBlock.style.cssText = `position:absolute;left:50%;top:50%;width:${alBufW*z}px;height:${alBufH*z}px;transform:translate(-50%,-50%);pointer-events:none;overflow:hidden;`;
+        // SGL: 旋转模式临时缓冲总是用 bg_color 填充（不管 bg_flag）
+        alTextBlock.style.background = alBgColor;
+
+        // 4. 在文本块上画文本
+        if (alHasFont) {
+          const alTbCanvas = document.createElement('canvas');
+          const alTbSurf = R.createSurface(alTbCanvas, alBufW, alBufH, z);
+          alTbCanvas.style.cssText = `position:absolute;left:0;top:0;width:${alTbSurf.w}px;height:${alTbSurf.h}px;pointer-events:none;`;
+          R.drawString(alTbSurf, alMargin, alMargin, alText, R.hexToColor(alTextColor), alAlpha, alFontSize, alCssFamily, alFontBpp);
+          R.flushSurface(alTbSurf);
+          alTextBlock.appendChild(alTbCanvas);
+        } else {
+          const alTbSpan = document.createElement('span');
+          alTbSpan.textContent = alText;
+          alTbSpan.style.cssText = `position:absolute;left:${alMargin*z}px;top:${alMargin*z}px;color:${alTextColor};font-size:${alFontSize*z}px;white-space:nowrap;line-height:${alFontSize*z}px;`;
+          alTbSpan.style.fontFamily = 'system-ui, -apple-system, "Segoe UI", sans-serif';
+          if (alAlpha < 255) alTbSpan.style.opacity = alAlpha / 255;
+          alTextBlock.appendChild(alTbSpan);
+        }
+        el.appendChild(alTextBlock);
+      } else {
+        // 无旋转模式：与 label 控件一致的渲染方式
+        const { surf, R } = createWidgetCanvas(el, w, z);
+        el.style.opacity = alAlpha / 255;
+        if (alBgFlag) {
+          R.drawFillRect(surf, 0, 0, w.width - 1, w.height - 1, alRadius, R.hexToColor(alBgColor), alAlpha);
+        }
+        if (alHasFont) {
+          const coords = { x1: 0, y1: 0, x2: w.width - 1, y2: w.height - 1 };
+          const pos = R.getTextPosRealtime(coords, alText, alFontSize, alCssFamily, 0, alignStrToNum(alAlign));
+          R.drawString(surf, pos.x + alOffsetX, pos.y + alOffsetY, alText, R.hexToColor(alTextColor), alAlpha, alFontSize, alCssFamily, alFontBpp);
+        }
+        flushWidget(surf);
+        if (!alHasFont) {
+          overlayText({
+            text: alText,
+            color: alTextColor,
+            fontSize: alFontSize,
+            fontFamily: alFontFamily,
+            align: alAlign,
+            x: 0, y: 0, w: w.width, h: w.height,
+            offX: alOffsetX,
+            offY: alOffsetY
+          });
+        }
+      }
       break;
     }
 

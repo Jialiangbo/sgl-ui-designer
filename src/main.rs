@@ -111,6 +111,191 @@ struct Widget {
     vertices: Option<String>,
     #[serde(default)]
     options: Option<String>,
+    // spectrum 控件属性
+    #[serde(default, rename = "barColor")]
+    bar_color: Option<String>,
+    #[serde(default, rename = "barHatColor")]
+    bar_hat_color: Option<String>,
+    #[serde(default, rename = "barNum")]
+    bar_num: Option<i32>,
+    #[serde(default, rename = "barMode")]
+    bar_mode: Option<i32>,
+    #[serde(default, rename = "barHatHeight")]
+    bar_hat_height: Option<i32>,
+    #[serde(default, rename = "barValues")]
+    bar_values: Option<String>,
+    #[serde(default, rename = "bindTarget")]
+    bind_target: Option<String>,
+    // statusbar 控件属性
+    #[serde(default, rename = "bgAlpha")]
+    statusbar_bg_alpha: Option<i32>,
+    #[serde(default, rename = "leftMargin")]
+    left_margin: Option<i32>,
+    #[serde(default, rename = "rightMargin")]
+    right_margin: Option<i32>,
+    #[serde(default, rename = "slotSpace")]
+    slot_space: Option<i32>,
+    #[serde(default, rename = "leftSlots")]
+    left_slots: Option<String>,
+    #[serde(default, rename = "rightSlots")]
+    right_slots: Option<String>,
+    #[serde(default, rename = "slotColor")]
+    slot_color: Option<String>,
+    #[serde(default, rename = "slotAlpha")]
+    slot_alpha: Option<i32>,
+    // canvas 控件属性
+    #[serde(default, rename = "painterCb")]
+    painter_cb: Option<String>,
+    #[serde(default, rename = "privateData")]
+    private_data: Option<String>,
+    // ext_img 控件属性
+    #[serde(default)]
+    rotation: Option<i32>,
+    #[serde(default, rename = "scaleUniform")]
+    scale_uniform: Option<i32>,
+    #[serde(default, rename = "pivotX")]
+    pivot_x: Option<i32>,
+    #[serde(default, rename = "pivotY")]
+    pivot_y: Option<i32>,
+    #[serde(default, rename = "readOps")]
+    read_ops: Option<String>,
+    // icon 控件属性
+    #[serde(default)]
+    icon: Option<String>,
+    // qrcode 控件属性
+    #[serde(default, rename = "qrText")]
+    qr_text: Option<String>,
+    #[serde(default, rename = "cellColor")]
+    cell_color: Option<String>,
+    #[serde(default, rename = "cellRadius")]
+    cell_radius: Option<i32>,
+    #[serde(default)]
+    zone: Option<i32>,
+    #[serde(default)]
+    scale: Option<i32>,
+    #[serde(default)]
+    version: Option<i32>,
+    #[serde(default)]
+    ecc: Option<i32>,
+    #[serde(default)]
+    logo: Option<String>,
+    #[serde(default, rename = "logoRadius")]
+    logo_radius: Option<i32>,
+    // msgbox 控件属性
+    #[serde(default, rename = "msgText")]
+    msg_text: Option<String>,
+    #[serde(default, rename = "leftBtnText")]
+    left_btn_text: Option<String>,
+    #[serde(default, rename = "rightBtnText")]
+    right_btn_text: Option<String>,
+    // win 控件属性
+    #[serde(default, rename = "titleText")]
+    title_text: Option<String>,
+    #[serde(default, rename = "titleBgColor")]
+    title_bg_color: Option<String>,
+    #[serde(default, rename = "titleTextColor")]
+    title_text_color: Option<String>,
+    #[serde(default, rename = "closeBtnColor")]
+    close_btn_color: Option<String>,
+    #[serde(default, rename = "titleHeight")]
+    title_height: Option<i32>,
+    #[serde(default, rename = "titleAlign")]
+    title_align: Option<String>,
+    // arc_label 控件属性
+    #[serde(default)]
+    angle: Option<i32>,
+    #[serde(default, rename = "offsetX")]
+    arc_label_offset_x: Option<i32>,
+    #[serde(default, rename = "offsetY")]
+    arc_label_offset_y: Option<i32>,
+    #[serde(default, rename = "bgFlag")]
+    arc_label_bg_flag: Option<bool>,
+    // numberkbd 控件属性
+    #[serde(default, rename = "btnMargin")]
+    btn_margin: Option<i32>,
+    #[serde(default, rename = "btnColor")]
+    btn_color: Option<String>,
+    #[serde(default, rename = "btnBorderWidth")]
+    btn_border_width: Option<i32>,
+    #[serde(default, rename = "btnBorderColor")]
+    btn_border_color: Option<String>,
+    #[serde(default, rename = "btnRadius")]
+    btn_radius: Option<i32>,
+    // chart 控件属性
+    #[serde(default, rename = "chartType")]
+    chart_type: Option<String>,
+    #[serde(default, rename = "seriesCount")]
+    series_count: Option<i32>,
+    #[serde(default, rename = "seriesData")]
+    series_data: Option<String>,
+    #[serde(default, rename = "seriesColors")]
+    series_colors: Option<String>,
+    #[serde(default, rename = "seriesLineAlpha")]
+    series_line_alpha: Option<String>,
+    #[serde(default, rename = "seriesLineWidth")]
+    series_line_width: Option<String>,
+    #[serde(default, rename = "xLabels")]
+    x_labels: Option<String>,
+    #[serde(default, rename = "barSpacing")]
+    bar_spacing: Option<i32>,
+    #[serde(default)]
+    orientation: Option<i32>,
+    #[serde(default, rename = "openAnim")]
+    open_anim: Option<bool>,
+    #[serde(default, rename = "openAnimDir")]
+    open_anim_dir: Option<i32>,
+    #[serde(default, rename = "openAnimDuration")]
+    open_anim_duration: Option<i32>,
+    #[serde(default, rename = "innerRadiusRate")]
+    inner_radius_rate: Option<i32>,
+    #[serde(default, rename = "sliceAlpha")]
+    slice_alpha: Option<String>,
+    #[serde(default)]
+    smooth: Option<bool>,
+    #[serde(default, rename = "legendEnable")]
+    legend_enable: Option<bool>,
+    #[serde(default, rename = "legendPos")]
+    legend_pos: Option<i32>,
+    #[serde(default, rename = "legendDir")]
+    legend_dir: Option<i32>,
+    #[serde(default, rename = "legendTextColor")]
+    legend_text_color: Option<String>,
+    #[serde(default, rename = "legendAreaSize")]
+    legend_area_size: Option<i32>,
+    #[serde(default, rename = "legendAlpha")]
+    legend_alpha: Option<i32>,
+    #[serde(default, rename = "legendBoxSize")]
+    legend_box_size: Option<i32>,
+    #[serde(default, rename = "legendPadding")]
+    legend_padding: Option<i32>,
+    #[serde(default, rename = "legendItemGap")]
+    legend_item_gap: Option<i32>,
+    #[serde(default, rename = "legendBg")]
+    legend_bg: Option<bool>,
+    #[serde(default, rename = "legendBgColor")]
+    legend_bg_color: Option<String>,
+    #[serde(default, rename = "legendBorderColor")]
+    legend_border_color: Option<String>,
+    #[serde(default, rename = "sliceCount")]
+    slice_count: Option<i32>,
+    #[serde(default, rename = "sliceValues")]
+    slice_values: Option<String>,
+    #[serde(default, rename = "sliceColors")]
+    slice_colors: Option<String>,
+    #[serde(default, rename = "sliceLabels")]
+    slice_labels: Option<String>,
+    #[serde(default, rename = "gridColor")]
+    grid_color: Option<String>,
+    #[serde(default, rename = "gridDashed")]
+    grid_dashed: Option<bool>,
+    #[serde(default, rename = "minValue")]
+    min_value: Option<i32>,
+    #[serde(default, rename = "maxValue")]
+    max_value: Option<i32>,
+    #[serde(default, rename = "autoScale")]
+    auto_scale: Option<bool>,
+    #[serde(default, rename = "showYLabels")]
+    show_y_labels: Option<bool>,
 }
 
 // 兼容前端传来的字符串布尔值（"true"/"false"）
@@ -178,6 +363,8 @@ struct SglConfig {
     fbdev_rotation: i32,
     #[serde(rename = "fbdev_runtime_rotation", default)]
     fbdev_runtime_rotation: i32,
+    #[serde(rename = "fbdev_even_coords", default)]
+    fbdev_even_coords: i32,
     #[serde(rename = "use_fbdev_vram", default)]
     use_fbdev_vram: i32,
     #[serde(rename = "systick_ms", default)]
@@ -222,6 +409,74 @@ struct SglConfig {
     font_consolas32: i32,
     #[serde(rename = "font_consolas24_compress", default)]
     font_consolas24_compress: i32,
+    #[serde(rename = "focused_color", default = "default_focused_color")]
+    focused_color: String,
+    #[serde(rename = "focused_width", default = "default_focused_width")]
+    focused_width: i32,
+    #[serde(rename = "dirty_area_trace", default)]
+    dirty_area_trace: i32,
+    #[serde(rename = "dirty_area_trace_color", default = "default_dirty_area_trace_color")]
+    dirty_area_trace_color: String,
+    #[serde(rename = "monitor_trace", default)]
+    monitor_trace: i32,
+    #[serde(rename = "pixmap_bilinear_interp", default)]
+    pixmap_bilinear_interp: i32,
+    #[serde(rename = "font_small_table", default)]
+    font_small_table: i32,
+}
+
+fn default_focused_color() -> String {
+    "#00FF00".to_string()
+}
+
+fn default_focused_width() -> i32 {
+    1
+}
+
+fn default_dirty_area_trace_color() -> String {
+    "#000000".to_string()
+}
+
+/// 将 sgl_rgb(0xRR, 0xGG, 0xBB) 格式解析为 #RRGGBB hex 字符串
+/// 解析失败时返回 default_hex
+fn parse_sgl_rgb_to_hex(value: &str, default_hex: &str) -> String {
+    // 提取括号内部分
+    let inner = match value.find('(') {
+        Some(i) => &value[i + 1..],
+        None => return default_hex.to_string(),
+    };
+    let inner = match inner.rfind(')') {
+        Some(i) => &inner[..i],
+        None => return default_hex.to_string(),
+    };
+    // 按逗号分割，解析三个分量
+    let parts: Vec<&str> = inner.split(',').map(|s| s.trim()).collect();
+    if parts.len() != 3 {
+        return default_hex.to_string();
+    }
+    let parse_component = |s: &str| -> u8 {
+        let s = s.trim();
+        if s.starts_with("0x") || s.starts_with("0X") {
+            u8::from_str_radix(&s[2..], 16).unwrap_or(0)
+        } else {
+            s.parse::<u8>().unwrap_or(0)
+        }
+    };
+    let r = parse_component(parts[0]);
+    let g = parse_component(parts[1]);
+    let b = parse_component(parts[2]);
+    format!("#{:02X}{:02X}{:02X}", r, g, b)
+}
+
+/// 将 #RRGGBB hex 字符串转换为 sgl_rgb(0xRR, 0xGG, 0xBB) 格式
+fn hex_to_sgl_rgb(hex: &str) -> String {
+    if hex.len() != 7 || !hex.starts_with('#') {
+        return "sgl_rgb(0x00, 0x00, 0x00)".to_string();
+    }
+    let r = u8::from_str_radix(&hex[1..3], 16).unwrap_or(0);
+    let g = u8::from_str_radix(&hex[3..5], 16).unwrap_or(0);
+    let b = u8::from_str_radix(&hex[5..7], 16).unwrap_or(0);
+    format!("sgl_rgb(0x{:02X}, 0x{:02X}, 0x{:02X})", r, g, b)
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -283,6 +538,22 @@ fn pixmap_var_name(pixmap_path: &str, format: &str) -> String {
         sanitized
     };
     format!("pixmap_{}_{}", sanitized, format.replace('-', "_"))
+}
+
+fn icon_var_name(icon_path: &str) -> String {
+    let normalized = icon_path.replace('\\', "/");
+    let base = normalized.rsplit('/').next().unwrap_or(icon_path);
+    let stem = base.rsplit_once('.').map(|(s, _)| s).unwrap_or(base);
+    let sanitized: String = stem
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })
+        .collect();
+    let sanitized = if sanitized.starts_with(|c: char| c.is_numeric()) {
+        format!("_{}", sanitized)
+    } else {
+        sanitized
+    };
+    format!("icon_{}", sanitized)
 }
 
 fn sgl_color(hex: &str) -> String {
@@ -356,6 +627,54 @@ fn collect_fonts(project: &Project) -> Vec<(String, String, i32, i32, i32, Strin
                 // dropdown/roller/textlist 使用 options 作为显示文本
                 if let Some(ref opts) = w.options {
                     for ch in opts.chars() {
+                        if !ch.is_control() || ch == ' ' {
+                            entry.1.insert(ch);
+                        }
+                    }
+                }
+                // win 使用 titleText 作为标题文本
+                if let Some(ref title) = w.title_text {
+                    for ch in title.chars() {
+                        if !ch.is_control() || ch == ' ' {
+                            entry.1.insert(ch);
+                        }
+                    }
+                }
+                // numberkbd 用 char-31 作为字体表索引直接访问（sgl_numberkbd.c: kbd_digits[r][c] - 31）
+                // 绕过 sgl_search_unicode_ch_index，要求字体表包含完整 ASCII 字符集
+                // 因此收集完整 ASCII_SYMBOLS，与手动添加 ASCII 字模配置效果一致
+                if w.widget_type == "numberkbd" {
+                    for ch in ASCII_SYMBOLS.chars() {
+                        entry.1.insert(ch);
+                    }
+                }
+                // keyboard 内部固定字符表（3种模式所有按键文本）
+                // UPPER: QWERTYUIOPASDFGHJKLZXCVBNM
+                // LOWER: qwertyuiopasdfghjklzxcvbnm
+                // SPEC: 1234567890+-/*=%!?#\<>@${}[];"'
+                // 通用: _-.,:1# (多字符按键 "1#" 中的字符)
+                if w.widget_type == "keyboard" {
+                    for ch in "qwertyuiopasdfghjklzxcvbnmQWERTYUIOPASDFGHJKLZXCVBNM1234567890_-.,:+-/*=%!?#<>\\@${}[];\"'".chars() {
+                        entry.1.insert(ch);
+                    }
+                }
+                // msgbox 使用 msgText / leftBtnText / rightBtnText 作为文本
+                if let Some(ref msg) = w.msg_text {
+                    for ch in msg.chars() {
+                        if !ch.is_control() || ch == ' ' {
+                            entry.1.insert(ch);
+                        }
+                    }
+                }
+                if let Some(ref left) = w.left_btn_text {
+                    for ch in left.chars() {
+                        if !ch.is_control() || ch == ' ' {
+                            entry.1.insert(ch);
+                        }
+                    }
+                }
+                if let Some(ref right) = w.right_btn_text {
+                    for ch in right.chars() {
                         if !ch.is_control() || ch == ' ' {
                             entry.1.insert(ch);
                         }
@@ -480,6 +799,12 @@ fn run_font_conv(
     let font_arg = temp_font_path.to_string_lossy().to_string();
 
     let mut cmd = std::process::Command::new(conv);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW (0x08000000): 隐藏控制台窗口，避免 sgl_font_conv.exe 弹出黑窗
+        cmd.creation_flags(0x08000000);
+    }
     cmd.arg("--font").arg(&font_arg)
         .arg("--size").arg(sz.to_string())
         .arg("--bpp").arg(bpp.to_string())
@@ -771,9 +1096,38 @@ fn collect_pixmaps(project: &Project) -> Vec<(String, PixmapFormat)> {
                     }
                 }
             }
+            // qrcode 的 logo 图片也需要生成取模文件
+            if w.widget_type == "qrcode" {
+                if let Some(ref logo) = w.logo {
+                    if !logo.is_empty() {
+                        let fmt = PixmapFormat::from_str(w.pixmap_format.as_deref().unwrap_or("RGB565"));
+                        if seen.insert((logo.clone(), fmt)) {
+                            used.push((logo.clone(), fmt));
+                        }
+                    }
+                }
+            }
         }
     }
 
+    used
+}
+
+/// 收集项目中所有 icon 控件引用的图标资源路径（去重）
+fn collect_icons(project: &Project) -> Vec<String> {
+    let mut used: Vec<String> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for page in &project.pages {
+        for w in &page.widgets {
+            if w.widget_type == "icon" {
+                if let Some(ref icon) = w.icon {
+                    if !icon.is_empty() && seen.insert(icon.clone()) {
+                        used.push(icon.clone());
+                    }
+                }
+            }
+        }
+    }
     used
 }
 
@@ -812,6 +1166,121 @@ fn generate_pixmap_includes(project: &Project) -> Result<String, String> {
     }
     out.push('\n');
     Ok(out)
+}
+
+/// 生成 icon 取模 include 代码段
+fn generate_icon_includes(project: &Project) -> Result<String, String> {
+    let used = collect_icons(project);
+    if used.is_empty() {
+        return Ok(String::new());
+    }
+    let mut out = String::new();
+    out.push_str("/* ============================================\n");
+    out.push_str(" * icon 图标取模数据 (4bpp alpha 蒙版)\n");
+    out.push_str(" * ============================================ */\n");
+    for path in &used {
+        let name = std::path::Path::new(path)
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.clone());
+        if has_non_ascii(&name) {
+            return Err(format!("图标文件名不能包含中文或特殊字符: {}", name));
+        }
+        out.push_str(&format!("#include \"icons/{}.c\"\n", icon_var_name(path)));
+    }
+    out.push('\n');
+    Ok(out)
+}
+
+/// 将图片转换为 SGL icon 4bpp alpha 蒙版格式
+/// 每字节存储2个像素，偶数像素在高4位，奇数像素在低4位
+/// 若宽度为奇数则右侧填充1列透明像素，保证 width 为偶数（SGL 使用 width>>1 计算行字节数）
+fn convert_image_to_icon(path: &str) -> Result<(u16, u16, Vec<u8>), String> {
+    let img = image::open(path).map_err(|e| format!("无法打开图片 {}: {}", path, e))?;
+    let rgba = img.to_rgba8();
+    let (w, h) = rgba.dimensions();
+    // 确保宽度为偶数（SGL 使用 width>>1 计算行字节数）
+    let actual_w = if w % 2 == 1 { w + 1 } else { w };
+    let bytes_per_row = (actual_w / 2) as usize;
+    let mut bytes = vec![0u8; bytes_per_row * h as usize];
+    for y in 0..h as usize {
+        for x in 0..w as usize {
+            let pixel = rgba.get_pixel(x as u32, y as u32);
+            let alpha = pixel.0[3];
+            let alpha_4bpp = alpha >> 4;
+            let byte_index = y * bytes_per_row + (x >> 1);
+            if x & 1 == 0 {
+                bytes[byte_index] |= alpha_4bpp << 4;
+            } else {
+                bytes[byte_index] |= alpha_4bpp;
+            }
+        }
+    }
+    Ok((actual_w as u16, h as u16, bytes))
+}
+
+/// 生成 icon 取模 .c 文件到 icons/ 子目录
+fn generate_icon_files(project: &Project, icons_dir: &std::path::Path) -> Result<(), String> {
+    let resolve_path = |p: &str| -> Option<String> {
+        if p.is_empty() { return None; }
+        let path = std::path::Path::new(p);
+        if path.is_absolute() && path.exists() {
+            return Some(p.to_string());
+        }
+        if path.exists() {
+            return Some(path.canonicalize().unwrap_or(path.to_path_buf()).to_string_lossy().to_string());
+        }
+        None
+    };
+
+    let used = collect_icons(project);
+    if used.is_empty() {
+        return Ok(());
+    }
+
+    std::fs::create_dir_all(icons_dir)
+        .map_err(|e| format!("创建 icons 目录失败: {}", e))?;
+
+    for path in &used {
+        let name = std::path::Path::new(path)
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.clone());
+        if has_non_ascii(&name) {
+            return Err(format!("图标文件名不能包含中文或特殊字符: {}", name));
+        }
+        let var = icon_var_name(path);
+        let resolved = resolve_path(path)
+            .ok_or_else(|| format!("图标取模失败: 无法解析图片路径 {}", path))?;
+        let (w, h, bytes) = convert_image_to_icon(&resolved)
+            .map_err(|e| format!("图标取模失败 {}: {}", path, e))?;
+        let out_file = icons_dir.join(format!("{}.c", var));
+        let mut out = String::new();
+        out.push_str("/* ============================================\n");
+        out.push_str(" * icon 图标取模数据 (4bpp alpha 蒙版)\n");
+        out.push_str(&format!(" * source: {}\n", name));
+        out.push_str(" * ============================================ */\n");
+        out.push_str(&format!("static const uint8_t {}_bitmap[] = {{\n    ", var));
+        for (i, b) in bytes.iter().enumerate() {
+            out.push_str(&format!("0x{:02X},", b));
+            if (i + 1) % 16 == 0 {
+                out.push_str("\n    ");
+            } else {
+                out.push(' ');
+            }
+        }
+        if bytes.len() % 16 != 0 {
+            out.push('\n');
+        }
+        out.push_str("};\n");
+        out.push_str(&format!(
+            "const sgl_icon_pixmap_t {} = {{ .width = {}, .height = {}, .bitmap = {}_bitmap }};\n",
+            var, w, h, var
+        ));
+        std::fs::write(&out_file, out)
+            .map_err(|e| format!("写入图标取模文件 {} 失败: {}", out_file.to_string_lossy(), e))?;
+    }
+    Ok(())
 }
 
 fn generate_pixmap_files(project: &Project, pixmaps_dir: &std::path::Path) -> Result<(), String> {
@@ -881,7 +1350,46 @@ fn generate_pixmap_files(project: &Project, pixmaps_dir: &std::path::Path) -> Re
 }
 
 #[tauri::command]
-fn generate_code(project: Project) -> Result<String, String> {
+fn generate_code(project: Project, window: tauri::Window) -> Result<String, String> {
+    // 检查 canvas 控件是否设置了 painter_cb / private_data，未设置时通过 build-log 事件推送警告到前端控制台
+    for page in &project.pages {
+        for w in &page.widgets {
+            if w.widget_type == "canvas" {
+                if w.painter_cb.as_deref().map(|s| s.trim()).unwrap_or("").is_empty() {
+                    let _ = window.emit(
+                        "build-log",
+                        serde_json::json!({
+                            "message": format!("[WARN] canvas 控件 '{}' (id={}) 未设置绘制回调函数 (painterCb)，运行时将无法绘制", w.name.as_deref().unwrap_or(""), w.id),
+                            "level": "warn"
+                        }),
+                    );
+                }
+                if w.private_data.as_deref().map(|s| s.trim()).unwrap_or("").is_empty() {
+                    let _ = window.emit(
+                        "build-log",
+                        serde_json::json!({
+                            "message": format!("[WARN] canvas 控件 '{}' (id={}) 未设置私有数据指针 (privateData)", w.name.as_deref().unwrap_or(""), w.id),
+                            "level": "warn"
+                        }),
+                    );
+                }
+            }
+            if w.widget_type == "ext_img" {
+                if w.pixmap.as_deref().map(|s| s.trim()).unwrap_or("") != "" {
+                    if w.read_ops.as_deref().map(|s| s.trim()).unwrap_or("").is_empty() {
+                        let _ = window.emit(
+                            "build-log",
+                            serde_json::json!({
+                                "message": format!("[WARN] ext_img 控件 '{}' (id={}) 设置了图片但未设置外部读取函数 (readOps)，运行时将无法从外部 Flash 读取图片", w.name.as_deref().unwrap_or(""), w.id),
+                                "level": "warn"
+                            }),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     let fonts = collect_fonts(&project);
     let mut code = String::new();
     code.push_str("/* ============================================\n");
@@ -911,6 +1419,12 @@ fn generate_code(project: Project) -> Result<String, String> {
     let pixmap_includes = generate_pixmap_includes(&project)?;
     if !pixmap_includes.is_empty() {
         code.push_str(&pixmap_includes);
+    }
+
+    // 生成 icon 图标取模 include
+    let icon_includes = generate_icon_includes(&project)?;
+    if !icon_includes.is_empty() {
+        code.push_str(&icon_includes);
     }
 
     // 收集所有事件回调函数名，生成前向声明
@@ -963,7 +1477,16 @@ fn generate_code(project: Project) -> Result<String, String> {
 
         for w in &page.widgets {
             let obj_id = sanitize_id(&w.id);
-            let create_fn = get_create_fn(&w.widget_type);
+            // chart 控件根据 chartType 选择不同的 create 函数
+            let create_fn = if w.widget_type == "chart" {
+                match w.chart_type.as_deref().unwrap_or("linechart") {
+                    "piechart" => "sgl_piechart_create",
+                    "barchart" => "sgl_barchart_create",
+                    _ => "sgl_linechart_create",
+                }
+            } else {
+                get_create_fn(&w.widget_type)
+            };
             code.push_str(&format!("    /* {} */\n", w.widget_type));
             code.push_str(&format!("    sgl_obj_t *{} = {}(page_{});\n", obj_id, create_fn, page_id));
             code.push_str(&format!("    sgl_obj_set_pos({}, {}, {});\n", obj_id, w.x, w.y));
@@ -1140,16 +1663,16 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             code.push_str(&format!("    sgl_line_set_pos({}, {}, {}, {}, {});\n", obj, abs_x1, abs_y1, abs_x2, abs_y2));
         }
         "button" => {
+            if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
+                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
+                code.push_str(&format!("    sgl_button_set_font({}, &{});\n", obj, fid));
+            }
             cstr!("sgl_button_set_text", w.text);
             cclr!("sgl_button_set_color", w.color);
             cclr!("sgl_button_set_text_color", w.text_color);
             cclr!("sgl_button_set_border_color", w.border_color);
             c!( "sgl_button_set_border_width", w.border_width.map(|v| v as u8));
             c!( "sgl_button_set_radius", w.radius.map(|v| v as u8));
-            if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
-                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
-                code.push_str(&format!("    sgl_button_set_font({}, &{});\n", obj, fid));
-            }
             c!( "sgl_button_set_alpha", w.alpha.map(|v| v as u8));
             if let Some(a) = &w.align {
                 code.push_str(&format!("    sgl_button_set_text_align({}, SGL_ALIGN_{});\n", obj, a));
@@ -1162,13 +1685,13 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             }
         }
         "label" => {
-            cstr!("sgl_label_set_text", w.text);
-            cclr!("sgl_label_set_text_color", w.text_color);
-            cclr!("sgl_label_set_bg_color", w.bg_color);
             if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
                 let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
                 code.push_str(&format!("    sgl_label_set_font({}, &{});\n", obj, fid));
             }
+            cstr!("sgl_label_set_text", w.text);
+            cclr!("sgl_label_set_text_color", w.text_color);
+            cclr!("sgl_label_set_bg_color", w.bg_color);
             c!( "sgl_label_set_alpha", w.alpha.map(|v| v as u8));
             if let Some(a) = &w.align {
                 code.push_str(&format!("    sgl_label_set_text_align({}, SGL_ALIGN_{});\n", obj, a));
@@ -1281,6 +1804,10 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             c!( "sgl_ring_set_alpha", w.alpha.map(|v| v as u8));
         }
         "checkbox" => {
+            if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
+                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
+                code.push_str(&format!("    sgl_checkbox_set_font({}, &{});\n", obj, fid));
+            }
             if let Some(s) = w.status {
                 code.push_str(&format!("    sgl_checkbox_set_status({}, {});\n", obj, if s { "true" } else { "false" }));
             }
@@ -1291,17 +1818,52 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             cclr!("sgl_checkbox_set_text_color", cb_text_clr);
             cclr!("sgl_checkbox_set_box_color", w.box_color);
             cclr!("sgl_checkbox_set_check_color", w.check_color);
-            if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
-                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
-                code.push_str(&format!("    sgl_checkbox_set_font({}, &{});\n", obj, fid));
-            }
             c!( "sgl_checkbox_set_alpha", w.alpha.map(|v| v as u8));
         }
         "win" => {
-            cclr!("sgl_win_set_color", w.color);
-            cclr!("sgl_win_set_border_color", w.border_color);
+            cclr!("sgl_win_set_title_bg_color", w.title_bg_color.clone());
+            cclr!("sgl_win_set_title_text_color", w.title_text_color.clone());
+            cclr!("sgl_win_set_close_btn_color", w.close_btn_color.clone());
+            cclr!("sgl_win_set_color", w.bg_color.clone());
+            cclr!("sgl_win_set_border_color", w.border_color.clone());
             c!( "sgl_win_set_border_width", w.border_width.map(|v| v as u8));
             c!( "sgl_win_set_radius", w.radius.map(|v| v as u8));
+            c!( "sgl_win_set_title_height", w.title_height.map(|v| v as u16));
+            // title_align: 字符串转 SGL_ALIGN_ 宏
+            if let Some(ref align) = w.title_align {
+                let align_macro = match align.as_str() {
+                    "TOP_LEFT" => "SGL_ALIGN_TOP_LEFT",
+                    "TOP_MID" => "SGL_ALIGN_TOP_MID",
+                    "TOP_RIGHT" => "SGL_ALIGN_TOP_RIGHT",
+                    "LEFT_MID" => "SGL_ALIGN_LEFT_MID",
+                    "CENTER" => "SGL_ALIGN_CENTER",
+                    "RIGHT_MID" => "SGL_ALIGN_RIGHT_MID",
+                    "BOT_LEFT" => "SGL_ALIGN_BOT_LEFT",
+                    "BOT_MID" => "SGL_ALIGN_BOT_MID",
+                    "BOT_RIGHT" => "SGL_ALIGN_BOT_RIGHT",
+                    _ => "SGL_ALIGN_LEFT_MID",
+                };
+                code.push_str(&format!("    sgl_win_set_title_text_align({}, {});\n", obj, align_macro));
+            }
+            // pixmap 背景图片
+            if let Some(ref pixmap) = w.pixmap {
+                if !pixmap.is_empty() {
+                    let fmt = w.pixmap_format.as_deref().unwrap_or("RGB565");
+                    code.push_str(&format!("    sgl_win_set_pixmap({}, &{});\n", obj, pixmap_var_name(pixmap, fmt)));
+                }
+            }
+            // 标题字体（必须在 title_text 之前设置，因为 title_text 会触发 sgl_obj_update_area）
+            if let Some(ref font_family) = w.font_family {
+                if !font_family.is_empty() && font_family != "default" {
+                    let font_size = w.font_size.unwrap_or(14);
+                    let font_bpp = w.font_bpp.unwrap_or(4);
+                    let font_var = font_id_from_family(font_family, font_size, font_bpp, 0);
+                    code.push_str(&format!("    sgl_win_set_title_font({}, &{});\n", obj, font_var));
+                }
+            }
+            // title_text 必须在 title_height 和 title_font 之后调用
+            // SGL: sgl_win_set_title_text 内部调用 sgl_obj_update_area(area.y2 = area.y1 + title_h)
+            cstr!("sgl_win_set_title_text", w.title_text.clone());
             c!( "sgl_win_set_alpha", w.alpha.map(|v| v as u8));
         }
         "msgbox" => {
@@ -1312,6 +1874,10 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             c!( "sgl_msgbox_set_alpha", w.alpha.map(|v| v as u8));
         }
         "dropdown" => {
+            if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
+                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
+                code.push_str(&format!("    sgl_dropdown_set_text_font({}, &{});\n", obj, fid));
+            }
             cclr!("sgl_dropdown_set_bg_color", w.color);
             cclr!("sgl_dropdown_set_selected_color", w.bg_color);
             cclr!("sgl_dropdown_set_border_color", w.border_color);
@@ -1319,32 +1885,28 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             c!( "sgl_dropdown_set_border_width", w.border_width.map(|v| v as u8));
             c!( "sgl_dropdown_set_radius", w.radius.map(|v| v as u8));
             c!( "sgl_dropdown_set_alpha", w.alpha.map(|v| v as u8));
-            if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
-                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
-                code.push_str(&format!("    sgl_dropdown_set_text_font({}, &{});\n", obj, fid));
-            }
         }
         "textline" => {
+            if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
+                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
+                code.push_str(&format!("    sgl_textline_set_text_font({}, &{});\n", obj, fid));
+            }
             cstr!("sgl_textline_set_text", w.text);
             cclr!("sgl_textline_set_text_color", w.text_color);
             cclr!("sgl_textline_set_bg_color", w.bg_color);
             c!( "sgl_textline_set_radius", w.radius.map(|v| v as u8));
             c!( "sgl_textline_set_alpha", w.alpha.map(|v| v as u8));
-            if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
-                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
-                code.push_str(&format!("    sgl_textline_set_text_font({}, &{});\n", obj, fid));
-            }
         }
         "textlist" => {
+            if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
+                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
+                code.push_str(&format!("    sgl_textlist_set_text_font({}, &{});\n", obj, fid));
+            }
             cclr!("sgl_textlist_set_text_color", w.text_color);
             cclr!("sgl_textlist_set_bg_color", w.bg_color);
             cclr!("sgl_textlist_set_border_color", w.border_color);
             c!( "sgl_textlist_set_radius", w.radius.map(|v| v as u8));
             c!( "sgl_textlist_set_alpha", w.alpha.map(|v| v as u8));
-            if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
-                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
-                code.push_str(&format!("    sgl_textlist_set_text_font({}, &{});\n", obj, fid));
-            }
         }
         "viewlist" => {
             cclr!("sgl_viewlist_set_bg_color", w.bg_color);
@@ -1366,7 +1928,11 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             c!( "sgl_box_set_alpha", w.alpha.map(|v| v as u8));
         }
         "canvas" => {
-            // canvas 只有 set_draw_cb 和 set_private_data，暂无通用属性
+            // 绘制回调和私有数据必须始终生成 API；未填写时使用 NULL
+            let painter = w.painter_cb.as_deref().filter(|s| !s.is_empty()).unwrap_or("NULL");
+            code.push_str(&format!("    sgl_canvas_set_painter_cb({}, {});\n", obj, painter));
+            let private = w.private_data.as_deref().filter(|s| !s.is_empty()).unwrap_or("NULL");
+            code.push_str(&format!("    sgl_canvas_set_private({}, {});\n", obj, private));
         }
         "scope" => {
             cclr!("sgl_scope_set_bg_color", w.bg_color);
@@ -1403,6 +1969,10 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
                     code.push_str(&format!("    sgl_polygon_set_vertex_array({}, (int16_t[][2]){{{}}}, {});\n", obj, pairs, coords.len()));
                 }
             }
+            if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
+                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
+                code.push_str(&format!("    sgl_polygon_set_font({}, &{});\n", obj, fid));
+            }
             if let Some(ref text) = w.text {
                 if !text.is_empty() {
                     let escaped = text.replace('\\', "\\\\").replace('"', "\\\"");
@@ -1410,22 +1980,26 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
                 }
             }
             cclr!("sgl_polygon_set_text_color", w.text_color);
-            if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
-                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
-                code.push_str(&format!("    sgl_polygon_set_font({}, &{});\n", obj, fid));
-            }
             // sgl_polygon_set_pixmap 在 sgl 头文件中声明被注释（waiting for support），暂不生成调用
         }
         "numberkbd" => {
-            cclr!("sgl_numberkbd_set_color", w.color);
-            cclr!("sgl_numberkbd_set_border_color", w.border_color);
-            cclr!("sgl_numberkbd_set_text_color", w.text_color);
-            c!( "sgl_numberkbd_set_border_width", w.border_width.map(|v| v as u8));
+            // 按 SGL 头文件声明顺序生成全部 setter (sgl_numberkbd.h)
+            cclr!("sgl_numberkbd_set_color", w.cell_color.clone());
             c!( "sgl_numberkbd_set_alpha", w.alpha.map(|v| v as u8));
+            c!( "sgl_numberkbd_set_radius", w.radius.map(|v| v as u8));
+            c!( "sgl_numberkbd_set_border_width", w.border_width.map(|v| v as u8));
+            cclr!("sgl_numberkbd_set_border_color", w.border_color);
+            // numberkbd 必须有字体，否则仿真崩溃
             if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
                 let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
                 code.push_str(&format!("    sgl_numberkbd_set_text_font({}, &{});\n", obj, fid));
             }
+            cclr!("sgl_numberkbd_set_text_color", w.text_color);
+            c!( "sgl_numberkbd_set_btn_margin", w.btn_margin.map(|v| v as u8));
+            cclr!("sgl_numberkbd_set_btn_color", w.btn_color);
+            c!( "sgl_numberkbd_set_btn_border_width", w.btn_border_width.map(|v| v as u8));
+            cclr!("sgl_numberkbd_set_btn_border_color", w.btn_border_color);
+            c!( "sgl_numberkbd_set_btn_radius", w.btn_radius.map(|v| v as u8));
         }
         "keyboard" => {
             cclr!("sgl_keyboard_set_color", w.color);
@@ -1440,12 +2014,47 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             }
         }
         "qrcode" => {
-            cclr!("sgl_qrcode_set_bg_color", w.bg_color);
-            cclr!("sgl_qrcode_set_cell_color", w.color);
-            c!( "sgl_qrcode_set_alpha", w.alpha.map(|v| v as u8));
+            cstr!("sgl_qrcode_set_text", w.qr_text.clone());
+            cclr!("sgl_qrcode_set_cell_color", w.cell_color.clone());
+            cclr!("sgl_qrcode_set_bg_color", w.bg_color.clone());
+            c!("sgl_qrcode_set_cell_radius", w.cell_radius);
+            c!("sgl_qrcode_set_scale", w.scale);
+            c!("sgl_qrcode_set_zone", w.zone);
+            c!("sgl_qrcode_set_version", w.version);
+            c!("sgl_qrcode_set_ecc", w.ecc);
+            // logo 图片
+            if let Some(ref logo) = w.logo {
+                if !logo.is_empty() {
+                    let fmt = w.pixmap_format.as_deref().unwrap_or("RGB565");
+                    code.push_str(&format!("    sgl_qrcode_set_logo({}, &{});\n", obj, pixmap_var_name(logo, fmt)));
+                }
+            }
+            c!("sgl_qrcode_set_logo_radius", w.logo_radius);
+            c!("sgl_qrcode_set_alpha", w.alpha.map(|v| v as u8));
         }
         "icon" => {
             cclr!("sgl_icon_set_color", w.color);
+            // align: 字符串转 SGL_ALIGN_ 宏
+            if let Some(ref align) = w.align {
+                let align_macro = match align.as_str() {
+                    "TOP_LEFT" => "SGL_ALIGN_TOP_LEFT",
+                    "TOP_MID" => "SGL_ALIGN_TOP_MID",
+                    "TOP_RIGHT" => "SGL_ALIGN_TOP_RIGHT",
+                    "LEFT_MID" => "SGL_ALIGN_LEFT_MID",
+                    "CENTER" => "SGL_ALIGN_CENTER",
+                    "RIGHT_MID" => "SGL_ALIGN_RIGHT_MID",
+                    "BOT_LEFT" => "SGL_ALIGN_BOT_LEFT",
+                    "BOT_MID" => "SGL_ALIGN_BOT_MID",
+                    "BOT_RIGHT" => "SGL_ALIGN_BOT_RIGHT",
+                    _ => "SGL_ALIGN_CENTER",
+                };
+                code.push_str(&format!("    sgl_icon_set_align({}, {});\n", obj, align_macro));
+            }
+            if let Some(ref icon) = w.icon {
+                if !icon.is_empty() {
+                    code.push_str(&format!("    sgl_icon_set_icon({}, &{});\n", obj, icon_var_name(icon)));
+                }
+            }
             c!( "sgl_icon_set_alpha", w.alpha.map(|v| v as u8));
         }
         "sprite" => {
@@ -1458,17 +2067,242 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             c!( "sgl_2dball_set_alpha", w.alpha.map(|v| v as u8));
         }
         "ext_img" => {
+            if let Some(ref pixmap) = w.pixmap {
+                if !pixmap.is_empty() {
+                    let fmt = w.pixmap_format.as_deref().unwrap_or("RGB565");
+                    code.push_str(&format!("    sgl_img_ext_set_pixmap({}, &{});\n", obj, pixmap_var_name(pixmap, fmt)));
+                }
+            }
             c!( "sgl_img_ext_set_alpha", w.alpha.map(|v| v as u8));
+            c!( "sgl_img_ext_set_rotation", w.rotation.map(|v| v as i16));
+            c!( "sgl_img_ext_set_scale_uniform", w.scale_uniform.map(|v| v as i8));
+            if let (Some(px), Some(py)) = (w.pivot_x, w.pivot_y) {
+                code.push_str(&format!("    sgl_img_ext_set_pivot({}, {}, {});\n", obj, px, py));
+            }
+            if let Some(ref read_ops) = w.read_ops {
+                if !read_ops.trim().is_empty() {
+                    code.push_str(&format!("    sgl_img_ext_set_read_ops({}, {});\n", obj, read_ops.trim()));
+                }
+            }
         }
         "spectrum" => {
-            cclr!("sgl_spectrum_set_bar_color", w.color);
-            cclr!("sgl_spectrum_set_bar_hat_color", w.border_color);
-            c!( "sgl_spectrum_set_alpha", w.alpha.map(|v| v as u8));
+            // bar_number 必须先调用：分配 bar_value 数组，bar_mode 的 HAT 分配也依赖 bar_num
+            if let Some(bar_num) = w.bar_num {
+                if bar_num > 0 {
+                    c!("sgl_spectrum_set_bar_number", Some(bar_num as u16));
+                }
+            }
+            cclr!("sgl_spectrum_set_bar_color", w.bar_color);
+            cclr!("sgl_spectrum_set_bar_hat_color", w.bar_hat_color);
+            c!("sgl_spectrum_set_bar_mode", w.bar_mode.map(|v| v as u8));
+            c!("sgl_spectrum_set_bar_hat_height", w.bar_hat_height.map(|v| v as u8));
+            if let Some(ref bar_values) = w.bar_values {
+                if !bar_values.is_empty() {
+                    let bar_num = w.bar_num.unwrap_or(0);
+                    if bar_num > 0 {
+                        bar_values.split(';')
+                            .map(|s| s.trim())
+                            .filter(|s| !s.is_empty())
+                            .take(bar_num as usize)
+                            .enumerate()
+                            .for_each(|(idx, val)| {
+                                if let Ok(v) = val.parse::<i32>() {
+                                    code.push_str(&format!("    sgl_spectrum_set_bar_value({}, {}, {});\n", obj, idx, v));
+                                }
+                            });
+                    }
+                }
+            }
+            c!("sgl_spectrum_set_alpha", w.alpha.map(|v| v as u8));
         }
         "analogclock" => {
             cclr!("sgl_analogclock_set_bg_color", w.bg_color);
             cclr!("sgl_analogclock_set_border_color", w.border_color);
             c!( "sgl_analogclock_set_alpha", w.alpha.map(|v| v as u8));
+        }
+        "chart" => {
+            let chart_type = w.chart_type.as_deref().unwrap_or("linechart");
+            let prefix = match chart_type {
+                "piechart" => "sgl_piechart",
+                "barchart" => "sgl_barchart",
+                _ => "sgl_linechart",
+            };
+            let axis_y = match chart_type {
+                "barchart" => "SGL_BARCHART_AXIS_Y",
+                _ => "SGL_LINECHART_AXIS_Y",
+            };
+            // 公共属性
+            cclr!(format!("{}_set_bg_color", prefix), w.bg_color);
+            c!(format!("{}_set_alpha", prefix), w.alpha.map(|v| v as u8));
+
+            if chart_type == "piechart" {
+                // piechart 专用
+                c!(format!("{}_set_start_angle", prefix), w.start_angle);
+                c!(format!("{}_set_inner_radius_rate", prefix), w.inner_radius_rate.map(|v| v as u8));
+                c!(format!("{}_set_radius", prefix), w.radius.map(|v| v as u16));
+                if let Some(true) = w.smooth {
+                    code.push_str(&format!("    {}_set_smooth({}, true);\n", prefix, obj));
+                }
+                if let Some(true) = w.open_anim {
+                    code.push_str(&format!("    {}_enable_open_anim({}, true);\n", prefix, obj));
+                }
+                // 扇区透明度
+                if let Some(ref sa) = w.slice_alpha {
+                    for (idx, val) in sa.split(';').map(|s| s.trim()).filter(|s| !s.is_empty()).enumerate() {
+                        if let Ok(v) = val.parse::<u32>() {
+                            code.push_str(&format!("    {}_set_slice_alpha({}, {}, {});\n", prefix, obj, idx, v));
+                        }
+                    }
+                }
+                // 图例
+                if let Some(true) = w.legend_enable {
+                    code.push_str(&format!("    {}_enable_legend({}, true);\n", prefix, obj));
+                    c!(format!("{}_set_legend_pos", prefix), w.legend_pos.map(|v| v as u8));
+                    c!(format!("{}_set_legend_dir", prefix), w.legend_dir.map(|v| v as u8));
+                    cclr!(format!("{}_set_legend_text_color", prefix), w.legend_text_color);
+                    c!(format!("{}_set_legend_area_size", prefix), w.legend_area_size.map(|v| v as u16));
+                    c!(format!("{}_set_legend_alpha", prefix), w.legend_alpha.map(|v| v as u8));
+                    c!(format!("{}_set_legend_box_size", prefix), w.legend_box_size.map(|v| v as u8));
+                    c!(format!("{}_set_legend_padding", prefix), w.legend_padding.map(|v| v as u8));
+                    c!(format!("{}_set_legend_item_gap", prefix), w.legend_item_gap.map(|v| v as u8));
+                    if let Some(true) = w.legend_bg {
+                        code.push_str(&format!("    {}_enable_legend_bg({}, true);\n", prefix, obj));
+                    }
+                    cclr!(format!("{}_set_legend_bg_color", prefix), w.legend_bg_color);
+                    cclr!(format!("{}_set_legend_border_color", prefix), w.legend_border_color);
+                }
+                // 扇区数据
+                c!(format!("{}_set_slice_count", prefix), w.slice_count.map(|v| v as u8));
+                if let Some(ref sv) = w.slice_values {
+                    for (idx, val) in sv.split(';').map(|s| s.trim()).filter(|s| !s.is_empty()).enumerate() {
+                        if let Ok(v) = val.parse::<i32>() {
+                            code.push_str(&format!("    {}_set_slice_value({}, {}, {});\n", prefix, obj, idx, v));
+                        }
+                    }
+                }
+                if let Some(ref sc) = w.slice_colors {
+                    for (idx, color) in sc.split(';').map(|s| s.trim()).filter(|s| !s.is_empty()).enumerate() {
+                        if !color.is_empty() {
+                            code.push_str(&format!("    {}_set_slice_color({}, {}, {});\n", prefix, obj, idx, sgl_color(color)));
+                        }
+                    }
+                }
+                if let Some(ref sl) = w.slice_labels {
+                    for (idx, label) in sl.split(';').map(|s| s.trim()).filter(|s| !s.is_empty()).enumerate() {
+                        let escaped = label.replace('\\', "\\\\").replace('"', "\\\"");
+                        code.push_str(&format!("    {}_set_slice_label({}, {}, \"{}\");\n", prefix, obj, idx, escaped));
+                    }
+                }
+            } else {
+                // linechart / barchart 共用
+                c!(format!("{}_set_bg_alpha", prefix), w.statusbar_bg_alpha.map(|v| v as u8));
+                cclr!(format!("{}_set_border_color", prefix), w.border_color);
+                // Y 轴范围
+                if w.min_value.is_some() || w.max_value.is_some() {
+                    code.push_str(&format!("    {}_set_axis_range({}, {}, {}, {});\n", prefix, obj, axis_y, w.min_value.unwrap_or(0), w.max_value.unwrap_or(100)));
+                }
+                if let Some(b) = w.auto_scale {
+                    code.push_str(&format!("    {}_enable_axis_auto_scale({}, {}, {});\n", prefix, obj, axis_y, if b { "true" } else { "false" }));
+                }
+                if let Some(b) = w.show_y_labels {
+                    let axis_x = match chart_type {
+                        "barchart" => "SGL_BARCHART_AXIS_X",
+                        _ => "SGL_LINECHART_AXIS_X",
+                    };
+                    code.push_str(&format!("    {}_enable_axis_labels({}, {}, {});\n", prefix, obj, axis_x, if b { "true" } else { "false" }));
+                    code.push_str(&format!("    {}_enable_axis_labels({}, {}, {});\n", prefix, obj, axis_y, if b { "true" } else { "false" }));
+                }
+                // 网格
+                if w.grid_color.is_some() {
+                    let enable = w.grid_color.as_deref().map(|c| !c.is_empty() && c != "transparent").unwrap_or(false);
+                    code.push_str(&format!("    {}_enable_axis_grid({}, {}, {});\n", prefix, obj, axis_y, if enable { "true" } else { "false" }));
+                    if enable {
+                        if let Some(ref gc) = w.grid_color {
+                            code.push_str(&format!("    {}_set_axis_grid_color({}, {}, {}, 255);\n", prefix, obj, axis_y, sgl_color(gc)));
+                        }
+                    }
+                    let dashed = if let Some(true) = w.grid_dashed { 1 } else { 0 };
+                    code.push_str(&format!("    {}_set_axis_grid_style({}, {}, {});\n", prefix, obj, axis_y, dashed));
+                }
+                // 字体：同时设置 X 轴和 Y 轴的 label_font，确保 SGL 仿真中两轴都有 margin
+                if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
+                    let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
+                    let axis_x = match chart_type {
+                        "barchart" => "SGL_BARCHART_AXIS_X",
+                        _ => "SGL_LINECHART_AXIS_X",
+                    };
+                    code.push_str(&format!("    {}_set_axis_label_font({}, {}, &{});\n", prefix, obj, axis_x, fid));
+                    code.push_str(&format!("    {}_set_axis_label_font({}, {}, &{});\n", prefix, obj, axis_y, fid));
+                }
+                cclr!(format!("{}_set_axis_label_color", prefix), w.text_color);
+                // 序列
+                c!(format!("{}_set_series_count", prefix), w.series_count.map(|v| v as u8));
+                // 序列数据 (格式: "1,2,3,4,5; 2,3,4,5,6" → 生成C数组)
+                if let Some(ref sd) = w.series_data {
+                    for (idx, data) in sd.split(';').map(|s| s.trim()).filter(|s| !s.is_empty()).enumerate() {
+                        let vals: Vec<&str> = data.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+                        if !vals.is_empty() {
+                            let arr_name = format!("chart_{}_series{}_ydata", obj, idx);
+                            code.push_str(&format!("    static const int32_t {}[] = {{{}}};\n", arr_name, vals.join(", ")));
+                            code.push_str(&format!("    {}_set_series_y_array({}, {}, {}, {});\n", prefix, obj, idx, arr_name, vals.len()));
+                        }
+                    }
+                }
+                // 序列颜色
+                if let Some(ref sc) = w.series_colors {
+                    for (idx, color) in sc.split(';').map(|s| s.trim()).filter(|s| !s.is_empty()).enumerate() {
+                        if !color.is_empty() {
+                            if chart_type == "barchart" {
+                                code.push_str(&format!("    {}_set_series_color({}, {}, {}, 255);\n", prefix, obj, idx, sgl_color(color)));
+                            } else {
+                                code.push_str(&format!("    {}_set_series_line_color({}, {}, {});\n", prefix, obj, idx, sgl_color(color)));
+                                code.push_str(&format!("    {}_set_series_fill_color({}, {}, {}, 0);\n", prefix, obj, idx, sgl_color(color)));
+                            }
+                        }
+                    }
+                }
+                // X 轴标签
+                if let Some(ref xl) = w.x_labels {
+                    let labels: Vec<&str> = xl.split(';').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+                    if !labels.is_empty() {
+                        let escaped_labels: Vec<String> = labels.iter().map(|l| format!("\"{}\"", l.replace('\\', "\\\\").replace('"', "\\\""))).collect();
+                        code.push_str(&format!("    const char *x_labels_{}[] = {{{}}};\n", obj, escaped_labels.join(", ")));
+                        code.push_str(&format!("    {}_set_x_labels({}, x_labels_{}, {});\n", prefix, obj, obj, labels.len()));
+                    }
+                }
+                // linechart 专用
+                if chart_type == "linechart" {
+                    if let Some(ref sla) = w.series_line_alpha {
+                        for (idx, val) in sla.split(';').map(|s| s.trim()).filter(|s| !s.is_empty()).enumerate() {
+                            if let Ok(v) = val.parse::<u32>() {
+                                code.push_str(&format!("    {}_set_series_line_alpha({}, {}, {});\n", prefix, obj, idx, v));
+                            }
+                        }
+                    }
+                    if let Some(ref slw) = w.series_line_width {
+                        for (idx, val) in slw.split(';').map(|s| s.trim()).filter(|s| !s.is_empty()).enumerate() {
+                            if let Ok(v) = val.parse::<u32>() {
+                                code.push_str(&format!("    {}_set_series_line_width({}, {}, {});\n", prefix, obj, idx, v));
+                            }
+                        }
+                    }
+                }
+                // barchart 专用
+                if chart_type == "barchart" {
+                    if let Some(bs) = w.bar_spacing {
+                        code.push_str(&format!("    {}_set_bar_spacing({}, {}, 10);\n", prefix, obj, bs));
+                    }
+                    c!(format!("{}_set_orientation", prefix), w.orientation.map(|v| v as u8));
+                }
+                // 开屏动画
+                if let Some(true) = w.open_anim {
+                    code.push_str(&format!("    {}_enable_open_anim({}, true);\n", prefix, obj));
+                    c!(format!("{}_set_open_anim_dir", prefix), w.open_anim_dir.map(|v| v as u8));
+                    if chart_type == "barchart" {
+                        c!(format!("{}_set_open_anim_duration", prefix), w.open_anim_duration.map(|v| v as u16));
+                    }
+                }
+            }
         }
         _ => {}
     }
@@ -1616,6 +2450,13 @@ fn export_code(path: String, code: String, mut project: Project) -> Result<(), S
     }
     generate_pixmap_files(&project, &pixmaps_dir)?;
 
+    // 生成 icon 图标取模文件到 icons/ 子目录
+    let icons_dir = out_dir.join("icons");
+    if icons_dir.exists() {
+        let _ = std::fs::remove_dir_all(&icons_dir);
+    }
+    generate_icon_files(&project, &icons_dir)?;
+
     std::fs::write(&path, code).map_err(|e| e.to_string())?;
 
     // 如果有字体配置，调用 sgl_font_conv.exe 生成字模文件
@@ -1744,9 +2585,12 @@ fn sync_sgl_source(src: &std::path::Path, dst: &std::path::Path) -> Result<usize
         if src_path.is_dir() {
             count += sync_sgl_source(&src_path, &dst_path)?;
         } else if let Some(ext) = src_path.extension() {
-            if (ext == "c" || ext == "h")
-                && src_path.file_name() != Some(std::ffi::OsStr::new("sgl_config.h"))
-            {
+            // 同步 .c/.h 源文件（排除 sgl_config.h）和 .cmake 构建配置文件
+            // .cmake 文件（如 widgets/build.cmake）定义了哪些源文件参与编译，
+            // 必须与源码一起同步，否则新增的控件源文件（如 chart）不会被加入编译
+            let is_syncable = (ext == "c" || ext == "h" || ext == "cmake")
+                && src_path.file_name() != Some(std::ffi::OsStr::new("sgl_config.h"));
+            if is_syncable {
                 let src_bytes = std::fs::read(&src_path)
                     .map_err(|e| format!("读取源文件 {} 失败: {}", src_path.to_string_lossy(), e))?;
                 let dst_bytes = std::fs::read(&dst_path).unwrap_or_default();
@@ -1791,6 +2635,13 @@ fn export_code_to_project(mut project: Project, project_path: String, code: Stri
         let _ = std::fs::remove_dir_all(&pixmaps_dir);
     }
     generate_pixmap_files(&project, &pixmaps_dir)?;
+
+    // 生成 icon 图标取模文件到 code/icons/ 子目录
+    let icons_dir = code_dir.join("icons");
+    if icons_dir.exists() {
+        let _ = std::fs::remove_dir_all(&icons_dir);
+    }
+    generate_icon_files(&project, &icons_dir)?;
 
     // 写入 code/ui.c
     let ui_c = code_dir.join("ui.c");
@@ -2039,6 +2890,26 @@ fn update_sgl_submodules_to_latest(
         .args(&["submodule", "sync", "--recursive"])
         .output();
 
+    // sync_sgl_source 会修改 sgl-port/sgl/source 下的文件，导致子模块有本地修改
+    // 更新前必须清理这些修改（git checkout），否则 git submodule update 会因 checkout 冲突失败
+    // 注：这些修改是设计器 sync_sgl_source 产生的，清理后会在更新后重新同步，安全
+    let submodule_path = sgl_submodule_path(sgl_port_dir);
+    if submodule_path.exists() && submodule_path.join(".git").exists() {
+        let _ = window.emit(
+            "build-log",
+            serde_json::json!({"message": "清理 sgl 子模块本地修改（sync_sgl_source 产生）", "level": "info"}),
+        );
+        // git checkout . 会还原已跟踪文件的修改，git clean -fd 会删除未跟踪文件和目录
+        let _ = Command::new("git")
+            .current_dir(&submodule_path)
+            .args(&["checkout", "."])
+            .output();
+        let _ = Command::new("git")
+            .current_dir(&submodule_path)
+            .args(&["clean", "-fd"])
+            .output();
+    }
+
     // 先对比本地与远程版本，已最新则跳过网络更新
     match is_sgl_submodule_up_to_date(sgl_port_dir, window) {
         Ok(true) => return Ok("sgl 子模块已是最新版本，跳过更新".to_string()),
@@ -2056,33 +2927,7 @@ fn update_sgl_submodules_to_latest(
     .map_err(|e| format!("初始化/更新子模块失败: {}", e))?;
 
     if !status.success() {
-        let _ = window.emit(
-            "build-log",
-            serde_json::json!({"message": "GitHub 子模块更新失败，尝试使用 Gitee 镜像", "level": "warn"}),
-        );
-
-        // 将 .gitmodules 中的 github.com 替换为 gitee.com 并同步配置
-        let gitmodules_path = sgl_port_dir.join(".gitmodules");
-        if let Ok(content) = std::fs::read_to_string(&gitmodules_path) {
-            let updated = content.replace("github.com", "gitee.com");
-            let _ = std::fs::write(&gitmodules_path, updated);
-        }
-        let _ = Command::new("git")
-            .current_dir(sgl_port_dir)
-            .args(&["submodule", "sync", "--recursive"])
-            .output();
-
-        let status = run_command_stream(
-            "git",
-            &["submodule", "update", "--init", "--recursive", "--remote"],
-            sgl_port_dir,
-            window,
-        )
-        .map_err(|e| format!("初始化/更新子模块失败: {}", e))?;
-
-        if !status.success() {
-            return Err("子模块更新失败: GitHub 和 Gitee 均无法访问".to_string());
-        }
+        return Err("子模块更新失败: 无法访问 GitHub，请检查网络连接".to_string());
     }
 
     Ok("sgl 子模块已更新到最新版本".to_string())
@@ -2181,17 +3026,25 @@ fn generate_sgl_config_h(config: &SglConfig, path: &std::path::Path) -> Result<(
 #define  CONFIG_SGL_FBDEV_PIXEL_DEPTH                      {}
 #define  CONFIG_SGL_FBDEV_ROTATION                         {}
 #define  CONFIG_SGL_FBDEV_RUNTIME_ROTATION                 {}
+#define  CONFIG_SGL_FBDEV_EVEN_COORDS                      {}
 #define  CONFIG_SGL_USE_FBDEV_VRAM                         {}
 #define  CONFIG_SGL_SYSTICK_MS                             {}
 #define  CONFIG_SGL_EVENT_QUEUE_SIZE                       {}
 #define  CONFIG_SGL_DIRTY_AREA_NUM_MAX                     {}
 #define  CONFIG_SGL_COLOR16_SWAP                           {}
+#define  CONFIG_SGL_FOCUSED_COLOR                          {}
+#define  CONFIG_SGL_FOCUSED_WIDTH                          {}
+#define  CONFIG_SGL_DIRTY_AREA_TRACE                       {}
+#define  CONFIG_SGL_DIRTY_AREA_TRACE_COLOR                 {}
+#define  CONFIG_SGL_MONITOR_TRACE                          {}
+#define  CONFIG_SGL_PIXMAP_BILINEAR_INTERP                 {}
 #define  CONFIG_SGL_ANIMATION                              {}
 #define  CONFIG_SGL_DEBUG                                  {}
 #define  CONFIG_SGL_LOG_COLOR                              {}
 #define  CONFIG_SGL_LOG_LEVEL                              {}
 #define  CONFIG_SGL_OBJ_USE_NAME                           {}
 #define  CONFIG_SGL_FONT_COMPRESSED                        {}
+#define  CONFIG_SGL_FONT_SMALL_TABLE                       {}
 #define  CONFIG_SGL_BOOT_LOGO                              {}
 #define  CONFIG_SGL_THEME_DARK                             {}
 #define  CONFIG_SGL_HEAP_ALGO                              {}
@@ -2210,17 +3063,25 @@ fn generate_sgl_config_h(config: &SglConfig, path: &std::path::Path) -> Result<(
         config.fbdev_pixel_depth,
         config.fbdev_rotation,
         config.fbdev_runtime_rotation,
+        config.fbdev_even_coords,
         config.use_fbdev_vram,
         config.systick_ms,
         config.event_queue_size,
         config.dirty_area_num_max,
         config.color16_swap,
+        hex_to_sgl_rgb(&config.focused_color),
+        config.focused_width,
+        config.dirty_area_trace,
+        hex_to_sgl_rgb(&config.dirty_area_trace_color),
+        config.monitor_trace,
+        config.pixmap_bilinear_interp,
         config.animation,
         config.debug,
         config.log_color,
         config.log_level,
         config.obj_use_name,
         config.font_compressed,
+        config.font_small_table,
         config.boot_logo,
         config.theme_dark,
         config.heap_algo,
@@ -2303,16 +3164,20 @@ fn build_project(
     let _ = std::fs::remove_file(demo_dir.join("bg.c"));
     let _ = std::fs::remove_file(demo_dir.join("test.c"));
 
-    // 确保 CMakelists.txt 使用 ui.c 而非 test.c 和 bg.c
+    // 确保 CMakelists.txt 使用 ui.c 而非 test.c 和 bg.c，并修复 widgets GLOB 递归问题
     let cmake_path = sgl_port_dir.join("CMakelists.txt");
     if let Ok(cmake_content) = std::fs::read_to_string(&cmake_path) {
-        if cmake_content.contains("test.c") || cmake_content.contains("bg.c") {
-            let updated = cmake_content
-                .replace("${DEMO_DIR}/test.c", "${DEMO_DIR}/ui.c")
-                .replace("${DEMO_DIR}/bg.c\n", "\n")
-                .replace("${DEMO_DIR}/bg.c", "");
-            let _ = std::fs::write(&cmake_path, &updated);
-        }
+        let mut updated = cmake_content
+            .replace("${DEMO_DIR}/test.c", "${DEMO_DIR}/ui.c")
+            .replace("${DEMO_DIR}/bg.c\n", "\n")
+            .replace("${DEMO_DIR}/bg.c", "");
+        // sgl-port 的 CMakeLists.txt 使用 file(GLOB ... widgets/*/*.c) 只匹配一层深度，
+        // 但 chart 控件源文件在 widgets/chart/piechart/ 等两层深度目录中，需要 GLOB_RECURSE
+        updated = updated.replace(
+            "file(GLOB SGL_WIDGETS_SOURCES ${SGL_ROOT_DIR}/sgl/source/widgets/*/*.c)",
+            "file(GLOB_RECURSE SGL_WIDGETS_SOURCES ${SGL_ROOT_DIR}/sgl/source/widgets/*/*.c)",
+        );
+        let _ = std::fs::write(&cmake_path, &updated);
     }
     // 确保 CMakeLists.txt 自动收集 demo/fonts 下的字模源文件
     let _ = ensure_cmake_fonts_glob(&cmake_path);
@@ -2359,6 +3224,13 @@ fn build_project(
     }
     generate_pixmap_files(&project, &pixmaps_dir)?;
 
+    // 生成 icon 图标取模文件到 code/icons/ 子目录
+    let icons_dir = code_dir.join("icons");
+    if icons_dir.exists() {
+        let _ = std::fs::remove_dir_all(&icons_dir);
+    }
+    generate_icon_files(&project, &icons_dir)?;
+
     std::fs::create_dir_all(&code_dir).map_err(|e| format!("创建 code 目录失败: {}", e))?;
     let ui_c = code_dir.join("ui.c");
     std::fs::write(&ui_c, &code).map_err(|e| format!("写入 ui.c 失败: {}", e))?;
@@ -2395,6 +3267,16 @@ fn build_project(
     if pixmaps_dir.exists() {
         copy_dir_contents(&pixmaps_dir, &demo_pixmaps_dir)
             .map_err(|e| format!("复制图片取模文件到 demo 失败: {}", e))?;
+    }
+
+    // 复制 icon 图标取模文件到 demo/icons/
+    let demo_icons_dir = demo_dir.join("icons");
+    if demo_icons_dir.exists() {
+        let _ = std::fs::remove_dir_all(&demo_icons_dir);
+    }
+    if icons_dir.exists() {
+        copy_dir_contents(&icons_dir, &demo_icons_dir)
+            .map_err(|e| format!("复制 icon 图标取模文件到 demo 失败: {}", e))?;
     }
 
     // 复制字模文件到 demo/fonts/
@@ -2635,16 +3517,20 @@ fn read_sgl_config_from_file(project_path: String) -> Result<SglConfig, String> 
     };
 
     // 解析 #define CONFIG_SGL_XXX value
-    // value 可能是整数或标识符（如 lwmem）
+    // value 可能是整数、标识符（如 lwmem）或函数调用（如 sgl_rgb(0x00, 0xFF, 0x00)）
     fn parse_define(line: &str) -> Option<(String, String)> {
         let trimmed = line.trim();
         if !trimmed.starts_with("#define") {
             return None;
         }
         let rest = trimmed.trim_start_matches("#define").trim();
-        let mut iter = rest.split_whitespace();
+        // 分离 key 和 value：key 是第一个空白前的token
+        let mut iter = rest.splitn(2, char::is_whitespace);
         let key = iter.next()?.to_string();
-        let val = iter.next()?.to_string();
+        let val = iter.next()?.trim().to_string();
+        if val.is_empty() {
+            return None;
+        }
         Some((key, val))
     }
 
@@ -2671,10 +3557,20 @@ fn read_sgl_config_from_file(project_path: String) -> Result<SglConfig, String> 
         default.to_string()
     }
 
+    // 从内容中查找颜色宏（sgl_rgb 格式），转换为 #RRGGBB hex 返回
+    fn get_color_hex(content: &str, key: &str, default_hex: &str) -> String {
+        let raw = get_string(content, key, "");
+        if raw.is_empty() {
+            return default_hex.to_string();
+        }
+        parse_sgl_rgb_to_hex(&raw, default_hex)
+    }
+
     let config = SglConfig {
         fbdev_pixel_depth: get_i32(&content, "CONFIG_SGL_FBDEV_PIXEL_DEPTH", 16),
         fbdev_rotation: get_i32(&content, "CONFIG_SGL_FBDEV_ROTATION", 0),
         fbdev_runtime_rotation: get_i32(&content, "CONFIG_SGL_FBDEV_RUNTIME_ROTATION", 0),
+        fbdev_even_coords: get_i32(&content, "CONFIG_SGL_FBDEV_EVEN_COORDS", 0),
         use_fbdev_vram: get_i32(&content, "CONFIG_SGL_USE_FBDEV_VRAM", 0),
         systick_ms: get_i32(&content, "CONFIG_SGL_SYSTICK_MS", 10),
         event_queue_size: get_i32(&content, "CONFIG_SGL_EVENT_QUEUE_SIZE", 16),
@@ -2697,6 +3593,13 @@ fn read_sgl_config_from_file(project_path: String) -> Result<SglConfig, String> 
         font_consolas24: get_i32(&content, "CONFIG_SGL_FONT_CONSOLAS24", 0),
         font_consolas32: get_i32(&content, "CONFIG_SGL_FONT_CONSOLAS32", 0),
         font_consolas24_compress: get_i32(&content, "CONFIG_SGL_FONT_CONSOLAS24_COMPRESS", 0),
+        focused_color: get_color_hex(&content, "CONFIG_SGL_FOCUSED_COLOR", "#00FF00"),
+        focused_width: get_i32(&content, "CONFIG_SGL_FOCUSED_WIDTH", 1),
+        dirty_area_trace: get_i32(&content, "CONFIG_SGL_DIRTY_AREA_TRACE", 0),
+        dirty_area_trace_color: get_color_hex(&content, "CONFIG_SGL_DIRTY_AREA_TRACE_COLOR", "#000000"),
+        monitor_trace: get_i32(&content, "CONFIG_SGL_MONITOR_TRACE", 0),
+        pixmap_bilinear_interp: get_i32(&content, "CONFIG_SGL_PIXMAP_BILINEAR_INTERP", 0),
+        font_small_table: get_i32(&content, "CONFIG_SGL_FONT_SMALL_TABLE", 0),
     };
 
     Ok(config)
@@ -2813,6 +3716,12 @@ fn generate_font_c_content(
     let font_arg = temp_font_path.to_string_lossy().to_string();
 
     let mut cmd = std::process::Command::new(&conv);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW (0x08000000): 隐藏控制台窗口，避免 sgl_font_conv.exe 弹出黑窗
+        cmd.creation_flags(0x08000000);
+    }
     cmd.arg("--font")
         .arg(&font_arg)
         .arg("--size")

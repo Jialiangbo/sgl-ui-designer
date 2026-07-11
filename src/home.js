@@ -1,12 +1,16 @@
-import { AppState, navigate, showToast, initNav } from './app.js';
+import { AppState, navigate, showToast, initNav, setupUpdateChecker, setupWindowControls } from './app.js';
 import { createWidgetDefaults } from './sgl_api.js';
 import { open } from '@tauri-apps/plugin-shell';
 
 const REPO_URL = 'https://github.com/jialiangbo/sgl-ui-designer';
+const SGL_REPO_URL = 'https://github.com/sgl-org/sgl';
 
 initNav('index');
+setupWindowControls();
+setupUpdateChecker();
 
 document.getElementById('btn-repo').addEventListener('click', () => open(REPO_URL));
+document.getElementById('btn-sgl-repo').addEventListener('click', () => open(SGL_REPO_URL));
 document.getElementById('btn-new-project').addEventListener('click', () => {
   AppState.reset();
   navigate('editor');

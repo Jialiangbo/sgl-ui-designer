@@ -14,10 +14,17 @@ export const SGL_FONT_MAP = {
   'default': 'system-ui, -apple-system, "Segoe UI", sans-serif'
 };
 
-// 字体加载完成后通知外部重绘的回调
+// 字体加载完成后通知外部重绘的回调（带防抖，避免多个字体连续加载导致多次重绘）
 let fontLoadCallback = null;
+let fontLoadCallbackTimer = null;
 export function setFontLoadCallback(cb) {
-  fontLoadCallback = cb;
+  fontLoadCallback = () => {
+    if (fontLoadCallbackTimer) clearTimeout(fontLoadCallbackTimer);
+    fontLoadCallbackTimer = setTimeout(() => {
+      fontLoadCallbackTimer = null;
+      cb();
+    }, 50);
+  };
 }
 
 const registeredFontFaces = new Map();
@@ -151,6 +158,7 @@ export async function preloadProjectFonts(fonts) {
 // 调用后端 generate_font_c_content 生成字体 C 文件，解析为字模数据并缓存到 SGLRenderer
 
 const _fontDataPromises = new Map(); // key → Promise<fontData>
+const _failedFontKeys = new Set(); // 加载失败的 key，避免重复尝试导致死循环
 
 /**
  * 加载 SGL 字模位图数据
@@ -169,6 +177,8 @@ export async function loadSglFontData(fontPath, size, bpp, symbols) {
   if (window.SGLRenderer && window.SGLRenderer.getFontData(key)) {
     return window.SGLRenderer.getFontData(key);
   }
+  // 之前加载失败，不再重试（避免 renderCanvas → load → fail → renderCanvas 死循环）
+  if (_failedFontKeys.has(key)) return null;
   // 正在加载
   if (_fontDataPromises.has(key)) {
     return _fontDataPromises.get(key);
@@ -184,6 +194,7 @@ export async function loadSglFontData(fontPath, size, bpp, symbols) {
       return fontData;
     } catch (err) {
       console.warn('加载 SGL 字模数据失败:', fontPath, size, bpp, err);
+      _failedFontKeys.add(key); // 记录失败，避免重复加载
       return null;
     } finally {
       _fontDataPromises.delete(key);

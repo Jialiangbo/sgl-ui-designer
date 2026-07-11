@@ -42,22 +42,81 @@ body {
   flex-direction: column;
 }
 
-/* ============ 顶栏 ============ */
+/* ============ 顶栏（兼作自定义标题栏拖拽区域） ============ */
 .app-header {
   height: 48px;
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
-  padding: 0 12px;
+  padding: 0 0 0 12px;
   gap: 8px;
   user-select: none;
+}
+
+/* 标题栏拖拽区域：header 本身是 drag region，交互元素需取消拖拽 */
+.app-header[data-tauri-drag-region] .nav-tab,
+.app-header[data-tauri-drag-region] .header-actions,
+.app-header[data-tauri-drag-region] .window-controls,
+.app-header[data-tauri-drag-region] .nav-tab-action {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+/* 检查更新按钮：复用 nav-tab 外观，但不参与导航选中状态 */
+.nav-tab-action {
+  flex: 0 0 auto;
+  margin-left: 4px;
+}
+
+/* ============ 窗口控制按钮（最小化/最大化/关闭） ============ */
+.header-actions {
+  margin-left: auto;
+}
+
+.window-controls {
+  display: flex;
+  align-items: stretch;
+  height: 100%;
+}
+
+.win-btn {
+  width: 46px;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.win-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.win-btn.win-close:hover {
+  background: #e81123;
+  color: #fff;
+}
+
+.win-btn:active {
+  background: var(--bg-tertiary);
+}
+
+.win-btn.win-close:active {
+  background: #c50f1f;
 }
 
 .nav-tabs {
   display: flex;
   gap: 2px;
-  flex: 1;
+  flex: 0 0 auto;
 }
 
 .nav-tab {

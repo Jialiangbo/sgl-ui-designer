@@ -1,7 +1,13 @@
-import { AppState, showToast, initNav, navigate } from './app.js';
-import { generateSGLCode } from './sgl_api.js';
+import { AppState, showToast, initNav, navigate, setupUpdateChecker, setupWindowControls } from './app.js';
+import { generateSGLCode, setCodegenLogCallback } from './sgl_api.js';
 
 initNav('components');
+setupWindowControls();
+setupUpdateChecker();
+setCodegenLogCallback((message, level) => {
+  const fn = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log;
+  fn(message);
+});
 
 let code = '';
 

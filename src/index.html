@@ -10,12 +10,13 @@
   <header class="app-header">
 
     <nav class="nav-tabs">
-      <button class="nav-tab active" data-nav="index">首页</button>
+      <button class="nav-tab" data-nav="index">首页</button>
       <button class="nav-tab" data-nav="editor">编辑器</button>
       <button class="nav-tab" data-nav="preview">预览</button>
       <button class="nav-tab" data-nav="components">代码</button>
       <button class="nav-tab" data-nav="settings">SGL配置</button>
     </nav>
+    <button class="nav-tab nav-tab-action" id="btn-check-update" title="检查是否有新版本">🔄 检查更新</button>
     <div class="header-actions">
     </div>
   </header>
@@ -24,11 +25,12 @@
     <div class="home-container">
       <div class="home-hero">
         <h1 class="home-title">SGL UI Designer</h1>
-        <p class="home-subtitle">专为嵌入式系统打造的轻量级图形界面设计工具，拖拽式设计，一键生成 SGL C 代码</p>
+        <p class="home-subtitle">专为 SGL 图形库打造的视觉化界面设计工具</p>
         <div class="hero-buttons">
           <button class="btn btn-primary" id="btn-new-project">创建新项目</button>
           <button class="btn" id="btn-open-project">打开项目</button>
-          <button class="btn" id="btn-repo">📦 仓库地址</button>
+          <button class="btn" id="btn-repo">📦 设计器仓库</button>
+          <button class="btn" id="btn-sgl-repo">📦 SGL 仓库</button>
         </div>
       </div>
 
@@ -41,11 +43,6 @@
             <div class="feature-desc">所见即所得的拖拽式界面设计体验</div>
           </div>
           <div class="feature-card">
-            <div class="feature-icon">📄</div>
-            <div class="feature-title">多页面支持</div>
-            <div class="feature-desc">轻松管理多个界面页面，自由切换</div>
-          </div>
-          <div class="feature-card">
             <div class="feature-icon">⚡</div>
             <div class="feature-title">一键生成代码</div>
             <div class="feature-desc">自动生成可编译的 SGL C 代码</div>
@@ -54,16 +51,6 @@
             <div class="feature-icon">🧩</div>
             <div class="feature-title">丰富组件</div>
             <div class="feature-desc">按钮、标签、矩形、滑块等常用组件</div>
-          </div>
-          <div class="feature-card">
-            <div class="feature-icon">🖥️</div>
-            <div class="feature-title">自定义屏幕</div>
-            <div class="feature-desc">自由配置屏幕尺寸和颜色深度</div>
-          </div>
-          <div class="feature-card">
-            <div class="feature-icon">💾</div>
-            <div class="feature-title">项目保存</div>
-            <div class="feature-desc">JSON 格式保存项目，方便版本管理</div>
           </div>
         </div>
       </div>
@@ -95,17 +82,6 @@
             <div class="project-card-icon">K</div>
             <div class="project-card-title">键盘 Demo</div>
             <div class="project-card-desc">数字输入键盘示例</div>
-          </div>
-        </div>
-      </div>
-
-      <div class="home-section">
-        <h2 class="home-section-title">关于 SGL</h2>
-        <div class="settings-panel">
-          <div style="line-height: 1.8; color: var(--text-secondary);">
-            <p><strong>SGL (Small Graphics Library)</strong> 是一款专为 MCU 级别处理器设计的轻量级、快速的图形库。它仅需约 <strong>3KB RAM</strong> 和 <strong>15KB ROM</strong> 即可运行，支持局部帧缓冲、边界框 + 贪心算法的脏矩形刷新，多种颜色深度（8bit / 16bit / 24bit / 32bit）。</p>
-            <br/>
-            <p>本工具通过可视化拖放的方式帮助嵌入式工程师快速设计 UI 界面，并生成可直接使用的 C 代码。</p>
           </div>
         </div>
       </div>

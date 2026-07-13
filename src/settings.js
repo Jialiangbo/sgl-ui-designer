@@ -1,6 +1,7 @@
 import { AppState, navigate, showToast, initNav, setupUpdateChecker, setupWindowControls } from './app.js';
 import { invoke } from '@tauri-apps/api/core';
 import { confirm } from '@tauri-apps/plugin-dialog';
+import { PROVIDER_PRESETS, DEFAULT_LLM_CONFIG } from './llm/llm_config.js';
 
 initNav('settings');
 setupWindowControls();
@@ -364,3 +365,183 @@ document.querySelectorAll('[data-nav]').forEach(tab => {
   await syncConfigFromFile();
   refresh();
 })();
+
+// ============ AI 配置逻辑 ============
+
+let _aiConfig = { ...DEFAULT_LLM_CONFIG };
+
+// 加载已有配置
+(async () => {
+  try {
+    const cfg = await invoke('load_llm_config');
+    if (cfg) {
+      _aiConfig = cfg;
+      applyAiConfigToForm();
+    }
+  } catch (e) {
+    // 首次使用，显示默认值
+    applyAiConfigToForm();
+  }
+})();
+
+function applyAiConfigToForm() {
+  const baseUrl = $('ai-base-url');
+  const model = $('ai-model');
+  const apiKey = $('ai-api-key');
+  const maxTokens = $('ai-max-tokens');
+  const temperature = $('ai-temperature');
+  if (baseUrl) baseUrl.value = _aiConfig.base_url || '';
+  if (model) model.value = _aiConfig.model || '';
+  if (apiKey) apiKey.value = _aiConfig.api_key || '';
+  if (maxTokens) maxTokens.value = _aiConfig.max_tokens || DEFAULT_LLM_CONFIG.max_tokens;
+  if (temperature) temperature.value = _aiConfig.temperature || 0.7;
+  // 高亮当前 Provider
+  document.querySelectorAll('.ai-provider-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.provider === _aiConfig.provider);
+  });
+}
+
+function readAiConfigFromForm() {
+  _aiConfig.base_url = ($('ai-base-url')?.value || '').trim();
+  _aiConfig.model = ($('ai-model')?.value || '').trim();
+  _aiConfig.api_key = ($('ai-api-key')?.value || '').trim();
+  _aiConfig.max_tokens = parseInt($('ai-max-tokens')?.value) || DEFAULT_LLM_CONFIG.max_tokens;
+  _aiConfig.temperature = parseFloat($('ai-temperature')?.value) || 0.7;
+  return _aiConfig;
+}
+
+// Provider 快捷选择
+document.querySelectorAll('.ai-provider-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const provider = btn.dataset.provider;
+    const preset = PROVIDER_PRESETS[provider];
+    if (!preset) return;
+    _aiConfig.provider = provider;
+    _aiConfig.base_url = preset.base_url;
+    _aiConfig.model = preset.model;
+    applyAiConfigToForm();
+    document.querySelectorAll('.ai-provider-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+  });
+});
+
+// API Key 显示/隐藏
+const toggleKeyBtn = $('ai-toggle-key-vis');
+if (toggleKeyBtn) {
+  toggleKeyBtn.addEventListener('click', () => {
+    const input = $('ai-api-key');
+    if (input.type === 'password') {
+      input.type = 'text';
+      toggleKeyBtn.textContent = '🔒';
+    } else {
+      input.type = 'password';
+      toggleKeyBtn.textContent = '👁';
+    }
+  });
+}
+
+// 保存配置
+const saveBtn = $('ai-btn-save');
+if (saveBtn) {
+  saveBtn.addEventListener('click', async () => {
+    const config = readAiConfigFromForm();
+    const status = $('ai-config-status');
+    try {
+      await invoke('save_llm_config', { config });
+      status.textContent = '✅ 配置已保存';
+      status.style.color = 'var(--success)';
+    } catch (e) {
+      status.textContent = '❌ 保存失败: ' + e;
+      status.style.color = 'var(--error)';
+    }
+    setTimeout(() => { status.textContent = ''; }, 3000);
+  });
+}
+
+// 测试连接
+const testBtn = $('ai-btn-test');
+if (testBtn) {
+  testBtn.addEventListener('click', async () => {
+    const config = readAiConfigFromForm();
+    const status = $('ai-config-status');
+    if (!config.api_key) {
+      status.textContent = '⚠️ 请先填写 API Key';
+      status.style.color = 'var(--warning)';
+      return;
+    }
+    if (!config.base_url) {
+      status.textContent = '⚠️ 请先填写 API 地址';
+      status.style.color = 'var(--warning)';
+      return;
+    }
+    status.textContent = '⏳ 正在测试连接...';
+    status.style.color = 'var(--text-muted)';
+    testBtn.disabled = true;
+    try {
+      const result = await invoke('llm_test_connection', { config });
+      status.textContent = '✅ ' + result;
+      status.style.color = 'var(--success)';
+    } catch (e) {
+      status.textContent = '❌ ' + e;
+      status.style.color = 'var(--error)';
+    }
+    testBtn.disabled = false;
+    setTimeout(() => { status.textContent = ''; }, 5000);
+  });
+}
+
+// 获取模型列表
+const fetchModelsBtn = $('ai-fetch-models');
+const modelSelect = $('ai-model-select');
+if (fetchModelsBtn && modelSelect) {
+  fetchModelsBtn.addEventListener('click', async () => {
+    const config = readAiConfigFromForm();
+    const status = $('ai-config-status');
+    if (!config.api_key) {
+      status.textContent = '⚠️ 请先填写 API Key';
+      status.style.color = 'var(--warning)';
+      return;
+    }
+    if (!config.base_url) {
+      status.textContent = '⚠️ 请先填写 API 地址';
+      status.style.color = 'var(--warning)';
+      return;
+    }
+    status.textContent = '⏳ 正在获取模型列表...';
+    status.style.color = 'var(--text-muted)';
+    fetchModelsBtn.disabled = true;
+    try {
+      const models = await invoke('llm_list_models', { config });
+      if (!models || models.length === 0) {
+        status.textContent = '⚠️ 未获取到模型';
+        status.style.color = 'var(--warning)';
+        return;
+      }
+      // 填充下拉框
+      modelSelect.innerHTML = '';
+      models.sort().forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m;
+        opt.textContent = m;
+        modelSelect.appendChild(opt);
+      });
+      modelSelect.style.display = 'block';
+      status.textContent = `✅ 获取到 ${models.length} 个模型，点击选择：`;
+      status.style.color = 'var(--success)';
+    } catch (e) {
+      status.textContent = '❌ ' + e;
+      status.style.color = 'var(--error)';
+      modelSelect.style.display = 'none';
+    }
+    fetchModelsBtn.disabled = false;
+    setTimeout(() => { status.textContent = ''; }, 5000);
+  });
+
+  // 点击模型选项 → 填入输入框
+  modelSelect.addEventListener('change', () => {
+    const modelInput = $('ai-model');
+    if (modelInput && modelSelect.value) {
+      modelInput.value = modelSelect.value;
+    }
+  });
+}

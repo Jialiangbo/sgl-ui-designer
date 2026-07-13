@@ -1,7 +1,8 @@
 // ============ 应用更新检查模块 ============
-// 通过 GitHub Release API 检查最新版本，提示用户前往下载
+// 通过 GitHub Release API 检查最新版本，支持自动下载安装
 import { getVersion } from '@tauri-apps/api/app';
 import { open } from '@tauri-apps/plugin-shell';
+import { invoke } from '@tauri-apps/api/core';
 import { showToast } from './app.js';
 
 const REPO_OWNER = 'jialiangbo';
@@ -67,19 +68,79 @@ async function fetchLatestRelease() {
 }
 
 /**
- * 显示"发现新版本"提示对话框
+ * 从 release assets 中找到最佳安装包下载链接
+ * 仅支持 msi 和 exe 安装包的自动下载安装；zip 免安装版不自动安装
  */
-function showUpdateAvailableDialog(tagName, releaseName, body) {
+function pickDownloadAsset(assets) {
+  if (!assets || !Array.isArray(assets) || assets.length === 0) return null;
+  // 优先查找 x64 msi
+  let msi = assets.find(a => a.name.toLowerCase().endsWith('.msi') && a.name.toLowerCase().includes('x64'));
+  if (!msi) msi = assets.find(a => a.name.toLowerCase().endsWith('.msi'));
+  if (msi) return { url: msi.browser_download_url, name: msi.name, size: msi.size, ext: 'msi', autoInstall: true };
+  // 其次 exe
+  let exe = assets.find(a => a.name.toLowerCase().endsWith('.exe') && a.name.toLowerCase().includes('x64'));
+  if (!exe) exe = assets.find(a => a.name.toLowerCase().endsWith('.exe') && !a.name.toLowerCase().includes('portable'));
+  if (exe) return { url: exe.browser_download_url, name: exe.name, size: exe.size, ext: 'exe', autoInstall: true };
+  // zip 免安装版仅用于手动下载，不自动安装
+  return null;
+}
+
+/**
+ * 格式化文件大小
+ */
+function formatSize(bytes) {
+  if (!bytes) return '未知';
+  const mb = bytes / (1024 * 1024);
+  if (mb < 1) return (bytes / 1024).toFixed(1) + ' KB';
+  return mb.toFixed(1) + ' MB';
+}
+
+/**
+ * 显示"发现新版本"提示对话框，支持自动下载安装
+ */
+function showUpdateAvailableDialog(tagName, releaseName, body, asset) {
   const releaseNotes = (body || '').split('\r?\n').slice(0, 8).join('\n');
-  const msg = `发现新版本 ${tagName}！\n\n` +
-              `版本名称：${releaseName || tagName}\n` +
-              (releaseNotes ? `\n更新说明：\n${releaseNotes}\n\n` : '') +
-              `点击"确定"前往下载页面，"取消"暂不更新。`;
-  // eslint-disable-next-line no-alert
+  let msg = `发现新版本 ${tagName}！\n\n` +
+            `版本名称：${releaseName || tagName}\n`;
+  if (releaseNotes) {
+    msg += `\n更新说明：\n${releaseNotes}\n\n`;
+  }
+  if (asset) {
+    msg += `安装包：${asset.name}（${formatSize(asset.size)}）\n\n` +
+           `点击"确定"自动下载并安装，\n` +
+           `点击"取消"暂不更新。`;
+  } else {
+    msg += `\n点击"确定"前往下载页面，\n` +
+           `点击"取消"暂不更新。`;
+  }
+
   if (window.confirm(msg)) {
-    open(RELEASE_PAGE).catch(() => {
-      showToast('打开下载页面失败，请手动访问：' + RELEASE_PAGE, 'error');
-    });
+    if (asset) {
+      // 自动下载安装
+      autoDownloadAndInstall(asset);
+    } else {
+      // 没有 asset，打开浏览器
+      open(RELEASE_PAGE).catch(() => {
+        showToast('打开下载页面失败，请手动访问：' + RELEASE_PAGE, 'error');
+      });
+    }
+  }
+}
+
+/**
+ * 自动下载并安装更新
+ */
+async function autoDownloadAndInstall(asset) {
+  notify(`正在下载 ${asset.name}（${formatSize(asset.size)}）...`, 'info');
+  try {
+    const result = await invoke('download_and_install_update', { url: asset.url });
+    notify('下载完成，正在启动安装程序...', 'success');
+    // 安装程序启动后应用会退出，这里不会真正执行
+  } catch (err) {
+    const errMsg = err && err.message ? err.message : String(err);
+    notify('自动安装失败：' + errMsg + '，请手动下载安装', 'error');
+    // 失败后回退到打开浏览器
+    open(RELEASE_PAGE).catch(() => {});
   }
 }
 
@@ -124,7 +185,8 @@ export async function checkForUpdates(silent = false) {
 
     if (hasUpdate) {
       log(`发现新版本 ${latestTag}（当前 v${currentVersion}）`, 'success');
-      showUpdateAvailableDialog(latestTag, release.name, release.body);
+      const asset = pickDownloadAsset(release.assets);
+      showUpdateAvailableDialog(latestTag, release.name, release.body, asset);
     } else {
       log(`已是最新版本（v${currentVersion}）`, 'success');
     }

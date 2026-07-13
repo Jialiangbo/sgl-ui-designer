@@ -262,6 +262,61 @@
         </div>
         <button class="btn btn-sm" id="btn-add-ascii-font" type="button" style="margin-bottom:12px;">+ 添加字体配置</button>
         <span style="color:var(--text-muted);font-size:11px;font-weight:normal;">每项可独立配置字体、字号和抗锯齿 bpp，导出/运行时会按列表生成对应 ASCII 字模。</span>
+
+        <!-- AI 配置区域 -->
+        <div class="ai-config-section">
+          <div class="settings-subtitle">🤖 AI 助手配置</div>
+          <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">配置大模型 API，启用 AI 辅助设计功能。API Key 仅存储在本地，不会上传任何服务器。</div>
+
+          <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px;font-weight:600;">快捷选择服务商：</div>
+          <div class="ai-provider-presets" id="ai-provider-presets">
+            <button class="ai-provider-btn" data-provider="openai">OpenAI</button>
+            <button class="ai-provider-btn" data-provider="deepseek">DeepSeek</button>
+            <button class="ai-provider-btn" data-provider="zhipu">智谱 GLM</button>
+            <button class="ai-provider-btn" data-provider="siliconflow">SiliconFlow</button>
+            <button class="ai-provider-btn" data-provider="custom">自定义</button>
+          </div>
+
+          <div class="settings-row">
+            <div class="form-group">
+              <label class="form-label">API 地址 (Base URL)</label>
+              <input type="text" class="form-input" id="ai-base-url" placeholder="https://api.openai.com/v1" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">模型名称</label>
+              <div style="display:flex;gap:6px;">
+                <input type="text" class="form-input" id="ai-model" placeholder="gpt-4o-mini" style="flex:1;" />
+                <button class="btn btn-sm" id="ai-fetch-models" type="button" title="从 Provider 获取可用模型">📋 获取</button>
+              </div>
+              <select class="form-input" id="ai-model-select" style="display:none;margin-top:6px;" size="6"></select>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">API Key</label>
+            <div style="display:flex;gap:6px;">
+              <input type="password" class="form-input" id="ai-api-key" placeholder="sk-..." style="flex:1;" />
+              <button class="btn btn-sm" id="ai-toggle-key-vis" type="button" title="显示/隐藏">👁</button>
+            </div>
+          </div>
+
+          <div class="settings-row">
+            <div class="form-group">
+              <label class="form-label">最大 Token 数</label>
+              <input type="number" class="form-input" id="ai-max-tokens" value="1048576" min="256" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Temperature</label>
+              <input type="number" class="form-input" id="ai-temperature" value="0.7" min="0" max="2" step="0.1" />
+            </div>
+          </div>
+
+          <div style="display:flex;gap:8px;margin-top:8px;">
+            <button class="btn btn-sm" id="ai-btn-save" type="button">💾 保存配置</button>
+            <button class="btn btn-sm" id="ai-btn-test" type="button">🔗 测试连接</button>
+          </div>
+          <div id="ai-config-status" style="margin-top:8px;font-size:12px;color:var(--text-muted);"></div>
+        </div>
       </div>
 
     </div>

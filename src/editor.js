@@ -11,12 +11,14 @@ import {
   getPixmapImageData, getCachedPixmapImageData, preloadPixmapImage, getSglFontData, loadSglFontData
 } from './render_common.js';
 import { setLogger as setUpdaterLogger } from './updater.js';
+// import { initAIPanel } from './ai_panel.js';
 import qrcodeGenerator from 'qrcode-generator';
 
 initNav('editor');
 setupWindowControls();
 setupUpdateChecker();
 AppState.init();
+// initAIPanel(); // AI 助手暂时屏蔽
 setFontLoadCallback(() => renderCanvas());
 setCodegenLogCallback((message, level) => logMessage(message, level));
 
@@ -1112,10 +1114,13 @@ function drawWidget(w, parentEl) {
   // 为主选中控件添加拖拽缩放手柄（放在 renderWidgetVisual 之后，避免被清空）
   // 锁定控件也显示手柄以表明被选中，但在 handle 的 mousedown 中阻止实际操作
   if (AppState.selectedWidgetId === w.id) {
-    addResizeHandles(el, absPos.x, absPos.y, domW, domH, z, isLocked);
-    // polygon 控件：额外添加顶点拖拽手柄
+    // 使用 el 的实际渲染尺寸来放置手柄，确保手柄紧贴控件边框
+    const actualW = el.offsetWidth / z;
+    const actualH = el.offsetHeight / z;
+    addResizeHandles(el, absPos.x, absPos.y, actualW, actualH, z, isLocked);
+    // polygon 控件：额外添加顶点拖拽手柄（append 到 canvas 上，避免 el 定位偏移）
     if (w.type === 'polygon') {
-      addPolygonVertexHandles(el, w, absPos, z, isLocked);
+      addPolygonVertexHandles(canvas, w, absPos, z, isLocked);
     }
   }
 
@@ -4313,10 +4318,10 @@ function addResizeHandles(container, wx, wy, ww, wh, z, locked = false) {
       if (!w) return;
       dragStart.x = e.clientX;
       dragStart.y = e.clientY;
-      dragStart.wx = w.x;
-      dragStart.wy = w.y;
-      dragStart.ww = w.width;
-      dragStart.wh = w.height;
+      dragStart.wx = wx;
+      dragStart.wy = wy;
+      dragStart.ww = ww;
+      dragStart.wh = wh;
     });
     canvas.appendChild(handle);
     // 根据容器位置计算手柄坐标（手柄尺寸 10x10，偏移 5px）
@@ -4334,7 +4339,8 @@ function addResizeHandles(container, wx, wy, ww, wh, z, locked = false) {
 
 // 为 polygon 控件添加顶点拖拽手柄（青色小方块，区别于白色 resize 手柄）
 // 顶点坐标是相对于控件左上角的，手柄位置 = 控件绝对位置 + 顶点坐标
-function addPolygonVertexHandles(container, w, absPos, z, locked = false) {
+// handle 直接 append 到 canvas（和 resize handles 一致），避免 el 定位导致偏移
+function addPolygonVertexHandles(canvasEl, w, absPos, z, locked = false) {
   const verts = (typeof w.vertices === 'string' ? w.vertices : '').split(';').map(s => s.trim()).filter(s => s);
   verts.forEach((v, idx) => {
     const [vx, vy] = v.split(',').map(n => parseInt(n.trim()) || 0);
@@ -4370,7 +4376,7 @@ function addPolygonVertexHandles(container, w, absPos, z, locked = false) {
       verts2.splice(idx, 1);
       AppState.updateWidget(w.id, { vertices: verts2.join(';') });
     });
-    container.appendChild(handle);
+    canvasEl.appendChild(handle);
   });
 }
 
@@ -6252,15 +6258,28 @@ document.getElementById('btn-build-run').addEventListener('click', async () => {
     // 先检查工具链
     const check = await invoke('check_toolchain', { projectPath });
 
-    if (!check.gcc_found) {
-      showToast('未找到 gcc，请安装 MinGW 并添加到系统 PATH', 'error');
-      logMessage('运行失败: 未找到 gcc，请安装 MinGW 并将 bin 目录添加到系统环境变量 PATH 中', 'error');
+    // 检查 MinGW 编译环境
+    const missingTools = [];
+    if (!check.gcc_found) missingTools.push('gcc (C 编译器)');
+    if (!check.gpp_found) missingTools.push('g++ (C++ 编译器)');
+    if (!check.mingw32_make_found) missingTools.push('mingw32-make (构建工具)');
+
+    if (missingTools.length > 0) {
+      const msg = '未找到编译工具：' + missingTools.join('、') + '。请安装 MinGW-w64 并将 bin 目录添加到系统环境变量 PATH 中。';
+      showToast('缺少编译环境', 'error');
+      logMessage(msg, 'error');
+      logMessage('推荐下载地址：https://github.com/niXman/mingw-builds-binaries/releases （选择 x86_64-posix-sjlj 版本）', 'warn');
       return;
     }
     if (!check.cmake_found) {
-      showToast('未找到 cmake，请安装 CMake 并添加到系统 PATH', 'error');
-      logMessage('运行失败: 未找到 cmake', 'error');
+      showToast('未找到 CMake，请安装 CMake 并添加到系统 PATH', 'error');
+      logMessage('运行失败: 未找到 cmake，请安装 CMake 并添加到系统环境变量 PATH 中', 'error');
       return;
+    }
+
+    // 如果 sgl-port 已存在但 SDL2 缺失，给出警告（sdl-port 项目应自带 SDL2）
+    if (check.sgl_port_exists && !check.sdl2_found) {
+      logMessage('警告: SDL2 开发库不完整，编译可能失败', 'warn');
     }
 
     // 如果 sgl-port 项目不存在，先克隆

@@ -430,16 +430,43 @@ export const AppState = {
           w.height = nh;
         }
       } else if (w.type === 'ring') {
-        // ring 控件：圆环大小由 radiusOut 决定
-        // 如果用户还没设置过 radiusOut，则按宽高计算内外径
-        // 如果已经设置过，则保持内外径不变
         const newDiameter = Math.max(nw, nh);
-        if (w.radiusOut == null) {
+        if (w.radiusOut == null || w.radiusOut <= 0) {
           w.radiusOut = Math.round(newDiameter / 2);
           w.radiusIn = w.radiusOut - 2;
+        } else {
+          // 保持环厚度（radiusOut - radiusIn）不变
+          const thickness = (w.radiusIn != null && w.radiusIn > 0) ? (w.radiusOut - w.radiusIn) : 2;
+          w.radiusOut = Math.round(newDiameter / 2);
+          w.radiusIn = Math.max(0, w.radiusOut - thickness);
         }
         w.width = newDiameter;
         w.height = newDiameter;
+      } else if (w.type === 'arc') {
+        const newDiameter = Math.max(nw, nh);
+        if (w.radiusOut == null || w.radiusOut <= 0) {
+          w.radiusOut = Math.round(newDiameter / 2);
+          w.radiusIn = w.radiusOut - 2;
+        } else {
+          // 保持环厚度（radiusOut - radiusIn）不变
+          const thickness = (w.radiusIn != null && w.radiusIn > 0) ? (w.radiusOut - w.radiusIn) : 2;
+          w.radiusOut = Math.round(newDiameter / 2);
+          w.radiusIn = Math.max(0, w.radiusOut - thickness);
+        }
+        w.width = newDiameter;
+        w.height = newDiameter;
+      } else if (w.type === 'checkbox') {
+        w.width = nw;
+        w.height = nh;
+      } else if (w.type === 'qrcode') {
+        const scaleX = nw / w.width;
+        const scaleY = nh / w.height;
+        const scale = Math.min(scaleX, scaleY);
+        if (scale > 0) {
+          w.scale = Math.max(1, Math.round(w.scale * scale));
+        }
+        w.width = nw;
+        w.height = nh;
       } else if (w.type === '2dball') {
         // 2dball 控件：SGL circle_zoom 将控件尺寸改为 2*radius，设计器同步
         const newDiameter = Math.max(nw, nh);
@@ -474,13 +501,15 @@ export const AppState = {
         }
         this.syncLineBounds(w);
       } else if (w.type === 'polygon') {
-        // polygon 控件：缩放时同步按比例缩放顶点坐标
-        const scaleX = nw / w.width;
-        const scaleY = nh / w.height;
-        if (w.vertices) {
+        // polygon 控件：整体等比缩放（保持形状不变）
+        // 取 min(scaleX, scaleY) 保证多边形不超出新尺寸，整体形状不变
+        const scaleX = w.width > 0 ? nw / w.width : 1;
+        const scaleY = w.height > 0 ? nh / w.height : 1;
+        const scale = Math.max(0, Math.min(scaleX, scaleY));
+        if (w.vertices && scale !== 1) {
           w.vertices = w.vertices.split(';').map(p => {
             const [vx, vy] = p.split(',').map(v => parseInt(v.trim()) || 0);
-            return `${Math.round(vx * scaleX)},${Math.round(vy * scaleY)}`;
+            return `${Math.round(vx * scale)},${Math.round(vy * scale)}`;
           }).join(';');
         }
         w.width = nw;

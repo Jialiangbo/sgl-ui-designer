@@ -44,6 +44,15 @@
     ],
     "resources": [
       "resources/sgl_font_conv.exe"
-    ]
+    ],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "embedBootstrapper",
+        "silent": true
+      },
+      "wix": {
+        "language": "zh-CN"
+      }
+    }
   }
 }

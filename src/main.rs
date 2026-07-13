@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod llm;
+
 use serde::{Deserialize, Deserializer, Serialize};
 use base64::Engine;
 use tauri::Emitter;
@@ -508,6 +510,8 @@ struct Project {
     ascii_fonts: Vec<AsciiFontConfig>,
     #[serde(default)]
     sgl_config: SglConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ai_chat_history: Option<serde_json::Value>,
 }
 
 fn default_resources() -> Resources {
@@ -2693,6 +2697,17 @@ fn check_toolchain(project_path: String) -> Result<serde_json::Value, String> {
         result.insert("gcc_path".into(), serde_json::Value::String(p.clone()));
     }
 
+    // 检查 g++（C++ 编译器，部分 SGL 依赖可能需要）
+    let gpp_path = which_command_path("g++");
+    result.insert("gpp_found".into(), serde_json::Value::Bool(gpp_path.is_some()));
+
+    // 检查 mingw32-make（MinGW 构建工具）
+    let mingw_make_path = which_command_path("mingw32-make");
+    result.insert("mingw32_make_found".into(), serde_json::Value::Bool(mingw_make_path.is_some()));
+    if let Some(ref p) = mingw_make_path {
+        result.insert("mingw32_make_path".into(), serde_json::Value::String(p.clone()));
+    }
+
     // 检查 cmake
     let cmake_path = which_command_path("cmake");
     result.insert("cmake_found".into(), serde_json::Value::Bool(cmake_path.is_some()));
@@ -2714,6 +2729,16 @@ fn check_toolchain(project_path: String) -> Result<serde_json::Value, String> {
         && sgl_port_dir.join("demo").exists();
     result.insert("sgl_port_exists".into(), serde_json::Value::Bool(sgl_port_exists));
     result.insert("sgl_port_path".into(), serde_json::Value::String(sgl_port_dir.to_string_lossy().to_string()));
+
+    // 检查 SDL2 开发库（sgl-port 自带，检查是否存在）
+    let sdl_dir = sgl_port_dir.join("demo").join("sdl");
+    let sdl_include = sdl_dir.join("include").join("SDL2").join("SDL.h");
+    let sdl_lib = sdl_dir.join("lib").join("libSDL2.a");
+    let sdl_dll = sdl_dir.join("bin").join("SDL2.dll");
+    result.insert(
+        "sdl2_found".into(),
+        serde_json::Value::Bool(sdl_include.exists() && sdl_lib.exists() && sdl_dll.exists()),
+    );
 
     // 检查 code 目录是否已导出
     let code_dir = proj_dir.join("code");
@@ -3111,6 +3136,22 @@ fn build_project(
         .ok_or_else(|| "无法获取项目目录".to_string())?;
     let sgl_port_dir = proj_dir.join("sgl-port-windows-vscode");
     let code_dir = proj_dir.join("code");
+
+    // 编译工具链检查（双重保险，防止前端绕过）
+    let missing = {
+        let mut v = vec![];
+        if which_command_path("gcc").is_none() { v.push("gcc"); }
+        if which_command_path("g++").is_none() { v.push("g++"); }
+        if which_command_path("mingw32-make").is_none() { v.push("mingw32-make"); }
+        if which_command_path("cmake").is_none() { v.push("cmake"); }
+        v
+    };
+    if !missing.is_empty() {
+        return Err(format!(
+            "缺少编译工具：{}。请安装 MinGW-w64 和 CMake，并添加到系统环境变量 PATH 中。",
+            missing.join("、")
+        ));
+    }
 
     // 将图片资源相对路径转换为绝对路径，便于取模
     for img in &mut project.resources.images {
@@ -3819,6 +3860,55 @@ fn find_sgl_font_conv() -> Option<String> {
     None
 }
 
+/// 下载更新安装包并启动安装程序，然后退出当前应用
+#[tauri::command]
+async fn download_and_install_update(url: String, app_handle: tauri::AppHandle) -> Result<String, String> {
+    // 下载文件
+    let response = reqwest::get(&url)
+        .await
+        .map_err(|e| format!("下载失败: {}", e))?;
+
+    let bytes = response.bytes()
+        .await
+        .map_err(|e| format!("读取下载数据失败: {}", e))?;
+
+    // 根据URL判断文件扩展名
+    let ext = if url.contains(".msi") { "msi" }
+              else if url.contains(".exe") { "exe" }
+              else {
+        return Err("不支持的安装包格式".to_string());
+    };
+
+    // 保存到临时目录
+    let temp_dir = std::env::temp_dir();
+    let file_name = format!("sgl-ui-designer-update.{}", ext);
+    let file_path = temp_dir.join(&file_name);
+
+    std::fs::write(&file_path, &bytes)
+        .map_err(|e| format!("写入临时文件失败: {}", e))?;
+
+    let path_str = file_path.to_string_lossy().to_string();
+
+    // 启动安装程序
+    if ext == "msi" {
+        // MSI 安装包用 msiexec 启动
+        std::process::Command::new("msiexec")
+            .args(["/i", &path_str])
+            .spawn()
+            .map_err(|e| format!("启动安装程序失败: {}", e))?;
+    } else if ext == "exe" {
+        // exe 安装程序直接启动
+        std::process::Command::new(&path_str)
+            .spawn()
+            .map_err(|e| format!("启动安装程序失败: {}", e))?;
+    }
+
+    // 退出当前应用
+    app_handle.exit(0);
+
+    Ok(path_str)
+}
+
 fn main() {
     let result = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -3840,7 +3930,15 @@ fn main() {
             get_image_data_url,
             get_opaque_image_data_url,
             generate_font_c_content,
-            exec_command
+            exec_command,
+            download_and_install_update,
+            // LLM 模块
+            llm::load_llm_config,
+            llm::save_llm_config,
+            llm::llm_chat,
+            llm::llm_stream_chat,
+            llm::llm_test_connection,
+            llm::llm_list_models
         ])
         .run(tauri::generate_context!());
 

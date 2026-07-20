@@ -302,6 +302,7 @@ pub async fn llm_stream_chat(
     use futures_util::StreamExt;
     let mut stream = response.bytes_stream();
     let mut buffer = String::new();
+    let mut final_usage: Option<OpenAiUsage> = None;
 
     while let Some(chunk_result) = stream.next().await {
         let chunk = match chunk_result {
@@ -327,7 +328,7 @@ pub async fn llm_stream_chat(
             if let Some(data) = line.strip_prefix("data: ") {
                 let data = data.trim();
                 if data == "[DONE]" {
-                    app.emit("llm-done", LlmStreamDone { usage: None }).ok();
+                    app.emit("llm-done", LlmStreamDone { usage: final_usage }).ok();
                     return Ok(());
                 }
 
@@ -351,11 +352,10 @@ pub async fn llm_stream_chat(
                             }
                         }
                     }
-                    // 提取 usage（部分 API 在最后一个 chunk 中返回）
+                    // 提取 usage（部分 API 在最后一个 chunk 中返回，缓存即可，不提前结束流）
                     if let Some(usage) = parsed.get("usage") {
                         if let Ok(u) = serde_json::from_value::<OpenAiUsage>(usage.clone()) {
-                            app.emit("llm-done", LlmStreamDone { usage: Some(u) }).ok();
-                            return Ok(());
+                            final_usage = Some(u);
                         }
                     }
                 }
@@ -364,7 +364,7 @@ pub async fn llm_stream_chat(
     }
 
     // 流结束但没收到 [DONE]，也发送 done
-    app.emit("llm-done", LlmStreamDone { usage: None }).ok();
+    app.emit("llm-done", LlmStreamDone { usage: final_usage }).ok();
     Ok(())
 }
 

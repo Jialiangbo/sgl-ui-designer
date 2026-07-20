@@ -348,6 +348,7 @@ struct Page {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct ResourceItem {
     name: String,
+    #[serde(default)]
     path: String,
 }
 
@@ -510,8 +511,6 @@ struct Project {
     ascii_fonts: Vec<AsciiFontConfig>,
     #[serde(default)]
     sgl_config: SglConfig,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    ai_chat_history: Option<serde_json::Value>,
 }
 
 fn default_resources() -> Resources {
@@ -3664,6 +3663,20 @@ fn write_sgl_config_to_file(project_path: String, config: SglConfig) -> Result<(
     generate_sgl_config_h(&config, &config_path)
 }
 
+/// 将 sgl 配置保存到用户指定的路径（用于在 SGL 配置页面手动触发，无需运行仿真）
+#[tauri::command]
+fn write_sgl_config_to_custom_path(config: SglConfig, target_path: String) -> Result<(), String> {
+    let path = std::path::Path::new(&target_path);
+    // 确保父目录存在
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() && !parent.exists() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("创建目录失败: {}", e))?;
+        }
+    }
+    generate_sgl_config_h(&config, path)
+}
+
 /// 运行 sgl_simulator
 #[tauri::command]
 fn run_simulator(project_path: String) -> Result<String, String> {
@@ -3804,6 +3817,62 @@ fn generate_font_c_content(
     Ok(content)
 }
 
+/// 列出指定目录下的文件和子目录
+#[tauri::command]
+fn list_directory(path: String) -> Result<serde_json::Value, String> {
+    use std::fs;
+    let dir = std::path::Path::new(&path);
+    if !dir.exists() {
+        return Err(format!("路径不存在: {}", path));
+    }
+    if !dir.is_dir() {
+        return Err(format!("不是目录: {}", path));
+    }
+
+    let entries = fs::read_dir(dir).map_err(|e| format!("读取目录失败: {}", e))?;
+    let mut items = Vec::new();
+
+    for entry in entries {
+        if let Ok(entry) = entry {
+            let file_type = entry.file_type().map_err(|e| format!("获取文件类型失败: {}", e))?;
+            let name = entry.file_name().to_string_lossy().to_string();
+            let path = entry.path().to_string_lossy().to_string();
+            let extension = std::path::Path::new(&name)
+                .extension()
+                .map(|e| e.to_string_lossy().to_lowercase())
+                .unwrap_or_default();
+
+            items.push(serde_json::json!({
+                "name": name,
+                "path": path,
+                "isDir": file_type.is_dir(),
+                "isFile": file_type.is_file(),
+                "extension": extension,
+            }));
+        }
+    }
+
+    // 按名称排序：目录在前，文件在后
+    items.sort_by(|a, b| {
+        let a_dir = a["isDir"].as_bool().unwrap_or(false);
+        let b_dir = b["isDir"].as_bool().unwrap_or(false);
+        match (a_dir, b_dir) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => {
+                let a_name = a["name"].as_str().unwrap_or("");
+                let b_name = b["name"].as_str().unwrap_or("");
+                a_name.cmp(b_name)
+            }
+        }
+    });
+
+    Ok(serde_json::json!({
+        "path": path,
+        "items": items
+    }))
+}
+
 /// 在系统 shell 中执行命令（Windows 使用 cmd /c）
 #[tauri::command]
 fn exec_command(command: String, cwd: Option<String>) -> Result<ExecResult, String> {
@@ -3926,10 +3995,12 @@ fn main() {
             run_simulator,
             read_sgl_config_from_file,
             write_sgl_config_to_file,
+            write_sgl_config_to_custom_path,
             append_log,
             get_image_data_url,
             get_opaque_image_data_url,
             generate_font_c_content,
+            list_directory,
             exec_command,
             download_and_install_update,
             // LLM 模块
@@ -3938,7 +4009,11 @@ fn main() {
             llm::llm_chat,
             llm::llm_stream_chat,
             llm::llm_test_connection,
-            llm::llm_list_models
+            llm::llm_list_models,
+            // AI 对话历史独立存储
+            load_ai_chat_history,
+            save_ai_chat_history,
+            clear_ai_chat_history
         ])
         .run(tauri::generate_context!());
 
@@ -4059,4 +4134,87 @@ mod tests {
         assert!(set.contains(&'取'));
         assert!(set.contains(&'消'));
     }
+}
+
+/// 读取项目独立存储的 AI 对话历史（与项目文件分离，避免项目文件膨胀）
+/// path 为项目文件路径，对话历史存储在同目录的 .ai_chat_history.json
+#[tauri::command]
+fn load_ai_chat_history(project_path: String) -> Result<serde_json::Value, String> {
+    use std::fs;
+    use std::path::PathBuf;
+
+    let project_file = PathBuf::from(&project_path);
+    let history_file = project_file
+        .parent()
+        .ok_or("无法获取项目目录")?
+        .join(".ai_chat_history.json");
+
+    if !history_file.exists() {
+        return Ok(serde_json::json!([]));
+    }
+
+    let content = fs::read_to_string(&history_file)
+        .map_err(|e| format!("读取对话历史失败: {}", e))?;
+
+    let value: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("解析对话历史失败: {}", e))?;
+
+    Ok(value)
+}
+
+/// 保存项目独立存储的 AI 对话历史
+/// 写入同目录的 .ai_chat_history.json，原子写入避免文件损坏
+#[tauri::command]
+fn save_ai_chat_history(project_path: String, history: serde_json::Value) -> Result<(), String> {
+    use std::fs;
+    use std::path::PathBuf;
+
+    let project_file = PathBuf::from(&project_path);
+    let project_dir = project_file
+        .parent()
+        .ok_or("无法获取项目目录")?;
+
+    // 确保目录存在
+    if !project_dir.exists() {
+        fs::create_dir_all(project_dir)
+            .map_err(|e| format!("创建目录失败: {}", e))?;
+    }
+
+    let history_file = project_dir.join(".ai_chat_history.json");
+    let tmp_file = project_dir.join(".ai_chat_history.json.tmp");
+
+    let content = serde_json::to_string_pretty(&history)
+        .map_err(|e| format!("序列化对话历史失败: {}", e))?;
+
+    // 原子写入：先写临时文件，再重命名
+    fs::write(&tmp_file, content)
+        .map_err(|e| format!("写入临时文件失败: {}", e))?;
+
+    if history_file.exists() {
+        fs::remove_file(&history_file).ok();
+    }
+    fs::rename(&tmp_file, &history_file)
+        .map_err(|e| format!("重命名临时文件失败: {}", e))?;
+
+    Ok(())
+}
+
+/// 清理指定项目的 AI 对话历史
+#[tauri::command]
+fn clear_ai_chat_history(project_path: String) -> Result<(), String> {
+    use std::fs;
+    use std::path::PathBuf;
+
+    let project_file = PathBuf::from(&project_path);
+    let history_file = project_file
+        .parent()
+        .ok_or("无法获取项目目录")?
+        .join(".ai_chat_history.json");
+
+    if history_file.exists() {
+        fs::remove_file(&history_file)
+            .map_err(|e| format!("删除对话历史失败: {}", e))?;
+    }
+
+    Ok(())
 }

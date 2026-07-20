@@ -137,6 +137,43 @@ document.querySelectorAll('.sgl-cfg').forEach(el => {
   });
 });
 
+// 单独保存 sgl_config.h 按钮：弹出文件保存对话框，让用户选择保存路径
+const saveSglConfigBtn = $('btn-save-sgl-config');
+if (saveSglConfigBtn) {
+  saveSglConfigBtn.addEventListener('click', async () => {
+    ensureSglConfig();
+    let defaultPath = 'sgl_config.h';
+    // 默认路径优先使用项目下的 sgl-port 路径（如果存在），便于用户直接确认保存
+    if (AppState.projectPath) {
+      const projDir = AppState.projectPath.replace(/[\\/][^\\/]*$/, '');
+      const candidate = projDir + '\\sgl-port-windows-vscode\\demo\\sgl_config.h';
+      defaultPath = candidate;
+    }
+    let targetPath = null;
+    try {
+      const { save } = await import('@tauri-apps/plugin-dialog');
+      targetPath = await save({
+        title: '保存 sgl_config.h',
+        defaultPath,
+        filters: [{ name: 'C Header File', extensions: ['h'] }]
+      });
+    } catch (e) {
+      showToast('打开保存对话框失败: ' + e, 'error');
+      return;
+    }
+    if (!targetPath) return; // 用户取消
+    try {
+      await invoke('write_sgl_config_to_custom_path', {
+        config: AppState.project.sgl_config,
+        targetPath
+      });
+      showToast('已保存 sgl_config.h 到: ' + targetPath, 'success');
+    } catch (e) {
+      showToast('保存失败: ' + e, 'error');
+    }
+  });
+}
+
 function ensureAsciiFonts() {
   if (!Array.isArray(AppState.project.ascii_fonts)) {
     AppState.project.ascii_fonts = [];
@@ -448,6 +485,11 @@ if (saveBtn) {
     const status = $('ai-config-status');
     try {
       await invoke('save_llm_config', { config });
+      // 同步更新 ai_panel 中的 _currentConfig 缓存
+      _aiConfig = config;
+      try {
+        localStorage.setItem('sgl_llm_config_cache', JSON.stringify(config));
+      } catch {}
       status.textContent = '✅ 配置已保存';
       status.style.color = 'var(--success)';
     } catch (e) {

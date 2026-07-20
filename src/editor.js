@@ -11,14 +11,14 @@ import {
   getPixmapImageData, getCachedPixmapImageData, preloadPixmapImage, getSglFontData, loadSglFontData
 } from './render_common.js';
 import { setLogger as setUpdaterLogger } from './updater.js';
-// import { initAIPanel } from './ai_panel.js';
+import { initAIPanel } from './ai_panel.js';
 import qrcodeGenerator from 'qrcode-generator';
 
 initNav('editor');
 setupWindowControls();
 setupUpdateChecker();
 AppState.init();
-// initAIPanel(); // AI 助手暂时屏蔽
+// initAIPanel(); // AI 助手已屏蔽
 setFontLoadCallback(() => renderCanvas());
 setCodegenLogCallback((message, level) => logMessage(message, level));
 

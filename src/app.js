@@ -750,6 +750,10 @@ export const AppState = {
   migrateProject() {
     const p = this.project;
     if (!p) return;
+    // 旧版本可能存在的 ai_chat_history 字段（已迁移到独立文件）
+    if ('ai_chat_history' in p) {
+      delete p.ai_chat_history;
+    }
     // 补充 resources 字段（旧项目可能缺少）
     if (!p.resources) p.resources = { fonts: [], images: [] };
     if (!Array.isArray(p.resources.fonts)) p.resources.fonts = [];

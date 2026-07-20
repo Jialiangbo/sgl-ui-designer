@@ -789,7 +789,7 @@ export function createWidgetDefaults(type) {
     case 'icon':
       return { ...base, color: '#000000', align: 'CENTER', icon: '' };
     case 'led':
-      return { ...base, onColor: '#FFFFFF', offColor: '#000000', bgColor: '#000000', radius: 0, status: false };
+      return { ...base, onColor: '#FFFFFF', offColor: '#000000', bgColor: '#000000', radius: 10, status: false };
     case 'msgbox':
       return { ...base, titleText: 'Message Box', titleTextColor: '#000000', msgText: 'NULL', msgColor: '#000000', leftBtnText: 'YES', leftBtnColor: '#C7C7C7', leftBtnTextColor: '#000000', rightBtnText: 'NO', rightBtnColor: '#C7C7C7', rightBtnTextColor: '#000000', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 2, radius: 0, titleHeight: 0, msgOffsetX: 0, msgOffsetY: 0, msgLineMargin: 1, mainAlpha: 255, borderAlpha: 255, pixmap: '', fontSize: 14, fontFamily: '', fontBpp: 4, exitAnswer: false };
     case 'viewlist':

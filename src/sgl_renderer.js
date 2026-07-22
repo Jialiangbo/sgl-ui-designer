@@ -446,6 +446,203 @@ function drawFillRectBorder(surf, x1, y1, x2, y2, radius, borderColor, border, a
 }
 
 // ============================================================
+// sgl_draw_fill_rich_rect - 四角独立圆角矩形填充
+// 移植自 sgl_draw_rect.c:175-259
+// ============================================================
+
+/**
+ * @param {number} tl_radius - 左上圆角
+ * @param {number} tr_radius - 右上圆角
+ * @param {number} bl_radius - 左下圆角
+ * @param {number} br_radius - 右下圆角
+ */
+function drawFillRichRect(surf, x1, y1, x2, y2, tl_radius, tr_radius, bl_radius, br_radius, color, alpha) {
+  if (alpha <= 0) return;
+  const z = surf.scale;
+  // 转像素坐标
+  const px1 = Math.round(x1 * z);
+  const py1 = Math.round(y1 * z);
+  const px2 = Math.round(x2 * z);
+  const py2 = Math.round(y2 * z);
+  const r_tl = Math.max(Math.round(tl_radius * z), 0);
+  const r_tr = Math.max(Math.round(tr_radius * z), 0);
+  const r_bl = Math.max(Math.round(bl_radius * z), 0);
+  const r_br = Math.max(Math.round(br_radius * z), 0);
+
+  // 裁剪
+  const clip = areaClip(surf.clip, { x1: px1, y1: py1, x2: px2, y2: py2 });
+  if (!clip) return;
+
+  if (r_tl === 0 && r_tr === 0 && r_bl === 0 && r_br === 0) {
+    for (let y = clip.y1; y <= clip.y2; y++) {
+      for (let x = clip.x1; x <= clip.x2; x++) {
+        setPixel(surf, x, y, color, alpha);
+      }
+    }
+    return;
+  }
+
+  // SGL: x_mid/y_mid 划分四象限，每个像素选择对应角的圆心和半径
+  const x_mid = (px1 + px2) >> 1;
+  const y_mid = (py1 + py2) >> 1;
+
+  for (let y = clip.y1; y <= clip.y2; y++) {
+    for (let x = clip.x1; x <= clip.x2; x++) {
+      let r = 0, cx = 0, cy = 0;
+      if (y <= y_mid) {
+        if (x <= x_mid) {
+          r = r_tl; cx = px1 + r; cy = py1 + r;
+        } else {
+          r = r_tr; cx = px2 - r; cy = py1 + r;
+        }
+      } else {
+        if (x <= x_mid) {
+          r = r_bl; cx = px1 + r; cy = py2 - r;
+        } else {
+          r = r_br; cx = px2 - r; cy = py2 - r;
+        }
+      }
+
+      // in_x_straight: 当前像素是否在直线段范围内（圆心内侧）
+      const in_x_straight = (x <= x_mid) ? (x >= cx) : (x <= cx);
+      const in_y_straight = (y <= y_mid) ? (y >= cy) : (y <= cy);
+
+      if (in_x_straight || in_y_straight || r === 0) {
+        setPixel(surf, x, y, color, alpha);
+      } else {
+        // 圆角区域
+        const r2 = r * r;
+        const r2_max = (r + 1) * (r + 1);
+        const r2_diff = Math.max(r2_max - r2, 1);
+        const r2_fix_diff = Math.floor((255 << 15) / r2_diff);
+        const dy2 = (y - cy) * (y - cy);
+        const real_r2 = (x - cx) * (x - cx) + dy2;
+        if (real_r2 >= r2_max) {
+          // 圆外：不绘制
+          continue;
+        } else if (real_r2 >= r2) {
+          // 边缘抗锯齿
+          const edge_alpha = Math.floor(((r2_max - real_r2) * r2_fix_diff) >> 15);
+          setEdgePixel(surf, x, y, color, edge_alpha, alpha === 255 ? 255 : alpha);
+        } else {
+          // 圆内
+          setPixel(surf, x, y, color, alpha);
+        }
+      }
+    }
+  }
+}
+
+// ============================================================
+// sgl_draw_fill_rect_border_rich - 四角独立圆角边框
+// 移植自 sgl_draw_rect.c:388-505
+// ============================================================
+
+/**
+ * @param {number} border - 边框宽度
+ */
+function drawFillRectBorderRich(surf, x1, y1, x2, y2, tl_radius, tr_radius, bl_radius, br_radius, borderColor, border, alpha) {
+  if (border <= 0 || alpha <= 0) return;
+  const z = surf.scale;
+  const px1 = Math.round(x1 * z);
+  const py1 = Math.round(y1 * z);
+  const px2 = Math.round(x2 * z);
+  const py2 = Math.round(y2 * z);
+  const pb = Math.round(border * z);
+  const r_tl = Math.max(Math.round(tl_radius * z), 0);
+  const r_tr = Math.max(Math.round(tr_radius * z), 0);
+  const r_bl = Math.max(Math.round(bl_radius * z), 0);
+  const r_br = Math.max(Math.round(br_radius * z), 0);
+
+  const clip = areaClip(surf.clip, { x1: px1, y1: py1, x2: px2, y2: py2 });
+  if (!clip) return;
+
+  // 边框内边界（rect 缩进 border）
+  const cx1i = px1 + pb;
+  const cx2i = px2 - pb;
+  const cyi1 = py1 + pb;
+  const cyi2 = py2 - pb;
+
+  if (r_tl === 0 && r_tr === 0 && r_bl === 0 && r_br === 0) {
+    // 纯直角边框
+    for (let y = clip.y1; y <= clip.y2; y++) {
+      const edge_row = (y < cyi1 || y > cyi2);
+      for (let x = clip.x1; x <= clip.x2; x++) {
+        if (edge_row || x < cx1i || x > cx2i) {
+          setPixel(surf, x, y, borderColor, alpha);
+        }
+      }
+    }
+    return;
+  }
+
+  const x_mid = (px1 + px2) >> 1;
+  const y_mid = (py1 + py2) >> 1;
+
+  for (let y = clip.y1; y <= clip.y2; y++) {
+    const edge_row = (y < cyi1 || y > cyi2);
+    for (let x = clip.x1; x <= clip.x2; x++) {
+      let r = 0, cx = 0, cy = 0;
+      if (y <= y_mid) {
+        if (x <= x_mid) {
+          r = r_tl; cx = px1 + r; cy = py1 + r;
+        } else {
+          r = r_tr; cx = px2 - r; cy = py1 + r;
+        }
+      } else {
+        if (x <= x_mid) {
+          r = r_bl; cx = px1 + r; cy = py2 - r;
+        } else {
+          r = r_br; cx = px2 - r; cy = py2 - r;
+        }
+      }
+
+      const in_x_straight = (x <= x_mid) ? (x >= cx) : (x <= cx);
+      const in_y_straight = (y <= y_mid) ? (y >= cy) : (y <= cy);
+
+      if (in_x_straight || in_y_straight || r === 0) {
+        // 直线段：只在边框宽度内绘制
+        if (x < cx1i || x > cx2i || edge_row) {
+          setPixel(surf, x, y, borderColor, alpha);
+        }
+      } else {
+        // 圆角段
+        const radius_in = Math.max(r - pb, 0);
+        const out_r2 = r * r;
+        const out_r2_max = (r + 1) * (r + 1);
+        const in_r2 = radius_in * radius_in;
+        const in_r2_max = (radius_in + 1) * (radius_in + 1);
+        const out_r2_diff = Math.max(out_r2_max - out_r2, 1);
+        const out_fix_diff = Math.floor((255 << 15) / out_r2_diff);
+        const in_r2_diff = Math.max(in_r2_max - in_r2, 1);
+        const in_fix_diff = Math.floor((255 << 15) / in_r2_diff);
+        const dy2 = (y - cy) * (y - cy);
+        const real_r2 = (x - cx) * (x - cx) + dy2;
+
+        if (real_r2 >= out_r2_max) {
+          // 圆外
+          continue;
+        } else if (real_r2 <= in_r2) {
+          // 内圆内（不绘制边框）
+          continue;
+        } else if (real_r2 < in_r2_max) {
+          // 内圆边缘抗锯齿
+          const edge_alpha = Math.floor(((real_r2 - in_r2) * in_fix_diff) >> 15);
+          setEdgePixel(surf, x, y, borderColor, edge_alpha, alpha === 255 ? 255 : alpha);
+        } else if (real_r2 <= out_r2) {
+          // 边框实体
+          setPixel(surf, x, y, borderColor, alpha);
+        } else {
+          // 外圆边缘抗锯齿
+          const edge_alpha = Math.floor(((out_r2_max - real_r2) * out_fix_diff) >> 15);
+          setEdgePixel(surf, x, y, borderColor, edge_alpha, alpha === 255 ? 255 : alpha);
+        }
+      }
+    }
+  }
+}
+
+// ============================================================
 // sgl_draw_rect - 统一矩形绘制（填充+边框）
 // 移植自 sgl_draw_rect.c:504-523
 // ============================================================
@@ -4101,6 +4298,8 @@ const SGLRenderer = {
   // 基础绘制
   drawFillRect,
   drawFillRectBorder,
+  drawFillRichRect,
+  drawFillRectBorderRich,
   drawRect,
   drawFillCircle,
   drawFillCircleBorder,

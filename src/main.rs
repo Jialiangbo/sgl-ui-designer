@@ -30,6 +30,14 @@ struct Widget {
     #[serde(rename = "mainAlpha")]
     main_alpha: Option<i32>,
     radius: Option<i32>,
+    #[serde(rename = "tlRadius")]
+    tl_radius: Option<i32>,
+    #[serde(rename = "trRadius")]
+    tr_radius: Option<i32>,
+    #[serde(rename = "blRadius")]
+    bl_radius: Option<i32>,
+    #[serde(rename = "brRadius")]
+    br_radius: Option<i32>,
     alpha: Option<i32>,
     pixmap: Option<String>,
     #[serde(rename = "pixmapFormat", default)]
@@ -60,8 +68,6 @@ struct Widget {
     check_color: Option<String>,
     #[serde(rename = "onColor")]
     on_color: Option<String>,
-    #[serde(rename = "knobRadius")]
-    knob_radius: Option<i32>,
     #[serde(rename = "knobMargin")]
     knob_margin: Option<i32>,
     #[serde(rename = "textOffsetX")]
@@ -1520,6 +1526,7 @@ fn generate_code(project: Project, window: tauri::Window) -> Result<String, Stri
 fn get_create_fn(t: &str) -> &'static str {
     match t {
         "rect" => "sgl_rect_create",
+        "rect_ext" => "sgl_rect_ext_create",
         "circle" => "sgl_circle_create",
         "ring" => "sgl_ring_create",
         "arc" => "sgl_arc_create",
@@ -1625,6 +1632,31 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
                 code.push_str(&format!("    sgl_rect_set_alpha({}, {});\n", obj, a as i32));
             }
         }
+        "rect_ext" => {
+            // rect_ext: 四角独立圆角矩形，图片和背景色二选一
+            if let Some(ref pixmap) = w.pixmap {
+                if !pixmap.is_empty() {
+                    let fmt = w.pixmap_format.as_deref().unwrap_or("RGB565");
+                    code.push_str(&format!("    sgl_rect_ext_set_pixmap({}, &{});\n", obj, pixmap_var_name(pixmap, fmt)));
+                } else if let Some(ref c) = w.color {
+                    if !c.is_empty() {
+                        code.push_str(&format!("    sgl_rect_ext_set_color({}, {});\n", obj, sgl_color(c)));
+                    }
+                }
+            } else if let Some(ref c) = w.color {
+                if !c.is_empty() {
+                    code.push_str(&format!("    sgl_rect_ext_set_color({}, {});\n", obj, sgl_color(c)));
+                }
+            }
+            cclr!("sgl_rect_ext_set_border_color", w.border_color);
+            c!( "sgl_rect_ext_set_border_width", w.border_width.map(|v| v as u8));
+            c!( "sgl_rect_ext_set_border_alpha", w.border_alpha.map(|v| v as u8));
+            if let (Some(tl), Some(tr), Some(bl), Some(br)) = (w.tl_radius, w.tr_radius, w.bl_radius, w.br_radius) {
+                code.push_str(&format!("    sgl_rect_ext_set_radius({}, {}, {}, {}, {});\n", obj, tl, tr, bl, br));
+            }
+            c!( "sgl_rect_ext_set_main_alpha", w.main_alpha.map(|v| v as u8));
+            c!( "sgl_rect_ext_set_alpha", w.alpha.map(|v| v as u8));
+        }
         "circle" => {
             // 颜色或图片二选一
             if let Some(ref pixmap) = w.pixmap {
@@ -1678,7 +1710,23 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             c!( "sgl_button_set_radius", w.radius.map(|v| v as u8));
             c!( "sgl_button_set_alpha", w.alpha.map(|v| v as u8));
             if let Some(a) = &w.align {
-                code.push_str(&format!("    sgl_button_set_text_align({}, SGL_ALIGN_{});\n", obj, a));
+                let align_macro = match a.as_str() {
+                    "TOP_LEFT" => "SGL_ALIGN_TOP_LEFT",
+                    "TOP_MID" => "SGL_ALIGN_TOP_MID",
+                    "TOP_RIGHT" => "SGL_ALIGN_TOP_RIGHT",
+                    "LEFT_MID" => "SGL_ALIGN_LEFT_MID",
+                    "CENTER" => "SGL_ALIGN_CENTER",
+                    "RIGHT_MID" => "SGL_ALIGN_RIGHT_MID",
+                    "BOT_LEFT" => "SGL_ALIGN_BOT_LEFT",
+                    "BOT_MID" => "SGL_ALIGN_BOT_MID",
+                    "BOT_RIGHT" => "SGL_ALIGN_BOT_RIGHT",
+                    "LEFT" => "SGL_ALIGN_LEFT_MID",
+                    "RIGHT" => "SGL_ALIGN_RIGHT_MID",
+                    "TOP" => "SGL_ALIGN_TOP_MID",
+                    "BOTTOM" | "DOWN" => "SGL_ALIGN_BOT_MID",
+                    _ => "SGL_ALIGN_CENTER",
+                };
+                code.push_str(&format!("    sgl_button_set_text_align({}, {});\n", obj, align_macro));
             }
             if let Some(pix) = &w.pixmap {
                 if !pix.is_empty() {
@@ -1697,7 +1745,23 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             cclr!("sgl_label_set_bg_color", w.bg_color);
             c!( "sgl_label_set_alpha", w.alpha.map(|v| v as u8));
             if let Some(a) = &w.align {
-                code.push_str(&format!("    sgl_label_set_text_align({}, SGL_ALIGN_{});\n", obj, a));
+                let align_macro = match a.as_str() {
+                    "TOP_LEFT" => "SGL_ALIGN_TOP_LEFT",
+                    "TOP_MID" => "SGL_ALIGN_TOP_MID",
+                    "TOP_RIGHT" => "SGL_ALIGN_TOP_RIGHT",
+                    "LEFT_MID" => "SGL_ALIGN_LEFT_MID",
+                    "CENTER" => "SGL_ALIGN_CENTER",
+                    "RIGHT_MID" => "SGL_ALIGN_RIGHT_MID",
+                    "BOT_LEFT" => "SGL_ALIGN_BOT_LEFT",
+                    "BOT_MID" => "SGL_ALIGN_BOT_MID",
+                    "BOT_RIGHT" => "SGL_ALIGN_BOT_RIGHT",
+                    "LEFT" => "SGL_ALIGN_LEFT_MID",
+                    "RIGHT" => "SGL_ALIGN_RIGHT_MID",
+                    "TOP" => "SGL_ALIGN_TOP_MID",
+                    "BOTTOM" | "DOWN" => "SGL_ALIGN_BOT_MID",
+                    _ => "SGL_ALIGN_CENTER",
+                };
+                code.push_str(&format!("    sgl_label_set_text_align({}, {});\n", obj, align_macro));
             }
             c!( "sgl_label_set_radius", w.radius.map(|v| v as u8));
             c!( "sgl_label_set_text_offset", w.text_offset_x.zip(w.text_offset_y).map(|(x, y)| format!("{}, {}", x as i8, y as i8)));
@@ -2547,6 +2611,116 @@ fn run_command_stream(
     child.wait().map_err(|e| format!("等待 {} 结束失败: {}", program, e))
 }
 
+/// 带超时和环境变量的 run_command_stream（用于 git 网络操作）
+/// timeout_secs: 总超时秒数（0 表示不超时）
+/// envs: 额外环境变量（如 GIT_HTTP_LOW_SPEED_TIME 用于低速检测）
+/// 超时会杀掉子进程并返回错误，避免网络问题导致无限卡住
+fn run_command_stream_with_timeout(
+    program: &str,
+    args: &[&str],
+    cwd: &std::path::Path,
+    window: &tauri::Window,
+    timeout_secs: u64,
+    envs: &[(&str, &str)],
+) -> Result<std::process::ExitStatus, String> {
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+    use std::time::Duration;
+
+    let mut cmd = Command::new(program);
+    cmd.current_dir(cwd)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for (k, v) in envs {
+        cmd.env(k, v);
+    }
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("启动 {} 失败: {}", program, e))?;
+
+    let stdout = child.stdout.take().ok_or("无法捕获标准输出")?;
+    let stderr = child.stderr.take().ok_or("无法捕获标准错误")?;
+    let w_out = window.clone();
+    let w_err = window.clone();
+
+    std::thread::spawn(move || {
+        let reader = BufReader::new(stdout);
+        for line in reader.lines() {
+            if let Ok(l) = line {
+                let _ = w_out.emit("build-log", serde_json::json!({"message": l, "level": "info"}));
+            }
+        }
+    });
+
+    std::thread::spawn(move || {
+        let reader = BufReader::new(stderr);
+        for line in reader.lines() {
+            if let Ok(l) = line {
+                let _ = w_err.emit("build-log", serde_json::json!({"message": l, "level": "error"}));
+            }
+        }
+    });
+
+    // 轮询等待，超时则杀掉进程
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) => {
+                if timeout_secs > 0 && start.elapsed() >= Duration::from_secs(timeout_secs) {
+                    let _ = child.kill();
+                    return Err(format!(
+                        "{} 执行超时（{} 秒），可能无法访问 GitHub，请检查网络连接",
+                        program, timeout_secs
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            }
+            Err(e) => return Err(format!("等待 {} 结束失败: {}", program, e)),
+        }
+    }
+}
+
+/// 快速检测 GitHub 是否可达（git ls-remote 测试，5 秒超时）
+/// 返回 true 表示可达，false 表示不可达
+fn check_github_reachable(window: &tauri::Window) -> bool {
+    let _ = window.emit(
+        "build-log",
+        serde_json::json!({"message": "正在检测 GitHub 网络连通性...", "level": "info"}),
+    );
+    // 用 git ls-remote 测试 GitHub 连通性，5 秒超时
+    // GIT_HTTP_LOW_SPEED_TIME=3 + GIT_HTTP_LOW_SPEED_LIMIT=1000 表示连续 3 秒速度低于 1KB/s 即中止
+    let result = run_command_stream_with_timeout(
+        "git",
+        &["ls-remote", "--heads", "https://github.com/sgl-org/sgl.git"],
+        std::path::Path::new("."),
+        window,
+        8,
+        &[
+            ("GIT_HTTP_LOW_SPEED_TIME", "3"),
+            ("GIT_HTTP_LOW_SPEED_LIMIT", "1000"),
+        ],
+    );
+    match result {
+        Ok(status) if status.success() => {
+            let _ = window.emit(
+                "build-log",
+                serde_json::json!({"message": "GitHub 网络连通性正常", "level": "info"}),
+            );
+            true
+        }
+        _ => {
+            let _ = window.emit(
+                "build-log",
+                serde_json::json!({"message": "无法访问 GitHub，请检查网络连接或代理设置", "level": "error"}),
+            );
+            false
+        }
+    }
+}
+
 fn copy_dir_contents(src: &std::path::Path, dst: &std::path::Path) -> Result<(), String> {
     std::fs::create_dir_all(dst)
         .map_err(|e| format!("创建目录 {} 失败: {}", dst.to_string_lossy(), e))?;
@@ -2570,6 +2744,125 @@ fn copy_dir_contents(src: &std::path::Path, dst: &std::path::Path) -> Result<(),
         }
     }
     Ok(())
+}
+
+/// 获取指定 git 仓库的 HEAD commit hash（失败返回 None）
+fn git_head_hash(repo_dir: &std::path::Path) -> Option<String> {
+    let out = std::process::Command::new("git")
+        .current_dir(repo_dir)
+        .args(&["rev-parse", "HEAD"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let h = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if h.is_empty() { None } else { Some(h) }
+}
+
+/// 判断 local 仓库的 HEAD 是否是 target 仓库 HEAD 的祖先（即 local 版本落后于 target）
+/// 通过 git merge-base --is-ancestor 实现
+/// 返回 Some(true) 表示 local 落后于 target；Some(false) 表示 local 不落后；None 表示无法判断
+fn git_is_ancestor(_local_repo: &std::path::Path, local_hash: &str, target_repo: &std::path::Path, target_hash: &str) -> Option<bool> {
+    // 在 target 仓库中判断 local_hash 是否是 target_hash 的祖先
+    // 需要 target 仓库能识别 local_hash（通常两仓库同源，commit hash 通用）
+    let out = std::process::Command::new("git")
+        .current_dir(target_repo)
+        .args(&["merge-base", "--is-ancestor", local_hash, target_hash])
+        .output()
+        .ok()?;
+    // exit 0: local 是 target 的祖先（local 落后）；exit 1: 不是；其他: 错误
+    match out.status.code() {
+        Some(0) => Some(true),
+        Some(1) => Some(false),
+        _ => None,
+    }
+}
+
+/// 比较设计器本地 sgl 与用户项目 sgl 的版本，判断是否可以安全同步源码
+/// 只有设计器本地版本 >= 用户项目版本时才返回 true（可以同步）
+/// 无法判断版本关系时保守返回 true（保持原有同步行为，避免破坏正常工作流）
+fn sgl_version_compare_for_sync(
+    local_sgl_dir: &std::path::Path,
+    port_sgl_dir: &std::path::Path,
+    window: &tauri::Window,
+) -> bool {
+    // 任一目录不是 git 仓库则无法比较，保守允许同步
+    let local_hash = match git_head_hash(local_sgl_dir) {
+        Some(h) => h,
+        None => return true,
+    };
+    let port_hash = match git_head_hash(port_sgl_dir) {
+        Some(h) => h,
+        None => return true,
+    };
+
+    // 版本相同，可以同步（用于同步设计器对 sgl 的修改）
+    if local_hash == port_hash {
+        return true;
+    }
+
+    // 判断设计器本地是否落后于用户项目
+    match git_is_ancestor(local_sgl_dir, &local_hash, port_sgl_dir, &port_hash) {
+        Some(true) => {
+            // 设计器本地落后，不允许同步（避免覆盖用户项目的最新 sgl）
+            let _ = window.emit(
+                "build-log",
+                serde_json::json!({
+                    "message": format!(
+                        "设计器内置 SGL 库({}) 落后于用户项目 SGL 库({})，跳过源码同步",
+                        &local_hash[..7.min(local_hash.len())],
+                        &port_hash[..7.min(port_hash.len())]
+                    ),
+                    "level": "warn"
+                }),
+            );
+            false
+        }
+        Some(false) => {
+            // 设计器本地领先或分叉，可以同步
+            true
+        }
+        None => {
+            // 无法判断（如分叉历史），保守允许同步
+            let _ = window.emit(
+                "build-log",
+                serde_json::json!({
+                    "message": "无法判断设计器与用户项目 SGL 库的版本关系，保守执行源码同步",
+                    "level": "info"
+                }),
+            );
+            true
+        }
+    }
+}
+
+/// 简单的字节哈希（FNV-1a 32位），用于检测文件内容变化
+fn simple_hash(bytes: &[u8]) -> String {
+    let mut hash: u32 = 0x811c9dc5;
+    for &b in bytes {
+        hash ^= b as u32;
+        hash = hash.wrapping_mul(0x01000193);
+    }
+    format!("{:08x}", hash)
+}
+
+/// 列出字模目录下所有 .c 文件名（排序后用换行拼接），用于检测字模增删
+fn list_font_files(fonts_dir: &std::path::Path) -> String {
+    let mut files: Vec<String> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(fonts_dir) {
+        for entry in entries.flatten() {
+            if let Some(ext) = entry.path().extension() {
+                if ext == "c" {
+                    if let Some(name) = entry.file_name().to_str() {
+                        files.push(name.to_string());
+                    }
+                }
+            }
+        }
+    }
+    files.sort();
+    files.join("\n")
 }
 
 /// 递归同步 SGL 库源码（仅 .c 和 .h 文件，排除 sgl_config.h 以免覆盖 demo 同步的配置）
@@ -2597,15 +2890,14 @@ fn sync_sgl_source(src: &std::path::Path, dst: &std::path::Path) -> Result<usize
                 let src_bytes = std::fs::read(&src_path)
                     .map_err(|e| format!("读取源文件 {} 失败: {}", src_path.to_string_lossy(), e))?;
                 let dst_bytes = std::fs::read(&dst_path).unwrap_or_default();
-                let changed = src_bytes != dst_bytes;
-                // 总是覆盖文件以更新时间戳，确保 make 重新编译该文件
-                // 这解决了".c 内容已正确但 .obj 是旧版本"的时间戳问题
-                std::fs::write(&dst_path, &src_bytes).map_err(|e| {
-                    format!("同步 {} 失败: {}", src_path.to_string_lossy(), e)
-                })?;
-                if changed {
+                if src_bytes != dst_bytes {
+                    // 内容变化才写入，保留未变化文件的时间戳，让 make 按时间戳增量编译
+                    std::fs::write(&dst_path, &src_bytes).map_err(|e| {
+                        format!("同步 {} 失败: {}", src_path.to_string_lossy(), e)
+                    })?;
                     count += 1;
                 }
+                // 内容相同则不写入，保留原文件时间戳，make 不会重编译该文件
             }
         }
     }
@@ -2766,11 +3058,93 @@ fn check_sgl_submodule_status(
         return Ok(serde_json::json!({ "exists": false, "up_to_date": false, "msg": "sgl 子模块尚未初始化" }));
     }
 
+    // 同时检测设计器自身 sgl 库是否落后远程（不影响子模块状态判断，仅供前端提示）
+    let designer_sgl_outdated = check_designer_sgl_outdated(&window);
+
     match is_sgl_submodule_up_to_date(&sgl_port_dir, &window) {
-        Ok(true) => Ok(serde_json::json!({ "exists": true, "up_to_date": true, "msg": "sgl 子模块已是最新版本" })),
-        Ok(false) => Ok(serde_json::json!({ "exists": true, "up_to_date": false, "msg": "sgl 子模块有新版本可用" })),
-        Err(e) => Ok(serde_json::json!({ "exists": true, "up_to_date": false, "msg": format!("检查失败: {}", e) })),
+        Ok(true) => Ok(serde_json::json!({
+            "exists": true,
+            "up_to_date": true,
+            "designer_sgl_outdated": designer_sgl_outdated,
+            "msg": if designer_sgl_outdated {
+                "用户项目 sgl 子模块已是最新，但设计器内置 SGL 库有新版本可用（建议更新设计器）".to_string()
+            } else {
+                "sgl 子模块已是最新版本".to_string()
+            }
+        })),
+        Ok(false) => Ok(serde_json::json!({
+            "exists": true,
+            "up_to_date": false,
+            "designer_sgl_outdated": designer_sgl_outdated,
+            "msg": "sgl 子模块有新版本可用".to_string()
+        })),
+        Err(e) => Ok(serde_json::json!({
+            "exists": true,
+            "up_to_date": false,
+            "designer_sgl_outdated": designer_sgl_outdated,
+            "msg": format!("检查失败: {}", e)
+        })),
     }
+}
+
+/// 检测设计器自身 sgl 库（CARGO_MANIFEST_DIR/sgl）是否落后远程仓库
+/// 返回 true 表示落后（有新版本可用），false 表示最新或无法判断
+fn check_designer_sgl_outdated(window: &tauri::Window) -> bool {
+    let app_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let local_sgl_dir = app_dir.join("sgl");
+    if !local_sgl_dir.exists() || !local_sgl_dir.join(".git").exists() {
+        return false;
+    }
+
+    // 带超时的 fetch（复用子模块的 fetch 逻辑，15 秒超时）
+    match run_git_fetch_with_timeout(&local_sgl_dir, window, 15) {
+        Ok(status) if status.success() => {}
+        _ => {
+            // fetch 失败（网络问题等），无法判断，不阻塞用户
+            let _ = window.emit(
+                "build-log",
+                serde_json::json!({ "message": "无法获取设计器内置 SGL 库的远程版本（可能无法访问 GitHub）", "level": "info" }),
+            );
+            return false;
+        }
+    }
+
+    let local_hash = match git_head_hash(&local_sgl_dir) {
+        Some(h) => h,
+        None => return false,
+    };
+
+    // 获取远程 main 分支的 commit
+    let remote_out = std::process::Command::new("git")
+        .current_dir(&local_sgl_dir)
+        .args(&["rev-parse", "origin/main"])
+        .output();
+    let remote_hash = match remote_out {
+        Ok(o) if o.status.success() => {
+            String::from_utf8_lossy(&o.stdout).trim().to_string()
+        }
+        _ => return false,
+    };
+
+    if remote_hash.is_empty() {
+        return false;
+    }
+
+    let outdated = local_hash != remote_hash;
+    if outdated {
+        let _ = window.emit(
+            "build-log",
+            serde_json::json!({
+                "message": format!(
+                    "设计器内置 SGL 库有新版本可用（本地: {}, 远程: {}），建议更新设计器的 sgl 目录",
+                    &local_hash[..7.min(local_hash.len())],
+                    &remote_hash[..7.min(remote_hash.len())]
+                ),
+                "level": "warn"
+            }),
+        );
+    }
+    outdated
 }
 
 fn sgl_submodule_path(sgl_port_dir: &std::path::Path) -> std::path::PathBuf {
@@ -2941,12 +3315,23 @@ fn update_sgl_submodules_to_latest(
         Err(e) => eprintln!("检查 sgl 子模块版本失败，继续尝试更新: {}", e),
     }
 
+    // 网络预检测：GitHub 不可达时直接返回错误，避免 submodule update 卡住
+    if !check_github_reachable(window) {
+        return Err("无法访问 GitHub，已跳过子模块更新。请检查网络连接或代理设置后重试".to_string());
+    }
+
     // 拉取子模块远程最新代码，并实时输出到控制台
-    let status = run_command_stream(
+    // 设置 90 秒总超时 + 低速检测（连续 5 秒速度低于 1KB/s 即中止），避免网络问题无限卡住
+    let status = run_command_stream_with_timeout(
         "git",
         &["submodule", "update", "--init", "--recursive", "--remote"],
         sgl_port_dir,
         window,
+        90,
+        &[
+            ("GIT_HTTP_LOW_SPEED_TIME", "5"),
+            ("GIT_HTTP_LOW_SPEED_LIMIT", "1000"),
+        ],
     )
     .map_err(|e| format!("初始化/更新子模块失败: {}", e))?;
 
@@ -2955,6 +3340,35 @@ fn update_sgl_submodules_to_latest(
     }
 
     Ok("sgl 子模块已更新到最新版本".to_string())
+}
+
+/// 独立的 SGL 子模块更新命令（前端在 build_project 之前调用）
+/// 返回 JSON：{ success: bool, msg: string }
+/// 失败时不中断流程，让前端可以弹窗询问用户是否以旧代码继续编译
+#[tauri::command]
+fn update_sgl_submodules(
+    project_path: String,
+    window: tauri::Window,
+) -> Result<serde_json::Value, String> {
+    let proj_dir = std::path::Path::new(&project_path)
+        .parent()
+        .ok_or_else(|| "无法获取项目目录".to_string())?;
+    let sgl_port_dir = proj_dir.join("sgl-port-windows-vscode");
+
+    if !sgl_port_dir.exists() {
+        return Ok(serde_json::json!({
+            "success": false,
+            "msg": "sgl-port 项目不存在，无法更新子模块"
+        }));
+    }
+
+    match update_sgl_submodules_to_latest(&sgl_port_dir, &window) {
+        Ok(msg) => Ok(serde_json::json!({ "success": true, "msg": msg })),
+        Err(e) => Ok(serde_json::json!({
+            "success": false,
+            "msg": format!("SGL 库更新失败: {}", e)
+        })),
+    }
 }
 
 /// 克隆 sgl-port-windows-vscode 到项目目录
@@ -2970,36 +3384,30 @@ fn clone_sgl_port(project_path: String, window: tauri::Window) -> Result<String,
         return Err("未找到 git，请先安装 Git 并添加到环境变量".to_string());
     }
 
-    // 如果不存在则克隆，GitHub 失败时自动尝试 Gitee 镜像，并实时输出到控制台
+    // 如果不存在则克隆，从 GitHub 主仓库拉取，并实时输出到控制台
     if !sgl_port_dir.exists() || !sgl_port_dir.join("CMakelists.txt").exists() {
+        // 网络预检测：GitHub 不可达时直接返回错误，避免 clone 卡住
+        if !check_github_reachable(&window) {
+            return Err("无法访问 GitHub，已跳过克隆。请检查网络连接或代理设置后重试".to_string());
+        }
         let github_url = "https://github.com/sgl-org/sgl-port-windows-vscode.git";
-        let gitee_url = "https://gitee.com/sgl-org/sgl-port-windows-vscode.git";
 
-        let status = run_command_stream(
+        // clone 下载量较大，设置 180 秒总超时 + 低速检测
+        let status = run_command_stream_with_timeout(
             "git",
             &["clone", github_url, sgl_port_dir.to_string_lossy().as_ref()],
             proj_dir,
             &window,
+            180,
+            &[
+                ("GIT_HTTP_LOW_SPEED_TIME", "5"),
+                ("GIT_HTTP_LOW_SPEED_LIMIT", "1000"),
+            ],
         )
         .map_err(|e| format!("执行 git clone 失败: {}", e))?;
 
         if !status.success() {
-            let _ = window.emit(
-                "build-log",
-                serde_json::json!({"message": "GitHub 克隆失败，尝试 Gitee 镜像", "level": "warn"}),
-            );
-
-            let status = run_command_stream(
-                "git",
-                &["clone", gitee_url, sgl_port_dir.to_string_lossy().as_ref()],
-                proj_dir,
-                &window,
-            )
-            .map_err(|e| format!("执行 git clone 失败: {}", e))?;
-
-            if !status.success() {
-                return Err("克隆失败: GitHub 和 Gitee 均无法访问".to_string());
-            }
+            return Err("克隆失败: 无法从 GitHub 拉取 sgl-port-windows-vscode".to_string());
         }
     }
 
@@ -3165,9 +3573,10 @@ fn build_project(
         clone_sgl_port(project_path.clone(), window.clone())?;
     }
 
-    // 根据用户选择决定是否更新 sgl 子模块
+    // SGL 子模块更新已由前端通过 update_sgl_submodules 命令独立完成（支持失败时弹窗询问用户）
+    // 这里保留 update_sgl 参数仅为向后兼容，不再实际执行更新
     let submodule_msg = if update_sgl.unwrap_or(false) {
-        update_sgl_submodules_to_latest(&sgl_port_dir, &window)?
+        "SGL 子模块更新已由前端独立完成".to_string()
     } else {
         "已跳过 sgl 子模块更新".to_string()
     };
@@ -3175,27 +3584,41 @@ fn build_project(
     // 同步设计器内置 SGL 库源码（sgl/source/）到 sgl-port-windows-vscode/sgl/source/
     // 确保设计器对 SGL 库的修改（如 sgl_draw_rect.c 格式解码、sgl_checkbox.h 新 API）在仿真器中生效
     // 源路径使用编译时设计器项目根目录，而非用户项目目录（用户项目可能没有 sgl/ 子目录）
+    //
+    // 版本保护：只有当设计器本地 sgl 版本 >= 用户项目 sgl 版本时才同步源码，
+    // 避免设计器本地 sgl 落后时覆盖用户项目的最新 sgl（导致编译失败）
     let app_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let local_sgl_source = app_dir.join("sgl").join("source");
     let port_sgl_source = sgl_port_dir.join("sgl").join("source");
     let mut sgl_source_changed = false;
     if local_sgl_source.exists() {
-        match sync_sgl_source(&local_sgl_source, &port_sgl_source) {
-            Ok(n) => {
-                if n > 0 {
-                    sgl_source_changed = true;
+        // 比较设计器本地 sgl 与用户项目 sgl 的 git 版本
+        let local_sgl_dir = app_dir.join("sgl");
+        let port_sgl_dir = sgl_port_dir.join("sgl");
+        let can_sync = sgl_version_compare_for_sync(&local_sgl_dir, &port_sgl_dir, &window);
+        if can_sync {
+            match sync_sgl_source(&local_sgl_source, &port_sgl_source) {
+                Ok(n) => {
+                    if n > 0 {
+                        sgl_source_changed = true;
+                        let _ = window.emit(
+                            "build-log",
+                            serde_json::json!({ "message": format!("已同步 {} 个 SGL 库源文件，make 将增量重编译这些文件", n), "level": "info" }),
+                        );
+                    }
+                }
+                Err(e) => {
                     let _ = window.emit(
                         "build-log",
-                        serde_json::json!({ "message": format!("已同步 {} 个 SGL 库源文件到仿真器", n), "level": "info" }),
+                        serde_json::json!({ "message": format!("同步 SGL 库源码失败: {}", e), "level": "warn" }),
                     );
                 }
             }
-            Err(e) => {
-                let _ = window.emit(
-                    "build-log",
-                    serde_json::json!({ "message": format!("同步 SGL 库源码失败: {}", e), "level": "warn" }),
-                );
-            }
+        } else {
+            let _ = window.emit(
+                "build-log",
+                serde_json::json!({ "message": "设计器内置 SGL 库版本落后于用户项目，跳过源码同步以保留用户项目的最新版本", "level": "warn" }),
+            );
         }
     }
 
@@ -3220,28 +3643,63 @@ fn build_project(
         let _ = std::fs::write(&cmake_path, &updated);
     }
     // 确保 CMakeLists.txt 自动收集 demo/fonts 下的字模源文件
-    let _ = ensure_cmake_fonts_glob(&cmake_path);
+    let cmake_modified = ensure_cmake_fonts_glob(&cmake_path).unwrap_or(false);
 
-    // 字模文件可能新增或删除，强制重新 cmake configure 以确保 GLOB 收集最新源文件
+    // 智能 reconfigure 检测：只有 CMakeLists.txt 内容变化或字模文件增删时才删 CMakeCache.txt
+    // 避免每次编译都重新 cmake configure（3-5秒开销）
     let build_dir = sgl_port_dir.join("build");
-    if sgl_source_changed && build_dir.exists() {
-        // SGL 库源码有变化时，仅清理 sgl.dir 目录（SGL 库的 .obj），保留 sgl_simulator.dir（demo 的 .obj）
-        // 这样 SGL 库会重新编译，demo 文件走增量编译，兼顾正确性与速度
-        let sgl_obj_dir = build_dir.join("CMakeFiles").join("sgl.dir");
-        if sgl_obj_dir.exists() {
-            let _ = std::fs::remove_dir_all(&sgl_obj_dir);
+    let need_reconfigure = if !build_dir.exists() {
+        true // 首次编译
+    } else {
+        // 检测 CMakeLists.txt 内容是否变化（ensure_cmake_fonts_glob 可能修改了它）
+        let cmake_hash_file = build_dir.join(".cmake_hash");
+        let current_cmake_bytes = std::fs::read(&cmake_path).unwrap_or_default();
+        let current_cmake_hash = simple_hash(&current_cmake_bytes);
+        let prev_cmake_hash = std::fs::read_to_string(&cmake_hash_file).unwrap_or_default();
+        let cmake_changed = cmake_modified || current_cmake_hash != prev_cmake_hash;
+
+        // 检测字模文件列表是否变化（新增/删除字模需要 reconfigure 让 GLOB 重新收集）
+        let fonts_dir = sgl_port_dir.join("demo").join("fonts");
+        let current_fonts_list = list_font_files(&fonts_dir);
+        let fonts_manifest_file = build_dir.join(".fonts_manifest");
+        let prev_fonts_list = std::fs::read_to_string(&fonts_manifest_file).unwrap_or_default();
+        let fonts_changed = current_fonts_list != prev_fonts_list;
+
+        if cmake_changed {
+            let _ = std::fs::write(&cmake_hash_file, &current_cmake_hash);
+        }
+        if fonts_changed {
+            let _ = std::fs::write(&fonts_manifest_file, &current_fonts_list);
+        }
+
+        if cmake_changed {
             let _ = window.emit(
                 "build-log",
-                serde_json::json!({ "message": "SGL 库源码已更新，清理 SGL 库 .obj 重新编译（demo 文件保留增量编译）", "level": "info" }),
+                serde_json::json!({ "message": "CMakeLists.txt 已变化，触发重新 configure", "level": "info" }),
             );
         }
-        // 删除缓存文件，触发重新 configure
+        if fonts_changed {
+            let _ = window.emit(
+                "build-log",
+                serde_json::json!({ "message": "字模文件列表已变化，触发重新 configure", "level": "info" }),
+            );
+        }
+
+        cmake_changed || fonts_changed
+    };
+
+    if need_reconfigure {
+        // 删除缓存文件，触发重新 cmake configure
         let _ = std::fs::remove_file(build_dir.join("CMakeCache.txt"));
         let _ = std::fs::remove_file(build_dir.join("Makefile"));
-    } else {
-        // 仅删除缓存文件，触发重新 configure，保留增量编译
-        let _ = std::fs::remove_file(build_dir.join("CMakeCache.txt"));
-        let _ = std::fs::remove_file(build_dir.join("Makefile"));
+    }
+    // 不再强制删除 sgl.dir，让 make 按时间戳增量编译 SGL 库
+    // sync_sgl_source 已改为内容变化才写入，时间戳准确反映内容变化，make 能正确增量编译
+    if sgl_source_changed {
+        let _ = window.emit(
+            "build-log",
+            serde_json::json!({ "message": "SGL 库源码有变化，make 将按时间戳增量重编译变化的文件", "level": "info" }),
+        );
     }
 
     // 检查 gcc
@@ -3443,6 +3901,42 @@ fn build_project(
     // 编译
     let build_dir = sgl_port_dir.join("build");
     std::fs::create_dir_all(&build_dir).map_err(|e| format!("创建 build 目录失败: {}", e))?;
+
+    // 检测 CMakeCache.txt 中缓存的 generator 是否与当前目标一致
+    // 不一致（如用户之前用 MSYS2 的 Unix Makefiles 配置过）会导致 cmake 报错
+    let target_generator = "MinGW Makefiles";
+    let cache_file = build_dir.join("CMakeCache.txt");
+    if cache_file.exists() {
+        let cache_content = std::fs::read_to_string(&cache_file).unwrap_or_default();
+        let cached_generator = cache_content
+            .lines()
+            .find_map(|line| {
+                let trimmed = line.trim();
+                if trimmed.starts_with("CMAKE_GENERATOR:") {
+                    // 格式: CMAKE_GENERATOR:INTERNAL=Unix Makefiles
+                    if let Some(idx) = trimmed.find('=') {
+                        return Some(trimmed[idx + 1..].trim().to_string());
+                    }
+                }
+                None
+            })
+            .unwrap_or_default();
+        if !cached_generator.is_empty() && cached_generator != target_generator {
+            let _ = window.emit(
+                "build-log",
+                serde_json::json!({
+                    "message": format!("检测到 CMake 缓存的 generator 为 \"{}\"，与当前 \"{}\" 不一致，清理缓存重新配置", cached_generator, target_generator),
+                    "level": "info"
+                }),
+            );
+            let _ = std::fs::remove_file(&cache_file);
+            let _ = std::fs::remove_file(build_dir.join("Makefile"));
+            let cmake_files_dir = build_dir.join("CMakeFiles");
+            if cmake_files_dir.exists() {
+                let _ = std::fs::remove_dir_all(&cmake_files_dir);
+            }
+        }
+    }
 
     // 重新 cmake 配置，确保字模源文件 GLOB 最新，并实时输出到控制台
     let cmake_status = run_command_stream(
@@ -3990,6 +4484,7 @@ fn main() {
             export_code_to_project,
             check_toolchain,
             check_sgl_submodule_status,
+            update_sgl_submodules,
             clone_sgl_port,
             build_project,
             run_simulator,
@@ -4050,6 +4545,10 @@ mod tests {
             border_alpha: None,
             main_alpha: None,
             radius: None,
+            tl_radius: None,
+            tr_radius: None,
+            bl_radius: None,
+            br_radius: None,
             alpha: None,
             pixmap: None,
             pixmap_format: None,
@@ -4066,7 +4565,6 @@ mod tests {
             knob_color: None,
             text_color: None,
             on_color: None,
-            knob_radius: None,
             knob_margin: None,
             text_offset_x: None,
             text_offset_y: None,

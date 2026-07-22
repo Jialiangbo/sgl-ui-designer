@@ -37,6 +37,21 @@ export const SGL_ALIGN = {
   BOT_RIGHT: 'BOT_RIGHT'
 };
 
+/**
+ * 将不规范的对齐值映射为有效的 SGL 对齐宏名称
+ * 例如: LEFT -> LEFT_MID, RIGHT -> RIGHT_MID
+ */
+export function mapSglAlign(align) {
+  const map = {
+    LEFT: 'LEFT_MID',
+    RIGHT: 'RIGHT_MID',
+    TOP: 'TOP_MID',
+    BOTTOM: 'BOT_MID',
+    DOWN: 'BOT_MID'
+  };
+  return map[align] || align || 'CENTER';
+}
+
 // ============ 方向 ============
 export const SGL_DIRECT = {
   HORIZONTAL: 0,
@@ -61,6 +76,14 @@ export const SGL_WIDGET_TYPES = [
     category: 'basic',
     defaultSize: [120, 80],
     properties: ['color', 'alpha', 'mainAlpha', 'borderColor', 'borderAlpha', 'borderWidth', 'radius', 'pixmap', 'pixmapFormat', 'locked']
+  },
+  {
+    type: 'rect_ext',
+    name: '矩形(四角圆角)',
+    icon: '<svg viewBox="0 0 24 24"><path d="M5 5h14v14H5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" style="stroke-dasharray:3 2"/></svg>',
+    category: 'basic',
+    defaultSize: [120, 80],
+    properties: ['color', 'alpha', 'mainAlpha', 'borderColor', 'borderAlpha', 'borderWidth', 'tlRadius', 'trRadius', 'blRadius', 'brRadius', 'pixmap', 'pixmapFormat', 'locked']
   },
   {
     type: 'circle',
@@ -118,7 +141,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="10" rx="5"/><circle cx="16" cy="12" r="3"/></svg>',
     category: 'interactive',
     defaultSize: [60, 30],
-    properties: ['status', 'onColor', 'bgColor', 'knobColor', 'borderColor', 'borderWidth', 'radius', 'knobRadius', 'knobMargin', 'alpha', 'pixmap', 'pixmapFormat', 'locked']
+    properties: ['status', 'onColor', 'bgColor', 'knobColor', 'borderColor', 'borderWidth', 'radius', 'knobMargin', 'alpha', 'pixmap', 'pixmapFormat', 'locked']
   },
   {
     type: 'checkbox',
@@ -410,8 +433,8 @@ export const PROP_META = {
   qrText: { label: '二维码内容', type: 'text' },
   titleText: { label: '标题文本', type: 'text' },
   titleTextColor: { label: '标题文本颜色', type: 'color' },
-  leftSlots: { label: '左侧槽位文本', type: 'text', placeholder: '格式: 0:文本;1:文本 (最多4个)' },
-  rightSlots: { label: '右侧槽位文本', type: 'text', placeholder: '格式: 0:文本;1:文本 (最多8个)' },
+  leftSlots: { label: '左侧槽位', type: 'slots', side: 'left', maxCount: 4, placeholder: '靠左显示，依次向右' },
+  rightSlots: { label: '右侧槽位', type: 'slots', side: 'right', maxCount: 8, placeholder: '靠右显示，依次向左' },
   slotSpace: { label: '槽位间距', type: 'number', min: 0, max: 50 },
   leftMargin: { label: '左侧边距', type: 'number', min: 0, max: 50 },
   rightMargin: { label: '右侧边距', type: 'number', min: 0, max: 50 },
@@ -477,6 +500,10 @@ export const PROP_META = {
   borderWidth: { label: '边框宽度', type: 'number', min: 0, max: 50 },
   btnBorderWidth: { label: '按钮边框宽度', type: 'number', min: 0, max: 50 },
   radius: { label: '圆角半径', type: 'number', min: 0, max: 100 },
+  tlRadius: { label: '左上圆角', type: 'number', min: 0, max: 100 },
+  trRadius: { label: '右上圆角', type: 'number', min: 0, max: 100 },
+  blRadius: { label: '左下圆角', type: 'number', min: 0, max: 100 },
+  brRadius: { label: '右下圆角', type: 'number', min: 0, max: 100 },
   btnRadius: { label: '按钮圆角', type: 'number', min: 0, max: 100 },
   radiusIn: { label: '内半径', type: 'number', min: 0, max: 500 },
   radiusOut: { label: '外半径', type: 'number', min: 0, max: 500 },
@@ -505,8 +532,7 @@ export const PROP_META = {
   hidden: { label: '隐藏', type: 'bool' },
   showVScrollbar: { label: '显示垂直滚动条', type: 'bool' },
   showHScrollbar: { label: '显示水平滚动条', type: 'bool' },
-  knobRadius: { label: '旋钮圆角半径', type: 'number', min: 0, max: 255 },
-  knobMargin: { label: '旋钮边距', type: 'number', min: 0, max: 20 },
+  knobMargin: { label: '旋钮边距', type: 'number', min: -20, max: 20 },
   pixmapFormat: { label: '图片格式', type: 'select', options: [['RGB565', 'RGB565 (16-bit)'], ['ARGB4444', 'ARGB4444 (16-bit+透明度)'], ['RGB888', 'RGB888 (24-bit)'], ['ARGB8888', 'ARGB8888 (32-bit+透明度)'], ['RGB332', 'RGB332 (8-bit)'], ['ARGB2222', 'ARGB2222 (8-bit+透明度)'], ['RLE_RGB565', 'RLE_RGB565 (压缩16-bit)'], ['RLE_ARGB4444', 'RLE_ARGB4444 (压缩16-bit+透明度)'], ['RLE_RGB888', 'RLE_RGB888 (压缩24-bit)'], ['RLE_ARGB8888', 'RLE_ARGB8888 (压缩32-bit+透明度)'], ['RLE_RGB332', 'RLE_RGB332 (压缩8-bit)'], ['RLE_ARGB2222', 'RLE_ARGB2222 (压缩8-bit+透明度)']] },
   hubRadius: { label: '中心点半径', type: 'number', min: 0, max: 50 },
   mode: { label: '弧形模式', type: 'select', options: [[0, '普通'], [1, '圆环'], [2, '普通平滑'], [3, '圆环平滑']] },
@@ -724,7 +750,7 @@ export const WIDGET_EVENTS = {
 
 // ============ 组件分类 ============
 export const WIDGET_CATEGORIES = [
-  { id: 'basic', name: '基础图形', types: ['rect', 'circle', 'ring', 'arc', 'line', 'polygon'] },
+  { id: 'basic', name: '基础图形', types: ['rect', 'rect_ext', 'circle', 'ring', 'arc', 'line', 'polygon'] },
   { id: 'interactive', name: '交互组件', types: ['button', 'switch', 'checkbox', 'slider', 'numberkbd', 'keyboard', 'dropdown', 'roller'] },
   { id: 'text', name: '文本组件', types: ['label', 'textbox', 'textline', 'textlist', 'arc_label'] },
   { id: 'display', name: '显示组件', types: ['progress', 'bar', 'gauge', 'spectrum', 'battery', 'led', 'viewlist', 'qrcode', 'scope', 'chart', 'analogclock'] },
@@ -746,6 +772,8 @@ export function createWidgetDefaults(type) {
   switch (type) {
     case 'rect':
       return { ...base, color: '#FFFFFF', borderColor: '#000000', borderWidth: 2, borderAlpha: 255, radius: 0, mainAlpha: 255, pixmap: '', pixmapFormat: 'RGB565' };
+    case 'rect_ext':
+      return { ...base, color: '#FFFFFF', borderColor: '#000000', borderWidth: 2, borderAlpha: 255, tlRadius: 0, trRadius: 0, blRadius: 0, brRadius: 0, mainAlpha: 255, pixmap: '', pixmapFormat: 'RGB565' };
     case 'circle':
       return { ...base, color: '#FFFFFF', borderColor: '#000000', borderWidth: 2, radius: 0, xOffset: 0, yOffset: 0, pixmap: '', pixmapFormat: 'RGB565' };
     case 'ring':
@@ -759,7 +787,7 @@ export function createWidgetDefaults(type) {
     case 'button':
       return { ...base, text: '按钮', color: '#ffffff', textColor: '#000000', borderColor: '#000000', borderWidth: 2, radius: 0, align: 'CENTER', fontSize: 14, fontFamily: '', fontBpp: 4, pixmap: '', pixmapFormat: 'RGB565' };
     case 'switch':
-      return { ...base, status: false, onColor: '#FFFFFF', bgColor: '#000000', knobColor: '#808080', borderColor: '#000000', borderWidth: 2, radius: 0, knobRadius: 255, knobMargin: 2, pixmap: '', pixmapFormat: 'RGB565' };
+      return { ...base, status: false, onColor: '#FFFFFF', bgColor: '#000000', knobColor: '#808080', borderColor: '#000000', borderWidth: 2, radius: 0, knobMargin: 1, pixmap: '', pixmapFormat: 'RGB565' };
     case 'checkbox':
       return { ...base, text: '选项', color: '#000000', textColor: '#000000', boxColor: '#2196F3', checkColor: '#FFFFFF', status: false, radius: 0, fontSize: 14, fontFamily: '', fontBpp: 4 };
     case 'slider':
@@ -836,13 +864,14 @@ export function createWidgetDefaults(type) {
 // ============ 控件默认值（用于代码生成优化） ============
 export const WIDGET_DEFAULTS = {
   rect: { color: '#FFFFFF', alpha: 255, borderColor: '#000000', borderWidth: 2, borderAlpha: 255, radius: 0, mainAlpha: 255, pixmap: '', pixmapFormat: 'RGB565' },
+  rect_ext: { color: '#FFFFFF', alpha: 255, borderColor: '#000000', borderWidth: 2, borderAlpha: 255, tlRadius: 0, trRadius: 0, blRadius: 0, brRadius: 0, mainAlpha: 255, pixmap: '', pixmapFormat: 'RGB565' },
   circle: { color: '#FFFFFF', borderColor: '#000000', borderWidth: 2, radius: 0, xOffset: 0, yOffset: 0, alpha: 255, pixmap: '', pixmapFormat: 'RGB565' },
   ring: { color: '#FFFFFF', radiusIn: -1, radiusOut: -1, alpha: 255 },
   arc: { color: '#000000', bgColor: '#FFFFFF', alpha: 255, mode: 0, radiusIn: -1, radiusOut: -1, startAngle: 0, endAngle: 360 },
   line: { color: '#000000', lineWidth: 1, x1: 0, y1: 0, x2: null, y2: null, dashed: false, dashLen: 0, gapLen: 0, alpha: 255 },
   polygon: { fillColor: '#7F7F7F', borderColor: '#000000', borderWidth: 1, alpha: 255, vertices: '40,5;70,30;60,75;20,75;10,30', text: '', textColor: '#000000', fontFamily: '', fontSize: 14, fontBpp: 4 },
   button: { text: '按钮', color: '#ffffff', textColor: '#000000', borderColor: '#000000', borderWidth: 2, radius: 0, align: 'CENTER', fontSize: 14, fontFamily: '', fontBpp: 4, alpha: 255, pixmap: '', pixmapFormat: 'RGB565' },
-  switch: { status: false, onColor: '#FFFFFF', bgColor: '#000000', knobColor: '#808080', borderColor: '#000000', borderWidth: 2, radius: 0, knobRadius: 255, knobMargin: 0, alpha: 255, pixmap: '', pixmapFormat: 'RGB565' },
+  switch: { status: false, onColor: '#FFFFFF', bgColor: '#000000', knobColor: '#808080', borderColor: '#000000', borderWidth: 2, radius: 0, knobMargin: 1, alpha: 255, pixmap: '', pixmapFormat: 'RGB565' },
   checkbox: { text: '选项', color: '#000000', textColor: '#000000', boxColor: '#2196F3', checkColor: '#FFFFFF', status: false, radius: 0, fontSize: 14, fontFamily: '', fontBpp: 4, alpha: 255 },
   slider: { value: 50, direct: 0, fillColor: '#000000', trackColor: '#808080', knobColor: '#000000', borderWidth: 2, radius: 4, thickness: 255, alpha: 255 },
   numberkbd: { cellColor: '#FFFFFF', borderColor: '#000000', borderWidth: 2, radius: 0, fontFamily: '', fontSize: 14, fontBpp: 4, btnColor: '#FFFFFF', textColor: '#000000', btnMargin: 5, btnBorderWidth: 1, btnBorderColor: '#000000', btnRadius: 0, btnPixmap: '', pixmap: '', pixmapFormat: 'RGB565', alpha: 255 },
@@ -920,9 +949,12 @@ function getWidgetTextForFont(w) {
   if (w.type === 'dropdown' || w.type === 'roller' || w.type === 'textlist') {
     return w.options;
   }
-  // statusbar 使用 leftSlots/rightSlots 作为显示文本
+  // statusbar 使用所有槽位文本拼接作为显示文本
   if (w.type === 'statusbar') {
-    return (w.leftSlots || '') + (w.rightSlots || '');
+    const parseSlots = (s) => (typeof s === 'string' ? s.split(';').map(x => x.trim()).filter(x => x) : []);
+    const left = parseSlots(w.leftSlots).join(' ');
+    const right = parseSlots(w.rightSlots).join(' ');
+    return (left + ' ' + right).trim();
   }
   // gauge 始终显示刻度数字，不需要通过 text 属性判断
   if (w.type === 'gauge') {
@@ -1360,6 +1392,7 @@ function hexAlphaToAlpha(hex) {
 function getSglCreateFn(type) {
   const map = {
     'rect': 'sgl_rect_create',
+    'rect_ext': 'sgl_rect_ext_create',
     'circle': 'sgl_circle_create',
     'ring': 'sgl_ring_create',
     'arc': 'sgl_arc_create',
@@ -1421,6 +1454,26 @@ function getSglSetters(w) {
       if (shouldGenerateValue(w.borderWidth, defaults, 'borderWidth')) setters.push(`sgl_rect_set_border_width(${obj(w)}, ${w.borderWidth});`);
       if (shouldGenerateValue(w.radius, defaults, 'radius')) setters.push(`sgl_rect_set_radius(${obj(w)}, ${w.radius});`);
       emitAlphaGroup(setters, obj(w), 'sgl_rect', w.alpha, w.mainAlpha, w.borderAlpha);
+      break;
+
+    case 'rect_ext':
+      // 四角独立圆角矩形：图片和背景色二选一
+      if (shouldGeneratePixmap(w.pixmap)) {
+        setters.push(`sgl_rect_ext_set_pixmap(${obj(w)}, &${pixmapVarName(w.pixmap, w.pixmapFormat)});`);
+      } else if (shouldGenerateValue(w.color, defaults, 'color')) {
+        setters.push(`sgl_rect_ext_set_color(${obj(w)}, ${hexToSglColor(w.color)});`);
+      }
+      if (shouldGenerateValue(w.borderColor, defaults, 'borderColor')) setters.push(`sgl_rect_ext_set_border_color(${obj(w)}, ${hexToSglColor(w.borderColor)});`);
+      if (shouldGenerateValue(w.borderWidth, defaults, 'borderWidth')) setters.push(`sgl_rect_ext_set_border_width(${obj(w)}, ${w.borderWidth});`);
+      // 四角圆角：只要任一角非默认值就生成（API 一次设置四角）
+      const tlR = w.tlRadius || 0;
+      const trR = w.trRadius || 0;
+      const blR = w.blRadius || 0;
+      const brR = w.brRadius || 0;
+      if (tlR !== defaults.tlRadius || trR !== defaults.trRadius || blR !== defaults.blRadius || brR !== defaults.brRadius) {
+        setters.push(`sgl_rect_ext_set_radius(${obj(w)}, ${tlR}, ${trR}, ${blR}, ${brR});`);
+      }
+      emitAlphaGroup(setters, obj(w), 'sgl_rect_ext', w.alpha, w.mainAlpha, w.borderAlpha);
       break;
 
     case 'circle':
@@ -1500,7 +1553,7 @@ function getSglSetters(w) {
       if (shouldGenerateValue(w.borderColor, defaults, 'borderColor')) setters.push(`sgl_button_set_border_color(${obj(w)}, ${hexToSglColor(w.borderColor)});`);
       if (shouldGenerateValue(w.borderWidth, defaults, 'borderWidth')) setters.push(`sgl_button_set_border_width(${obj(w)}, ${w.borderWidth});`);
       if (shouldGenerateValue(w.radius, defaults, 'radius')) setters.push(`sgl_button_set_radius(${obj(w)}, ${w.radius});`);
-      if (shouldGenerateValue(w.align, defaults, 'align')) setters.push(`sgl_button_set_text_align(${obj(w)}, SGL_ALIGN_${w.align});`);
+      if (shouldGenerateValue(w.align, defaults, 'align')) setters.push(`sgl_button_set_text_align(${obj(w)}, SGL_ALIGN_${mapSglAlign(w.align)});`);
       if (shouldGenerateValue(w.alpha, defaults, 'alpha')) setters.push(`sgl_button_set_alpha(${obj(w)}, ${w.alpha});`);
       if (shouldGeneratePixmap(w.pixmap)) setters.push(`sgl_button_set_pixmap(${obj(w)}, &${pixmapVarName(w.pixmap, w.pixmapFormat)});`);
       break;
@@ -1513,7 +1566,7 @@ function getSglSetters(w) {
       if (shouldGenerateValue(w.text, defaults, 'text')) setters.push(`sgl_label_set_text(${obj(w)}, "${escapeStr(w.text)}");`);
       if (shouldGenerateValue(w.textColor, defaults, 'textColor')) setters.push(`sgl_label_set_text_color(${obj(w)}, ${hexToSglColor(w.textColor)});`);
       if (shouldGenerateValue(w.bgColor, defaults, 'bgColor') && w.bgColor !== 'transparent') setters.push(`sgl_label_set_bg_color(${obj(w)}, ${hexToSglColor(w.bgColor)});`);
-      if (shouldGenerateValue(w.align, defaults, 'align')) setters.push(`sgl_label_set_text_align(${obj(w)}, SGL_ALIGN_${w.align});`);
+      if (shouldGenerateValue(w.align, defaults, 'align')) setters.push(`sgl_label_set_text_align(${obj(w)}, SGL_ALIGN_${mapSglAlign(w.align)});`);
       if (shouldGenerateValue(w.radius, defaults, 'radius')) setters.push(`sgl_label_set_radius(${obj(w)}, ${w.radius});`);
       if (shouldGenerateValue(w.textOffsetX, defaults, 'textOffsetX') || shouldGenerateValue(w.textOffsetY, defaults, 'textOffsetY')) {
         setters.push(`sgl_label_set_text_offset(${obj(w)}, ${w.textOffsetX || 0}, ${w.textOffsetY || 0});`);
@@ -1734,7 +1787,7 @@ function getSglSetters(w) {
       if (shouldGenerateValue(w.borderWidth, defaults, 'borderWidth')) setters.push(`sgl_win_set_border_width(${obj(w)}, ${w.borderWidth});`);
       if (shouldGenerateValue(w.radius, defaults, 'radius')) setters.push(`sgl_win_set_radius(${obj(w)}, ${w.radius});`);
       if (shouldGenerateValue(w.titleHeight, defaults, 'titleHeight')) setters.push(`sgl_win_set_title_height(${obj(w)}, ${w.titleHeight});`);
-      if (shouldGenerateValue(w.titleAlign, defaults, 'titleAlign')) setters.push(`sgl_win_set_title_text_align(${obj(w)}, SGL_ALIGN_${w.titleAlign});`);
+      if (shouldGenerateValue(w.titleAlign, defaults, 'titleAlign')) setters.push(`sgl_win_set_title_text_align(${obj(w)}, SGL_ALIGN_${mapSglAlign(w.titleAlign)});`);
       if (shouldGeneratePixmap(w.pixmap)) setters.push(`sgl_win_set_pixmap(${obj(w)}, &${pixmapVarName(w.pixmap, w.pixmapFormat)});`);
       if (shouldGenerateFont(w, defaults)) {
         const fontId = getFontId(w.fontFamily, w.fontSize, w.fontBpp || 4);
@@ -2091,7 +2144,7 @@ function getSglSetters(w) {
         }
         // linechart 和 barchart 共有：开屏动画
         if (shouldGenerateValue(w.openAnim, defaults, 'openAnim')) setters.push(`${prefix}_enable_open_anim(${obj(w)}, ${w.openAnim ? 'true' : 'false'});`);
-        if (w.openAnim && shouldGenerateValue(w.openAnimDir, defaults, 'openAnimDir')) setters.push(`${prefix}_set_open_anim_dir(${obj(w)}, ${w.openAnimDir});`);
+        if (chartType !== 'piechart' && w.openAnim && shouldGenerateValue(w.openAnimDir, defaults, 'openAnimDir')) setters.push(`${prefix}_set_open_anim_dir(${obj(w)}, ${w.openAnimDir});`);
         if (chartType === 'barchart' && w.openAnim && shouldGenerateValue(w.openAnimDuration, defaults, 'openAnimDuration')) setters.push(`${prefix}_set_open_anim_duration(${obj(w)}, ${w.openAnimDuration});`);
       }
       break;
@@ -2165,28 +2218,31 @@ function getSglSetters(w) {
         const fontId = getFontId(w.fontFamily, w.fontSize, w.fontBpp || 4);
         setters.push(`sgl_statusbar_set_font(${obj(w)}, &${fontId});`);
       }
-      if (shouldGenerateValue(w.leftSlots, defaults, 'leftSlots') && w.leftSlots) {
-        w.leftSlots.split(';').map(s => s.trim()).filter(s => s).forEach(slot => {
-          const idx = slot.indexOf(':');
-          const index = idx >= 0 ? parseInt(slot.slice(0, idx).trim()) || 0 : 0;
-          const text = idx >= 0 ? slot.slice(idx + 1).trim() : slot;
-          setters.push(`sgl_statusbar_set_left_slot(${obj(w)}, ${index}, "${escapeStr(text)}");`);
-        });
+      // 左侧槽位（用 ; 拼接存储，最多 4 个）
+      {
+        const leftArr = (w.leftSlots || '').split(';').map(s => s.trim()).filter(s => s.length > 0);
+        for (let i = 0; i < leftArr.length && i < 4; i++) {
+          if (shouldGenerateValue(leftArr[i], defaults, `leftSlot${i}`)) {
+            setters.push(`sgl_statusbar_set_left_slot(${obj(w)}, ${i}, "${escapeStr(leftArr[i])}");`);
+          }
+        }
       }
-      if (shouldGenerateValue(w.rightSlots, defaults, 'rightSlots') && w.rightSlots) {
-        w.rightSlots.split(';').map(s => s.trim()).filter(s => s).forEach(slot => {
-          const idx = slot.indexOf(':');
-          const index = idx >= 0 ? parseInt(slot.slice(0, idx).trim()) || 0 : 0;
-          const text = idx >= 0 ? slot.slice(idx + 1).trim() : slot;
-          setters.push(`sgl_statusbar_set_right_slot(${obj(w)}, ${index}, "${escapeStr(text)}");`);
-        });
+      // 右侧槽位（用 ; 拼接存储，最多 8 个）
+      {
+        const rightArr = (w.rightSlots || '').split(';').map(s => s.trim()).filter(s => s.length > 0);
+        for (let i = 0; i < rightArr.length && i < 8; i++) {
+          if (shouldGenerateValue(rightArr[i], defaults, `rightSlot${i}`)) {
+            setters.push(`sgl_statusbar_set_right_slot(${obj(w)}, ${i}, "${escapeStr(rightArr[i])}");`);
+          }
+        }
       }
       if (shouldGenerateValue(w.slotColor, defaults, 'slotColor') || shouldGenerateValue(w.slotAlpha, defaults, 'slotAlpha')) {
         const colorVal = hexToSglColor(w.slotColor);
-        setters.push(`sgl_statusbar_set_left_slot_color(${obj(w)}, 0, ${colorVal});`);
-        setters.push(`sgl_statusbar_set_right_slot_color(${obj(w)}, 0, ${colorVal});`);
-        setters.push(`sgl_statusbar_set_left_slot_alpha(${obj(w)}, 0, ${w.slotAlpha || 255});`);
-        setters.push(`sgl_statusbar_set_right_slot_alpha(${obj(w)}, 0, ${w.slotAlpha || 255});`);
+        const alphaVal = w.slotAlpha || 255;
+        for (let i = 0; i < 4; i++) setters.push(`sgl_statusbar_set_left_slot_color(${obj(w)}, ${i}, ${colorVal});`);
+        for (let i = 0; i < 8; i++) setters.push(`sgl_statusbar_set_right_slot_color(${obj(w)}, ${i}, ${colorVal});`);
+        for (let i = 0; i < 4; i++) setters.push(`sgl_statusbar_set_left_slot_alpha(${obj(w)}, ${i}, ${alphaVal});`);
+        for (let i = 0; i < 8; i++) setters.push(`sgl_statusbar_set_right_slot_alpha(${obj(w)}, ${i}, ${alphaVal});`);
       }
       break;
 
@@ -2216,7 +2272,7 @@ function getSglSetters(w) {
 
     case 'icon':
       if (shouldGenerateValue(w.color, defaults, 'color')) setters.push(`sgl_icon_set_color(${obj(w)}, ${hexToSglColor(w.color)});`);
-      if (shouldGenerateValue(w.align, defaults, 'align')) setters.push(`sgl_icon_set_align(${obj(w)}, SGL_ALIGN_${w.align});`);
+      if (shouldGenerateValue(w.align, defaults, 'align')) setters.push(`sgl_icon_set_align(${obj(w)}, SGL_ALIGN_${mapSglAlign(w.align)});`);
       if (shouldGeneratePixmap(w.icon)) setters.push(`sgl_icon_set_icon(${obj(w)}, &${iconVarName(w.icon)});`);
       if (shouldGenerateValue(w.alpha, defaults, 'alpha')) setters.push(`sgl_icon_set_alpha(${obj(w)}, ${w.alpha});`);
       break;
@@ -2256,7 +2312,7 @@ function getSglSetters(w) {
         setters.push(`sgl_arc_label_set_bg_color(${obj(w)}, ${hexToSglColor(w.bgColor || '#FFFFFF')});`);
       }
       if (shouldGenerateValue(w.radius, defaults, 'radius')) setters.push(`sgl_arc_label_set_radius(${obj(w)}, ${w.radius});`);
-      if (shouldGenerateValue(w.align, defaults, 'align')) setters.push(`sgl_arc_label_set_text_align(${obj(w)}, SGL_ALIGN_${w.align});`);
+      if (shouldGenerateValue(w.align, defaults, 'align')) setters.push(`sgl_arc_label_set_text_align(${obj(w)}, SGL_ALIGN_${mapSglAlign(w.align)});`);
       if (shouldGenerateValue(w.alpha, defaults, 'alpha')) setters.push(`sgl_arc_label_set_alpha(${obj(w)}, ${w.alpha});`);
       // SGL arc_label 的 transform 是 union：offset 和 rotation 共享内存，不能同时设置
       // angle=0 时不生成 set_angle：set_angle 会调用 update_rotation_bounds，用 orig_w/orig_h（create 时为0）重置控件尺寸为 0x0，导致崩溃

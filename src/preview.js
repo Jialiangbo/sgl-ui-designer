@@ -395,6 +395,91 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
       break;
     }
 
+    case 'rect_ext': {
+      // 四角独立圆角矩形：严格移植 sgl_rect_ext.c 渲染算法
+      // 填充区域 rect_tmp = coords 四边缩进 border，圆角 = 各角 radius - border (min 0)
+      // 边框区域 = 原始 coords，圆角 = 各角 radius
+      const tl = w.tlRadius || 0;
+      const tr = w.trRadius || 0;
+      const bl = w.blRadius || 0;
+      const br = w.brRadius || 0;
+      const borderWidth = w.borderWidth != null ? w.borderWidth : 2;
+      const fillTl = Math.max(tl - borderWidth, 0);
+      const fillTr = Math.max(tr - borderWidth, 0);
+      const fillBl = Math.max(bl - borderWidth, 0);
+      const fillBr = Math.max(br - borderWidth, 0);
+      const alpha = w.alpha != null ? w.alpha : 255;
+      const mainAlpha = w.mainAlpha != null ? w.mainAlpha : 255;
+
+      if (w.pixmap) {
+        const pixmapFormat = w.pixmapFormat || 'RGB565';
+        const hasAlpha = pixmapFormatHasAlpha(pixmapFormat);
+        const imgData = getCachedPixmapImageData(w.pixmap);
+        if (imgData) {
+          // 图片已缓存：SGLRenderer 像素级渲染
+          const { surf, R } = createWidgetCanvas(el, w, z);
+          el.style.opacity = 1;
+          // 1. 填充背景色到 rect_tmp（coords 缩进 border），圆角 = radius - border
+          const bgColor = hasAlpha ? R.hexToColor(w.color || '#FFFFFF') : R.hexToColor('#000000');
+          R.drawFillRichRect(surf, borderWidth, borderWidth, w.width - 1 - borderWidth, w.height - 1 - borderWidth, fillTl, fillTr, fillBl, fillBr, bgColor, 255);
+          // 2. 绘制图片到 rect_tmp 区域（按格式量化）
+          R.drawPixmap(surf, borderWidth, borderWidth, w.width - 2 * borderWidth, w.height - 2 * borderWidth, imgData, pixmapFormat, Math.min(alpha, mainAlpha));
+          // 3. 用四角圆角 mask 裁剪 rect_tmp 圆角外的 pixmap 像素
+          const px1 = borderWidth, py1 = borderWidth, px2 = w.width - 1 - borderWidth, py2 = w.height - 1 - borderWidth;
+          const x_mid = (px1 + px2) >> 1;
+          const y_mid = (py1 + py2) >> 1;
+          for (let yy = py1; yy <= py2; yy++) {
+            for (let xx = px1; xx <= px2; xx++) {
+              let r = 0, cx = 0, cy = 0;
+              if (yy <= y_mid) {
+                if (xx <= x_mid) { r = fillTl; cx = px1 + r; cy = py1 + r; }
+                else { r = fillTr; cx = px2 - r; cy = py1 + r; }
+              } else {
+                if (xx <= x_mid) { r = fillBl; cx = px1 + r; cy = py2 - r; }
+                else { r = fillBr; cx = px2 - r; cy = py2 - r; }
+              }
+              if (r > 0) {
+                const in_x_straight = (xx <= x_mid) ? (xx >= cx) : (xx <= cx);
+                const in_y_straight = (yy <= y_mid) ? (yy >= cy) : (yy <= cy);
+                if (!in_x_straight && !in_y_straight) {
+                  const real_r2 = (xx - cx) * (xx - cx) + (yy - cy) * (yy - cy);
+                  if (real_r2 > r * r) {
+                    surf.buf32[yy * surf.w + xx] = 0;
+                  }
+                }
+              }
+            }
+          }
+          // 4. 绘制边框到原始 coords，圆角 = 各角 radius
+          if (borderWidth > 0) {
+            R.drawFillRectBorderRich(surf, 0, 0, w.width - 1, w.height - 1, tl, tr, bl, br, R.hexToColor(w.borderColor || '#000000'), borderWidth, alpha);
+          }
+          flushWidget(surf);
+        } else {
+          // 图片未缓存：CSS 占位 + 异步加载
+          el.style.backgroundColor = hasAlpha ? (w.color || '#FFFFFF') : '#000000';
+          const imgEl = document.createElement('div');
+          imgEl.style.cssText = `position:absolute;inset:0;background-size:100% 100%;background-position:0 0;border-radius:${tl * z}px ${tr * z}px ${br * z}px ${bl * z}px;opacity:${mainAlpha < 255 ? mainAlpha / 255 : 1};background-image:url('${toAssetUrl(w.pixmap)}');`;
+          el.appendChild(imgEl);
+          el.style.border = `${borderWidth * z}px solid ${w.borderColor || '#000000'}`;
+          el.style.borderRadius = `${tl * z}px ${tr * z}px ${br * z}px ${bl * z}px`;
+          preloadPixmapImage(w.pixmap, () => render());
+        }
+      } else {
+        // 纯色填充 + 边框：SGLRenderer 像素级渲染（严格 WYSIWYG）
+        const { surf, R } = createWidgetCanvas(el, w, z);
+        el.style.opacity = 1;
+        // 填充：rect_tmp = coords 缩进 border，圆角 = radius - border
+        R.drawFillRichRect(surf, borderWidth, borderWidth, w.width - 1 - borderWidth, w.height - 1 - borderWidth, fillTl, fillTr, fillBl, fillBr, R.hexToColor(w.color || '#FFFFFF'), Math.min(alpha, mainAlpha));
+        // 边框：原始 coords，圆角 = radius
+        if (borderWidth > 0) {
+          R.drawFillRectBorderRich(surf, 0, 0, w.width - 1, w.height - 1, tl, tr, bl, br, R.hexToColor(w.borderColor || '#000000'), borderWidth, alpha);
+        }
+        flushWidget(surf);
+      }
+      break;
+    }
+
     case 'circle': {
       // SGL 圆形：实际渲染半径 = width / 2（radius 属性只影响对象尺寸，不影响渲染半径）
       if (w.pixmap) {
@@ -744,42 +829,101 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
           el.style.borderRadius = swRadius + 'px';
           preloadPixmapImage(swPixmap, () => render());
         }
-        // knob 用 div 绘制（无论图片是否缓存）
-        const swMargin = ((w.knobMargin != null ? w.knobMargin : 0) + (w.borderWidth || 2)) * z;
-        const trackH = w.height * z, trackW = w.width * z;
-        const swKnobRadius = (w.knobRadius || 255) * z;
-        const knobSize = Math.max(0, trackH - 2 * swMargin);
-        const knobCorner = Math.min(Math.max(0, swRadius - swMargin), swKnobRadius);
-        const knobY = swMargin;
-        const knobX = swOn ? trackW - knobSize - swMargin : swMargin;
+        // knob 用 div 绘制（无论图片是否缓存，严格移植自 sgl_switch.c）
+        // SGL: obj_h = obj->coords.y2 - obj->coords.y1 = (H-1) - 0 = H-1（coords.y2 是包含的最后一个像素）
+        const swMarginRaw = w.knobMargin != null ? w.knobMargin : 1;
+        const swBorderRaw = w.borderWidth != null ? w.borderWidth : 2;
+        let knobOffsetRaw, bgInsetRaw;
+        if (swMarginRaw >= 0) {
+          knobOffsetRaw = swMarginRaw + swBorderRaw;
+          bgInsetRaw = 0;
+        } else {
+          knobOffsetRaw = swBorderRaw;
+          bgInsetRaw = -swMarginRaw;
+        }
+        const trackH = w.height - 1, trackW = w.width - 1;
+        let knobSizeRaw = Math.max(0, trackH - 2 * knobOffsetRaw);
+        const bgDrawHRaw = trackH - 2 * bgInsetRaw;
+        const bgRRaw = Math.min(swRadius, Math.floor(bgDrawHRaw / 2));
+        let knobRRaw;
+        if (swMarginRaw >= 0) {
+          knobRRaw = bgRRaw - Math.floor(knobOffsetRaw / 2);
+        } else {
+          knobRRaw = Math.min(swRadius - swBorderRaw + 1, Math.floor(knobSizeRaw / 2));
+        }
+        if (knobRRaw < 0) knobRRaw = 0;
+        // CSS width/height 是像素数，SGL knob_size 是坐标差（y2-y1），像素数 = knob_size + 1
+        const knobSize = (knobSizeRaw + 1) * z;
+        const knobCorner = knobRRaw * z;
+        const knobY = knobOffsetRaw * z;
+        const knobX = swOn ? (trackW - knobSizeRaw - knobOffsetRaw) * z : (knobOffsetRaw * z);
         const knob = document.createElement('div');
         knob.style.cssText = `position:absolute;left:${knobX}px;top:${knobY}px;width:${knobSize}px;height:${knobSize}px;border-radius:${knobCorner}px;background:${w.knobColor || '#808080'};`;
         el.appendChild(knob);
       } else {
-        // SGLRenderer 像素级渲染：背景矩形 + knob 矩形
+        // SGLRenderer 像素级渲染（严格移植自 sgl_switch.c sgl_switch_construct_cb）
         const { surf, R } = createWidgetCanvas(el, w, z);
         el.style.opacity = 1;
         const alpha = w.alpha != null ? w.alpha : 255;
-        const swBorderW = w.borderWidth != null ? w.borderWidth : 2;
+        const swBorder = w.borderWidth != null ? w.borderWidth : 2;
+        const swMargin = w.knobMargin != null ? w.knobMargin : 1;
         const swRadius = w.radius != null ? w.radius : 0;
-        const swMargin = (w.knobMargin != null ? w.knobMargin : 0) + swBorderW;
-        const swKnobRadius = w.knobRadius != null ? w.knobRadius : 255;
-        // 背景：status=true 用 onColor(白)，false 用 bgColor(黑)
+
+        // SGL: knob_offset / knob_size / bg_inset
+        // SGL: obj_h = obj->coords.y2 - obj->coords.y1 = (H-1) - 0 = H-1（coords.y2 是包含的最后一个像素）
+        let knobOffset, bgInset;
+        if (swMargin >= 0) {
+          knobOffset = swMargin + swBorder;
+          bgInset = 0;
+        } else {
+          knobOffset = swBorder;
+          bgInset = -swMargin;
+        }
+        const objH = w.height - 1;
+        let knobSize = objH - 2 * knobOffset;
+        if (knobSize < 0) knobSize = 0;
+
+        // SGL: bg_rect 按 bg_inset 缩进
+        let bgX1 = 0, bgY1 = 0, bgX2 = w.width - 1, bgY2 = w.height - 1;
+        if (bgInset > 0) {
+          bgX1 += bgInset; bgX2 -= bgInset;
+          bgY1 += bgInset; bgY2 -= bgInset;
+        }
+        const bgDrawH = bgY2 - bgY1;
+        const bgR = Math.min(swRadius, Math.floor(bgDrawH / 2));
+
+        // SGL: knob_r
+        let knobR;
+        if (swMargin >= 0) {
+          knobR = bgR - Math.floor(knobOffset / 2);
+        } else {
+          knobR = Math.min(swRadius - swBorder + 1, Math.floor(knobSize / 2));
+        }
+        if (knobR < 0) knobR = 0;
+
+        // SGL: knob_rect Y
+        const knobY1 = knobOffset;
+        const knobY2 = knobY1 + knobSize;
+
+        // SGL: 背景 draw_rect
         const bgCol = R.hexToColor(swOn ? (w.onColor || '#FFFFFF') : (w.bgColor || '#000000'));
-        R.drawRect(surf, 0, 0, w.width - 1, w.height - 1, {
-          alpha: alpha, border: swBorderW, border_alpha: alpha, border_mask: 0,
+        R.drawRect(surf, bgX1, bgY1, bgX2, bgY2, {
+          alpha: alpha, border_alpha: alpha, border: swBorder, border_mask: 0,
           color: bgCol,
           border_color: R.hexToColor(w.borderColor || '#000000'),
-          radius: swRadius
+          radius: bgR
         });
-        // knob：正方形，圆角（margin = knob_margin + border, knob 宽 = h - 2*margin）
-        const knobSize = Math.max(0, w.height - 2 * swMargin);
-        const knobCorner = Math.min(Math.max(0, swRadius - swMargin), swKnobRadius);
-        const knobY1 = swMargin;
-        const knobX1 = swOn ? (w.width - knobSize - swMargin) : swMargin;
+        // SGL: knob draw_fill_rect
         if (knobSize > 0) {
-          R.drawFillRect(surf, knobX1, knobY1, knobX1 + knobSize - 1, knobY1 + knobSize - 1,
-            knobCorner, R.hexToColor(w.knobColor || '#808080'), alpha);
+          let kx1, kx2;
+          if (swOn) {
+            kx2 = (w.width - 1) - knobOffset;
+            kx1 = kx2 - knobSize;
+          } else {
+            kx1 = knobOffset;
+            kx2 = kx1 + knobSize;
+          }
+          R.drawFillRect(surf, kx1, knobY1, kx2, knobY2, knobR, R.hexToColor(w.knobColor || '#808080'), alpha);
         }
         flushWidget(surf);
       }

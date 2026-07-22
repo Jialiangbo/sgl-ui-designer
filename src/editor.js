@@ -18,7 +18,7 @@ initNav('editor');
 setupWindowControls();
 setupUpdateChecker();
 AppState.init();
-// initAIPanel(); // AI 助手已屏蔽
+initAIPanel();
 setFontLoadCallback(() => renderCanvas());
 setCodegenLogCallback((message, level) => logMessage(message, level));
 
@@ -1320,6 +1320,93 @@ function renderWidgetVisual(el, w, renderSize) {
       break;
     }
 
+    case 'rect_ext': {
+      // 四角独立圆角矩形：严格移植 sgl_rect_ext.c 渲染算法
+      // 填充区域 rect_tmp = coords 四边缩进 border，圆角 = 各角 radius - border (min 0)
+      // 边框区域 = 原始 coords，圆角 = 各角 radius
+      const borderAlphaVal = p('borderAlpha', 255);
+      const borderColor = p('borderColor', '#000000');
+      const borderWidth = p('borderWidth', 2);
+      const tl = p('tlRadius', 0);
+      const tr = p('trRadius', 0);
+      const bl = p('blRadius', 0);
+      const br = p('brRadius', 0);
+      const rectCol = p('color', '#FFFFFF');
+      const mainAlphaVal = p('mainAlpha', 255);
+      // 填充圆角 = 各角 radius - border (min 0)，对应 SGL: left=tl-border, right=tr-border, bottom=bl-border, top=br-border
+      const fillTl = Math.max(tl - borderWidth, 0);
+      const fillTr = Math.max(tr - borderWidth, 0);
+      const fillBl = Math.max(bl - borderWidth, 0);
+      const fillBr = Math.max(br - borderWidth, 0);
+
+      const pixmap = p('pixmap', '');
+      if (pixmap) {
+        const pixmapFormat = p('pixmapFormat', 'RGB565');
+        const hasAlpha = pixmapFormatHasAlpha(pixmapFormat);
+        const imgData = getCachedPixmapImageData(pixmap);
+        if (imgData) {
+          // 图片已缓存：SGLRenderer 像素级渲染
+          const surf = sglSurface();
+          // 1. 填充背景色到 rect_tmp（coords 缩进 border），圆角 = radius - border
+          const bgColor = hasAlpha ? SGLR.hexToColor(rectCol) : SGLR.hexToColor('#000000');
+          SGLR.drawFillRichRect(surf, borderWidth, borderWidth, w.width - 1 - borderWidth, w.height - 1 - borderWidth, fillTl, fillTr, fillBl, fillBr, bgColor, 255);
+          // 2. 绘制图片到 rect_tmp 区域（按格式量化）
+          SGLR.drawPixmap(surf, borderWidth, borderWidth, w.width - 2 * borderWidth, w.height - 2 * borderWidth, imgData, pixmapFormat, mainAlphaVal);
+          // 3. 用四角圆角 mask 裁剪 rect_tmp 圆角外的 pixmap 像素（让背景色透出）
+          const px1 = borderWidth, py1 = borderWidth, px2 = w.width - 1 - borderWidth, py2 = w.height - 1 - borderWidth;
+          const x_mid = (px1 + px2) >> 1;
+          const y_mid = (py1 + py2) >> 1;
+          for (let yy = py1; yy <= py2; yy++) {
+            for (let xx = px1; xx <= px2; xx++) {
+              let r = 0, cx = 0, cy = 0;
+              if (yy <= y_mid) {
+                if (xx <= x_mid) { r = fillTl; cx = px1 + r; cy = py1 + r; }
+                else { r = fillTr; cx = px2 - r; cy = py1 + r; }
+              } else {
+                if (xx <= x_mid) { r = fillBl; cx = px1 + r; cy = py2 - r; }
+                else { r = fillBr; cx = px2 - r; cy = py2 - r; }
+              }
+              if (r > 0) {
+                const in_x_straight = (xx <= x_mid) ? (xx >= cx) : (xx <= cx);
+                const in_y_straight = (yy <= y_mid) ? (yy >= cy) : (yy <= cy);
+                if (!in_x_straight && !in_y_straight) {
+                  const real_r2 = (xx - cx) * (xx - cx) + (yy - cy) * (yy - cy);
+                  if (real_r2 > r * r) {
+                    surf.buf32[yy * surf.w + xx] = 0; // 清除圆角外像素
+                  }
+                }
+              }
+            }
+          }
+          // 4. 绘制边框到原始 coords，圆角 = 各角 radius
+          if (borderWidth > 0) {
+            SGLR.drawFillRectBorderRich(surf, 0, 0, w.width - 1, w.height - 1, tl, tr, bl, br, SGLR.hexToColor(borderColor), borderWidth, borderAlphaVal);
+          }
+          SGLR.flushSurface(surf);
+        } else {
+          // 图片未缓存：CSS 占位 + 异步加载
+          el.style.border = `${borderWidth * z}px solid ${borderColor}`;
+          el.style.borderRadius = `${tl * z}px ${tr * z}px ${br * z}px ${bl * z}px`;
+          el.style.backgroundColor = hasAlpha ? rectCol : '#000000';
+          const imgEl = document.createElement('div');
+          imgEl.style.cssText = `position:absolute;inset:0;background-size:100% 100%;background-position:0 0;border-radius:${tl * z}px ${tr * z}px ${br * z}px ${bl * z}px;opacity:${mainAlphaVal < 255 ? mainAlphaVal / 255 : 1};background-image:url('${toAssetUrl(pixmap)}');`;
+          el.appendChild(imgEl);
+          preloadPixmapImage(pixmap, () => renderCanvas());
+        }
+      } else {
+        // 纯色填充 + 边框：用 SGLRenderer 像素级渲染（严格 WYSIWYG）
+        const surf = sglSurface();
+        // 填充：rect_tmp = coords 缩进 border，圆角 = radius - border
+        SGLR.drawFillRichRect(surf, borderWidth, borderWidth, w.width - 1 - borderWidth, w.height - 1 - borderWidth, fillTl, fillTr, fillBl, fillBr, SGLR.hexToColor(rectCol), mainAlphaVal);
+        // 边框：原始 coords，圆角 = radius
+        if (borderWidth > 0) {
+          SGLR.drawFillRectBorderRich(surf, 0, 0, w.width - 1, w.height - 1, tl, tr, bl, br, SGLR.hexToColor(borderColor), borderWidth, borderAlphaVal);
+        }
+        SGLR.flushSurface(surf);
+      }
+      break;
+    }
+
     case 'circle': {
       // SGL 圆形：实际渲染半径 = 直径 / 2，圆心 = 中心 + offset
       // el 尺寸由 drawWidget 基于 radius 计算，surface 逻辑尺寸需与之匹配
@@ -1694,41 +1781,73 @@ function renderWidgetVisual(el, w, renderSize) {
     }
 
     case 'switch': {
-      // SGL switch: margin = knob_margin + border；轨道矩形 + 滑块正方形
-      // 用 SGLRenderer 像素级渲染
+      // SGL switch 算法（严格移植自 sgl_switch.c sgl_switch_construct_cb）
       const swOn = p('status', false);
-      const swBorderW = p('borderWidth', 2);
-      const swMargin = (p('knobMargin', 0) + swBorderW);
+      const swBorder = p('borderWidth', 2);
+      const swMargin = p('knobMargin', 1);
       const swRadius = p('radius', 0);
-      const swKnobRadiusDef = p('knobRadius', 255);
-      const swTrackColor = swOn ? p('color', '#FFFFFF') : p('bgColor', '#000000');
+      const swTrackColor = swOn ? p('onColor', '#FFFFFF') : p('bgColor', '#000000');
       const swBorderCol = p('borderColor', '#000000');
       const swKnobColor = SGLR.hexToColor(p('knobColor', '#808080'));
 
-      const surf = sglSurface(w.width, w.height);
-      // 轨道：status=true 用 color，false 用 bgColor
-      SGLR.drawRect(surf, 0, 0, w.width - 1, w.height - 1, {
-        alpha: alpha,
-        border: swBorderW,
-        border_alpha: alpha,
-        border_mask: 0,
-        color: SGLR.hexToColor(swTrackColor),
-        radius: swRadius,
-        border_color: SGLR.hexToColor(swBorderCol),
-      });
-      // 滑块（正方形）：knob 边长 = h - 2*margin
-      const knobW = Math.max(0, w.height - 2 * swMargin);
-      const knobRadius = Math.min(Math.max(0, swRadius - swMargin), swKnobRadiusDef);
-      let kx1, kx2;
-      if (swOn) {
-        kx2 = w.width - 1 - swMargin;
-        kx1 = kx2 - knobW;
+      // SGL: knob_offset / knob_size / bg_inset 计算
+      // SGL: obj_h = obj->coords.y2 - obj->coords.y1 = (H-1) - 0 = H-1（coords.y2 是包含的最后一个像素）
+      let knobOffset, bgInset;
+      if (swMargin >= 0) {
+        knobOffset = swMargin + swBorder;
+        bgInset = 0;
       } else {
-        kx1 = swMargin;
-        kx2 = kx1 + knobW;
+        knobOffset = swBorder;
+        bgInset = -swMargin;
       }
-      if (knobW > 0) {
-        SGLR.drawFillRect(surf, kx1, swMargin, kx1 + knobW, w.height - 1 - swMargin, knobRadius, swKnobColor, alpha);
+      const objH = w.height - 1;
+      let knobSize = objH - 2 * knobOffset;
+      if (knobSize < 0) knobSize = 0;
+
+      // SGL: bg_rect = obj->coords，按 bg_inset 缩进
+      let bgX1 = 0, bgY1 = 0, bgX2 = w.width - 1, bgY2 = w.height - 1;
+      if (bgInset > 0) {
+        bgX1 += bgInset; bgX2 -= bgInset;
+        bgY1 += bgInset; bgY2 -= bgInset;
+      }
+      const bgDrawH = bgY2 - bgY1;
+      const bgR = Math.min(swRadius, Math.floor(bgDrawH / 2));
+
+      // SGL: knob_r 计算
+      let knobR;
+      if (swMargin >= 0) {
+        knobR = bgR - Math.floor(knobOffset / 2);
+      } else {
+        knobR = Math.min(swRadius - swBorder + 1, Math.floor(knobSize / 2));
+      }
+      if (knobR < 0) knobR = 0;
+
+      // SGL: knob_rect Y 坐标
+      const knobY1 = knobOffset;
+      const knobY2 = knobY1 + knobSize;
+
+      const surf = sglSurface(w.width, w.height);
+      // SGL: draw_rect 背景
+      SGLR.drawRect(surf, bgX1, bgY1, bgX2, bgY2, {
+        alpha: alpha,
+        border_alpha: alpha,
+        border: swBorder,
+        color: SGLR.hexToColor(swTrackColor),
+        border_color: SGLR.hexToColor(swBorderCol),
+        border_mask: 0,
+        radius: bgR,
+      });
+      // SGL: knob_rect X 坐标 + draw_fill_rect
+      if (knobSize > 0) {
+        let kx1, kx2;
+        if (swOn) {
+          kx2 = (w.width - 1) - knobOffset;
+          kx1 = kx2 - knobSize;
+        } else {
+          kx1 = knobOffset;
+          kx2 = kx1 + knobSize;
+        }
+        SGLR.drawFillRect(surf, kx1, knobY1, kx2, knobY2, knobR, swKnobColor, alpha);
       }
       SGLR.flushSurface(surf);
       break;
@@ -3995,21 +4114,10 @@ function renderWidgetVisual(el, w, renderSize) {
       const sbSlotAlpha = p('slotAlpha', 255);
       const sbFontFamily = p('fontFamily', '');
 
-      // 解析槽位文本（格式: 0:文本;1:文本）
-      const parseSbSlots = (str) => {
-        const map = {};
-        (str || '').split(';').map(s => s.trim()).filter(s => s).forEach(slot => {
-          const idx = slot.indexOf(':');
-          const index = idx >= 0 ? (parseInt(slot.slice(0, idx).trim()) || 0) : 0;
-          const text = idx >= 0 ? slot.slice(idx + 1).trim() : slot;
-          map[index] = text;
-        });
-        return map;
-      };
-      const sbLeftMap = parseSbSlots(p('leftSlots', ''));
-      const sbRightMap = parseSbSlots(p('rightSlots', ''));
-      const sbText = p('text', '');
-      if (sbText && sbLeftMap[0] === undefined) sbLeftMap[0] = sbText;
+      // 解析槽位字符串（用 ; 拼接）
+      const parseSlotsStr = (s) => (typeof s === 'string' ? s.split(';').map(x => x.trim()).filter(x => x.length > 0) : []);
+      const sbLeftSlots = parseSlotsStr(p('leftSlots', ''));
+      const sbRightSlots = parseSlotsStr(p('rightSlots', ''));
 
       const surf = sglSurface(w.width, w.height);
       // 半透明背景
@@ -4026,23 +4134,25 @@ function renderWidgetVisual(el, w, renderSize) {
 
       // 左侧槽位（从左到右，DOM 叠加）
       let leftX = sbLeftMargin;
-      for (let i = 0; i < 4; i++) {
-        if (sbLeftMap[i] === undefined) continue;
+      for (let i = 0; i < sbLeftSlots.length && i < 4; i++) {
+        const slotText = sbLeftSlots[i];
+        if (!slotText) continue;
         const span = document.createElement('span');
         span.style.cssText = `position:absolute;left:${leftX * z}px;top:${sbPosY * z}px;color:${sbSlotColorCss};font-size:${sbFontSize * z}px;font-family:${sbCssFamily};pointer-events:none;white-space:nowrap;opacity:${sbSlotOpacity};filter:var(--sgl-bpp-filter,none);`;
-        span.textContent = sbLeftMap[i];
+        span.textContent = slotText;
         el.appendChild(span);
-        leftX += SGLR.stringWidth(sbLeftMap[i], sbFontSize) + sbSlotSpace;
+        leftX += SGLR.stringWidth(slotText, sbFontSize) + sbSlotSpace;
       }
       // 右侧槽位（从右到左，DOM 叠加）
       let rightX = w.width - sbRightMargin;
-      for (let i = 0; i < 8; i++) {
-        if (sbRightMap[i] === undefined) continue;
-        const tw = SGLR.stringWidth(sbRightMap[i], sbFontSize);
+      for (let i = 0; i < sbRightSlots.length && i < 8; i++) {
+        const slotText = sbRightSlots[i];
+        if (!slotText) continue;
+        const tw = SGLR.stringWidth(slotText, sbFontSize);
         rightX -= tw;
         const span = document.createElement('span');
         span.style.cssText = `position:absolute;left:${rightX * z}px;top:${sbPosY * z}px;color:${sbSlotColorCss};font-size:${sbFontSize * z}px;font-family:${sbCssFamily};pointer-events:none;white-space:nowrap;opacity:${sbSlotOpacity};filter:var(--sgl-bpp-filter,none);`;
-        span.textContent = sbRightMap[i];
+        span.textContent = slotText;
         el.appendChild(span);
         rightX -= sbSlotSpace;
       }
@@ -4852,6 +4962,50 @@ function renderWidgetProps() {
       html += `</div>`;
       html += `<button type="button" class="option-add-btn" style="background:var(--accent);color:#fff;border:none;border-radius:4px;padding:4px 10px;font-size:12px;cursor:pointer;width:100%;">+ 添加选项</button>`;
       html += `</div>`;
+    } else if (meta && meta.type === 'slots') {
+      // statusbar 槽位：可添加/删除的列表，内部用 ; 拼接字符串存储
+      const slots = (typeof rawVal === 'string' ? rawVal : '').split(';').map(s => s.trim()).filter(s => s.length > 0);
+      const maxCount = meta.maxCount || 4;
+      const sideLabel = meta.side === 'right' ? '右' : '左';
+      const placeholder = meta.placeholder || '槽位文本';
+      html += `<div class="form-group" data-slots-group data-slots-side="${meta.side || 'left'}">`;
+      html += `<label class="form-label">${label} <span style="font-weight:normal;color:var(--text-muted);font-size:10px;">(${sideLabel}侧，最多 ${maxCount} 个)</span></label>`;
+      html += `<div class="slots-list" style="display:flex;flex-direction:column;gap:4px;margin-bottom:6px;">`;
+      if (slots.length === 0) {
+        html += `<div style="font-size:11px;color:var(--text-muted);padding:2px 0;">暂无槽位</div>`;
+      } else {
+        slots.forEach((s, idx) => {
+          html += `<div class="slot-item" style="display:flex;gap:4px;align-items:center;">`;
+          html += `<span style="font-size:10px;color:var(--text-muted);width:18px;text-align:center;">${idx}</span>`;
+          html += `<input type="text" class="form-input slot-input" data-slot-idx="${idx}" value="${escapeAttr(s)}" placeholder="${placeholder}" style="flex:1;font-size:12px;" />`;
+          html += `<button type="button" class="slot-delete-btn" data-slot-idx="${idx}" title="删除" style="background:none;color:#ef4444;border:none;cursor:pointer;font-size:14px;padding:2px 6px;">✕</button>`;
+          html += `</div>`;
+        });
+      }
+      html += `</div>`;
+      const disabled = slots.length >= maxCount ? 'disabled style="background:var(--accent);color:#fff;border:none;border-radius:4px;padding:4px 10px;font-size:12px;cursor:not-allowed;width:100%;opacity:0.5;"' : 'style="background:var(--accent);color:#fff;border:none;border-radius:4px;padding:4px 10px;font-size:12px;cursor:pointer;width:100%;"';
+      html += `<button type="button" class="slot-add-btn" ${disabled}>+ 添加${sideLabel}侧槽位</button>`;
+      html += `</div>`;
+    } else if (prop === 'barValues') {
+      // spectrum 柱值：可添加/删除的列表，内部用 ; 拼接字符串存储
+      const vals = (typeof rawVal === 'string' ? rawVal : '').split(';').map(s => s.trim()).filter(s => s.length > 0);
+      html += `<div class="form-group" data-barvalues-group>`;
+      html += `<label class="form-label">${label} <span style="font-weight:normal;color:var(--text-muted);font-size:10px;">(0-100 百分比)</span></label>`;
+      html += `<div class="barvalues-list" style="display:flex;flex-direction:column;gap:4px;margin-bottom:6px;">`;
+      if (vals.length === 0) {
+        html += `<div style="font-size:11px;color:var(--text-muted);padding:2px 0;">暂无柱值（默认用 sin 模拟）</div>`;
+      } else {
+        vals.forEach((v, idx) => {
+          html += `<div class="barvalue-item" style="display:flex;gap:4px;align-items:center;">`;
+          html += `<span style="font-size:10px;color:var(--text-muted);width:18px;text-align:center;">${idx}</span>`;
+          html += `<input type="number" class="form-input barvalue-input" data-barvalue-idx="${idx}" value="${escapeAttr(v)}" placeholder="0-100" min="0" max="100" style="flex:1;font-size:12px;" />`;
+          html += `<button type="button" class="barvalue-delete-btn" data-barvalue-idx="${idx}" title="删除" style="background:none;color:#ef4444;border:none;cursor:pointer;font-size:14px;padding:2px 6px;">✕</button>`;
+          html += `</div>`;
+        });
+      }
+      html += `</div>`;
+      html += `<button type="button" class="barvalue-add-btn" style="background:var(--accent);color:#fff;border:none;border-radius:4px;padding:4px 10px;font-size:12px;cursor:pointer;width:100%;">+ 添加柱值</button>`;
+      html += `</div>`;
     } else if (prop === 'vertices') {
       // 多边形顶点：每行 X+Y 输入框，可添加/删除，内部用 x,y; 格式拼接
       const verts = (typeof rawVal === 'string' ? rawVal : '').split(';').map(s => s.trim()).filter(s => s);
@@ -5459,6 +5613,104 @@ function renderWidgetProps() {
         const opts = (typeof wgt.options === 'string' ? wgt.options : '').split('\n');
         opts[idx] = input.value;
         AppState.updateWidget(w.id, { options: opts.join('\n') });
+      });
+    });
+  }
+
+  // statusbar 槽位（leftSlots/rightSlots）添加/删除/编辑
+  const slotsGroups = widgetPropContent.querySelectorAll('[data-slots-group]');
+  slotsGroups.forEach(slotsGroup => {
+    const side = slotsGroup.dataset.slotsSide || 'left';
+    const propName = side === 'right' ? 'rightSlots' : 'leftSlots';
+    const meta = PROP_META[propName] || {};
+    const maxCount = meta.maxCount || 4;
+
+    const parseSlots = (s) => (typeof s === 'string' ? s.split(';').map(x => x.trim()).filter(x => x.length > 0) : []);
+
+    slotsGroup.querySelector('.slot-add-btn').addEventListener('click', () => {
+      const wgt = AppState.getWidget(w.id);
+      if (!wgt) return;
+      const slots = parseSlots(wgt[propName]);
+      if (slots.length >= maxCount) return;
+      slots.push(`槽位${slots.length}`);
+      AppState.updateWidget(w.id, { [propName]: slots.join(';') });
+    });
+
+    slotsGroup.querySelectorAll('.slot-delete-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const wgt = AppState.getWidget(w.id);
+        if (!wgt) return;
+        const idx = parseInt(btn.dataset.slotIdx);
+        const slots = parseSlots(wgt[propName]);
+        slots.splice(idx, 1);
+        AppState.updateWidget(w.id, { [propName]: slots.join(';') });
+      });
+    });
+
+    slotsGroup.querySelectorAll('.slot-input').forEach(input => {
+      input.addEventListener('input', () => {
+        const wgt = AppState.getWidget(w.id);
+        if (!wgt) return;
+        const idx = parseInt(input.dataset.slotIdx);
+        const slots = parseSlots(wgt[propName]);
+        slots[idx] = input.value;
+        wgt[propName] = slots.join(';');
+        renderCanvas();
+        AppState.save();
+      });
+      input.addEventListener('blur', () => {
+        const wgt = AppState.getWidget(w.id);
+        if (!wgt) return;
+        const idx = parseInt(input.dataset.slotIdx);
+        const slots = parseSlots(wgt[propName]);
+        slots[idx] = input.value;
+        AppState.updateWidget(w.id, { [propName]: slots.join(';') });
+      });
+    });
+  });
+
+  // spectrum 柱值（barValues）添加/删除/编辑
+  const barvaluesGroup = widgetPropContent.querySelector('[data-barvalues-group]');
+  if (barvaluesGroup) {
+    const parseVals = (s) => (typeof s === 'string' ? s.split(';').map(x => x.trim()).filter(x => x.length > 0) : []);
+
+    barvaluesGroup.querySelector('.barvalue-add-btn').addEventListener('click', () => {
+      const wgt = AppState.getWidget(w.id);
+      if (!wgt) return;
+      const vals = parseVals(wgt.barValues);
+      vals.push('50');
+      AppState.updateWidget(w.id, { barValues: vals.join(';') });
+    });
+
+    barvaluesGroup.querySelectorAll('.barvalue-delete-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const wgt = AppState.getWidget(w.id);
+        if (!wgt) return;
+        const idx = parseInt(btn.dataset.barvalueIdx);
+        const vals = parseVals(wgt.barValues);
+        vals.splice(idx, 1);
+        AppState.updateWidget(w.id, { barValues: vals.join(';') });
+      });
+    });
+
+    barvaluesGroup.querySelectorAll('.barvalue-input').forEach(input => {
+      input.addEventListener('input', () => {
+        const wgt = AppState.getWidget(w.id);
+        if (!wgt) return;
+        const idx = parseInt(input.dataset.barvalueIdx);
+        const vals = parseVals(wgt.barValues);
+        vals[idx] = input.value;
+        wgt.barValues = vals.join(';');
+        renderCanvas();
+        AppState.save();
+      });
+      input.addEventListener('blur', () => {
+        const wgt = AppState.getWidget(w.id);
+        if (!wgt) return;
+        const idx = parseInt(input.dataset.barvalueIdx);
+        const vals = parseVals(wgt.barValues);
+        vals[idx] = input.value;
+        AppState.updateWidget(w.id, { barValues: vals.join(';') });
       });
     });
   }
@@ -6342,12 +6594,49 @@ document.getElementById('btn-build-run').addEventListener('click', async () => {
       } else {
         logMessage(status.msg || 'SGL 库状态未知', 'warn');
       }
+      // 设计器自身 sgl 库落后远程时额外提示（不影响编译流程，仅提醒用户更新设计器）
+      if (status.designer_sgl_outdated) {
+        logMessage('警告：设计器内置 SGL 库有新版本可用，建议更新设计器的 sgl 目录以支持最新 API', 'warn');
+      }
     } catch (e) {
       console.warn('检查 SGL 库版本失败:', e);
       logMessage('检查 SGL 库版本失败: ' + e, 'warn');
     }
+    // 用户选择更新时，先独立拉取最新代码；失败时弹窗询问是否以旧代码继续编译
     if (updateSgl) {
       logMessage('用户选择更新 SGL 库，开始更新子模块...', 'info');
+      try {
+        const updateResult = await invoke('update_sgl_submodules', { projectPath });
+        if (updateResult.success) {
+          logMessage(updateResult.msg, 'success');
+        } else {
+          // 拉取失败：弹窗询问用户是否以旧代码继续运行
+          logMessage(updateResult.msg, 'error');
+          const continueBuild = await ask(
+            updateResult.msg + '\n\n是否以现有旧代码继续编译运行？',
+            { title: 'SGL 库更新失败', kind: 'warning', okLabel: '继续运行', cancelLabel: '取消' }
+          );
+          if (!continueBuild) {
+            logMessage('用户取消编译', 'warn');
+            return;
+          }
+          logMessage('用户选择以旧代码继续编译', 'warn');
+        }
+      } catch (e) {
+        // invoke 本身失败（非业务错误），也弹窗询问
+        logMessage('SGL 库更新异常: ' + e, 'error');
+        const continueBuild = await ask(
+          'SGL 库更新异常: ' + e + '\n\n是否以现有旧代码继续编译运行？',
+          { title: 'SGL 库更新异常', kind: 'warning', okLabel: '继续运行', cancelLabel: '取消' }
+        );
+        if (!continueBuild) {
+          logMessage('用户取消编译', 'warn');
+          return;
+        }
+        logMessage('用户选择以旧代码继续编译', 'warn');
+      }
+      // 更新已完成或用户选择继续，build_project 不再重复更新
+      updateSgl = false;
     }
 
     // 编译

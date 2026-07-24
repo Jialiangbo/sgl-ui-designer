@@ -1,4 +1,4 @@
-import { AppState, navigate, initNav, escapeHtml, setupUpdateChecker, setupWindowControls } from './app.js';
+import { AppState, navigate, initNav, escapeHtml, setupUpdateChecker, setupWindowControls, showToast } from './app.js';
 import { SGL_WIDGET_TYPES, WIDGET_DEFAULTS, getWidgetVarName } from './sgl_api.js';
 import { getCheckboxIconDataUrl } from './checkbox_icon.js';
 import { invoke } from '@tauri-apps/api/core';
@@ -110,7 +110,7 @@ function createWidgetCanvas(el, w, z, renderSize) {
   const ch = renderSize ? renderSize.domH : w.height;
   const canvas = document.createElement('canvas');
   const surf = R.createSurface(canvas, cw, ch, z);
-  // CSS 尺寸 = 像素尺寸，1:1 显示，避免 CSS 缩放导致右边框/下边框像素被压缩或丢失（与 editor.js sglSurface 一致）
+  // CSS 尺寸 = 像素尺寸，1:1 显示，避免 CSS 缩放导致右边框/下边框像素被压缩或丢失
   canvas.style.cssText = `position:absolute;left:0;top:0;width:${surf.w}px;height:${surf.h}px;display:block;pointer-events:none;`;
   el.appendChild(canvas);
   return { canvas, surf, R };
@@ -216,9 +216,11 @@ function render() {
 
     el.style.left = (absPos.x * z) + 'px';
     el.style.top = (absPos.y * z) + 'px';
-    // SGL 闭区间坐标缩放，与 createSurface 一致，避免 cv 溢出 el 被 overflow:hidden 裁切
-    el.style.width = (Math.round((domW - 1) * z) + 1) + 'px';
-    el.style.height = (Math.round((domH - 1) * z) + 1) + 'px';
+    // 使用与 createSurface 一致的缩放公式，确保 el 尺寸 >= canvas 像素尺寸，避免内容被裁切
+    const elCssW = Math.max(1, Math.ceil(domW * z), Math.round((domW - 1) * z) + 1);
+    const elCssH = Math.max(1, Math.ceil(domH * z), Math.round((domH - 1) * z) + 1);
+    el.style.width = elCssW + 'px';
+    el.style.height = elCssH + 'px';
     el.style.boxSizing = 'border-box';
     el.style.overflow = 'hidden';
 
@@ -754,8 +756,16 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
         // SGL drawString to buf32 (before flushWidget)
         const coords = { x1: 0, y1: 0, x2: w.width - 1, y2: w.height - 1 };
         const align = alignStrToNum(w.align || 'CENTER');
-        const pos = R.getTextPosRealtime(coords, txt, fontSize, cssFamily, 4, align);
-        R.drawString(surf, pos.x, pos.y, txt, txtCol, alpha, fontSize, cssFamily, fontBpp);
+        const lblSglFont = getSglFontData(fontFamily, fontSize, fontBpp);
+        if (lblSglFont) {
+          // 有字模：像素级渲染（与 SGL 运行时一致）
+          const pos = R.getTextPosSGL(coords, txt, lblSglFont, 0, align);
+          R.drawStringSGL(surf, pos.x, pos.y, txt, txtCol, alpha, lblSglFont);
+        } else {
+          // fallback: 字模未加载时用 Canvas fillText 近似
+          const pos = R.getTextPosRealtime(coords, txt, fontSize, cssFamily, 4, align);
+          R.drawString(surf, pos.x, pos.y, txt, txtCol, alpha, fontSize, cssFamily, fontBpp);
+        }
       }
       flushWidget(surf);
       if (!hasFont) {
@@ -2158,17 +2168,25 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
       // 3. 文字按钮文本
       //    SGL: text_x = btn.x1 + (boxW - font_width("0")) / 2  ← 用 "0" 宽度居中
       //         text_y = btn.y1 + (boxH - font_height) / 2
-      //    有字体时用 SGL drawString 像素级渲染到 buf32（flush 前），与 SGL 仿真一致
-      //    无字体时用 DOM span 叠加（flush 后），使用系统默认字体
+      //    有字模时用 SGL drawStringSGL 像素级渲染（与 SGL 运行时一致）
+      //    无字模时 fallback: Canvas fillText 近似 / DOM span 叠加（系统默认字体）
       const nkHasFont = widgetHasFont(w);
       const nkFontBpp = w.fontBpp != null ? w.fontBpp : 4;
-      const zeroWidth = R.measureTextWidth('0', nkFontSize, nkFontFamily);
-      const fontHeight = nkFontSize;
+      const nkSglFont = nkHasFont ? getSglFontData(w.fontFamily || '', nkFontSize, nkFontBpp) : null;
+      const zeroWidth = nkSglFont ? R.fontGetStringWidth('0', nkSglFont) : R.measureTextWidth('0', nkFontSize, nkFontFamily);
+      const fontHeight = nkSglFont ? R.fontGetHeight(nkSglFont) : nkFontSize;
       const textOffsetX = Math.floor((boxW - zeroWidth) / 2);
       const textOffsetY = Math.floor((boxH - fontHeight) / 2);
 
-      // 有字体：SGL drawString 像素级渲染到 buf32（flush 前）
-      if (nkHasFont) {
+      // 有字模：SGL drawStringSGL 像素级渲染到 buf32（flush 前）
+      if (nkSglFont) {
+        for (const btn of textBtns) {
+          const tx = btn.x1 + textOffsetX;
+          const ty = btn.y1 + textOffsetY;
+          R.drawStringSGL(surf, tx, ty, btn.ch, nkTextCol, alpha, nkSglFont);
+        }
+      } else if (nkHasFont) {
+        // fallback: 字模未加载时用 Canvas fillText 近似
         for (const btn of textBtns) {
           const tx = btn.x1 + textOffsetX;
           const ty = btn.y1 + textOffsetY;
@@ -2277,8 +2295,18 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
         btnY1 = btnY2 + 1;
       }
 
-      // 有字体: drawString 像素级渲染到 buf32（flush 前）
-      if (kbHasFont) {
+      // 有字模: drawStringSGL 像素级渲染到 buf32（flush 前），与 SGL 运行时一致
+      const kbSglFont = kbHasFont ? getSglFontData(w.fontFamily || '', kbFontSize, kbFontBpp) : null;
+      if (kbSglFont) {
+        const kbFontHeight = R.fontGetHeight(kbSglFont);
+        for (const btn of textBtns) {
+          const textW = R.fontGetStringWidth(btn.text, kbSglFont);
+          const textX = btn.x1 + Math.floor((btn.w - textW) / 2);
+          const textY = btn.y1 + Math.floor((btn.h - kbFontHeight) / 2);
+          R.drawStringSGL(surf, textX, textY, btn.text, kbTextCol, alpha, kbSglFont);
+        }
+      } else if (kbHasFont) {
+        // fallback: 字模未加载时用 Canvas fillText 近似
         for (const btn of textBtns) {
           const textW = R.measureTextWidth(btn.text, kbFontSize, kbCssFamily);
           const textX = btn.x1 + Math.floor((btn.w - textW) / 2);
@@ -3016,7 +3044,14 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
           const alTbCanvas = document.createElement('canvas');
           const alTbSurf = R.createSurface(alTbCanvas, alBufW, alBufH, z);
           alTbCanvas.style.cssText = `position:absolute;left:0;top:0;width:${alTbSurf.w}px;height:${alTbSurf.h}px;pointer-events:none;`;
-          R.drawString(alTbSurf, alMargin, alMargin, alText, R.hexToColor(alTextColor), alAlpha, alFontSize, alCssFamily, alFontBpp);
+          const alTbSglFont = getSglFontData(alFontFamily, alFontSize, alFontBpp);
+          if (alTbSglFont) {
+            // 有字模：像素级渲染（与 SGL 运行时一致）
+            R.drawStringSGL(alTbSurf, alMargin, alMargin, alText, R.hexToColor(alTextColor), alAlpha, alTbSglFont);
+          } else {
+            // fallback: 字模未加载时用 Canvas fillText 近似
+            R.drawString(alTbSurf, alMargin, alMargin, alText, R.hexToColor(alTextColor), alAlpha, alFontSize, alCssFamily, alFontBpp);
+          }
           R.flushSurface(alTbSurf);
           alTextBlock.appendChild(alTbCanvas);
         } else {
@@ -3036,9 +3071,17 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
           R.drawFillRect(surf, 0, 0, w.width - 1, w.height - 1, alRadius, R.hexToColor(alBgColor), alAlpha);
         }
         if (alHasFont) {
+          // 有字模：SGL drawStringSGL 像素级渲染（与 SGL 运行时一致）
           const coords = { x1: 0, y1: 0, x2: w.width - 1, y2: w.height - 1 };
-          const pos = R.getTextPosRealtime(coords, alText, alFontSize, alCssFamily, 0, alignStrToNum(alAlign));
-          R.drawString(surf, pos.x + alOffsetX, pos.y + alOffsetY, alText, R.hexToColor(alTextColor), alAlpha, alFontSize, alCssFamily, alFontBpp);
+          const alSglFont = getSglFontData(alFontFamily, alFontSize, alFontBpp);
+          if (alSglFont) {
+            const pos = R.getTextPosSGL(coords, alText, alSglFont, 0, alignStrToNum(alAlign));
+            R.drawStringSGL(surf, pos.x + alOffsetX, pos.y + alOffsetY, alText, R.hexToColor(alTextColor), alAlpha, alSglFont);
+          } else {
+            // fallback: 字模未加载时用 Canvas fillText 近似
+            const pos = R.getTextPosRealtime(coords, alText, alFontSize, alCssFamily, 0, alignStrToNum(alAlign));
+            R.drawString(surf, pos.x + alOffsetX, pos.y + alOffsetY, alText, R.hexToColor(alTextColor), alAlpha, alFontSize, alCssFamily, alFontBpp);
+          }
         }
         flushWidget(surf);
         if (!alHasFont) {
@@ -3088,6 +3131,189 @@ function $(id) { return document.getElementById(id); }
 
 document.getElementById('btn-prev-page').addEventListener('click', () => { currentIndex--; render(); });
 document.getElementById('btn-next-page').addEventListener('click', () => { currentIndex++; render(); });
+
+// 截图功能：按页面原始尺寸截取显示区域（如 320×240）
+// 复用预览页 renderPreviewWidget 渲染逻辑，确保截图与预览效果完全一致
+// 使用 SVG foreignObject 捕获每个控件的 canvas + DOM 文本叠加，保证完整性
+document.getElementById('btn-screenshot').addEventListener('click', async () => {
+  try {
+    const pages = AppState.project.pages;
+    if (!pages || pages.length === 0) {
+      console.warn('截图失败: 项目没有页面');
+      showToast('截图失败: 项目没有页面', 'error');
+      return;
+    }
+    if (currentIndex >= pages.length) currentIndex = 0;
+    const page = pages[currentIndex];
+    const width = page.width;
+    const height = page.height;
+
+    console.log('开始截图:', page.name || 'page', width + 'x' + height);
+
+    // 预加载页面字体/图片资源（如果有缺失），确保截图完整
+    await preloadProjectFonts(AppState.project.resources?.fonts);
+    await preloadSglFontData();
+
+    // 创建原始分辨率的页面 canvas
+    const screenshotCanvas = document.createElement('canvas');
+    screenshotCanvas.width = width;
+    screenshotCanvas.height = height;
+    const ctx = screenshotCanvas.getContext('2d');
+
+    // 1. 绘制页面背景
+    ctx.fillStyle = page.bg_color || '#1e1e2e';
+    ctx.fillRect(0, 0, width, height);
+
+    if (page.pixmap) {
+      try {
+        const pagePixmapFormat = page.pixmapFormat || 'RGB565';
+        const pageHasAlpha = pixmapFormatHasAlpha(pagePixmapFormat);
+        if (pageHasAlpha) {
+          const imgData = getCachedPixmapImageData(page.pixmap);
+          if (imgData) {
+            ctx.drawImage(await createImageBitmap(imgData), 0, 0, width, height);
+          } else {
+            await new Promise(resolve => {
+              const img = new Image();
+              img.onload = () => { ctx.drawImage(img, 0, 0, width, height); resolve(); };
+              img.onerror = () => resolve();
+              img.src = toAssetUrl(page.pixmap);
+            });
+          }
+        } else {
+          const url = await getOpaqueImageUrl(page.pixmap, '#000000');
+          await new Promise(resolve => {
+            const img = new Image();
+            img.onload = () => { ctx.drawImage(img, 0, 0, width, height); resolve(); };
+            img.onerror = () => resolve();
+            img.src = url;
+          });
+        }
+      } catch (bgErr) {
+        console.warn('截图背景绘制失败:', bgErr);
+      }
+    }
+
+    // 2. 按层级顺序渲染所有控件
+    if (!page.widgets || page.widgets.length === 0) {
+      console.warn('页面没有控件，仅导出背景');
+    } else {
+      const widgetMap = new Map();
+      page.widgets.forEach(pw => widgetMap.set(pw.id, pw));
+      const sortedWidgets = sortWidgetsByHierarchy(page.widgets);
+
+      for (const w of sortedWidgets) {
+        let absPos = getWidgetAbsPos(w, page);
+        let domW = w.width;
+        let domH = w.height;
+
+        // 2dball 特殊尺寸
+        if (w.type === '2dball' && w.radius != null && w.radius > 0) {
+          domW = w.radius * 2;
+          domH = w.radius * 2;
+        }
+
+        // scroll 绑定目标时重算位置和尺寸
+        if (w.type === 'scroll' && w.bindTarget) {
+          const bindWidget = page.widgets.find(wt => getWidgetVarName(wt) === w.bindTarget);
+          if (bindWidget) {
+            const bindAbs = getWidgetAbsPos(bindWidget, page);
+            const scDirect = w.direct != null ? w.direct : 1;
+            const scWidth = w.width != null ? w.width : 10;
+            const bindBorder = bindWidget.borderWidth != null ? bindWidget.borderWidth : 1;
+            if (scDirect === 1) {
+              absPos = { x: bindAbs.x + bindWidget.width - scWidth - bindBorder, y: bindAbs.y + bindBorder };
+              domW = scWidth;
+              domH = bindWidget.height - 2 * bindBorder;
+            } else {
+              absPos = { x: bindAbs.x + bindBorder, y: bindAbs.y + bindWidget.height - scWidth - bindBorder };
+              domW = bindWidget.width - 2 * bindBorder;
+              domH = scWidth;
+            }
+          }
+        }
+
+        const tempEl = document.createElement('div');
+        tempEl.style.cssText = `position:absolute;left:-9999px;top:-9999px;width:${domW}px;height:${domH}px;overflow:hidden;`;
+        document.body.appendChild(tempEl);
+
+        try {
+          renderPreviewWidget(tempEl, w, 1, { domW, domH }, page);
+
+          // 将控件内部的 canvas 替换为 img，以便 SVG foreignObject 能捕获其内容
+          const canvas = tempEl.querySelector('canvas');
+          if (canvas) {
+            const img = document.createElement('img');
+            img.src = canvas.toDataURL('image/png');
+            img.width = canvas.width;
+            img.height = canvas.height;
+            img.style.cssText = canvas.style.cssText;
+            canvas.replaceWith(img);
+          }
+
+          // 收集 tempEl 上的关键样式（背景、边框等）
+          const wrapperStyles = [];
+          const s = tempEl.style;
+          if (s.backgroundColor) wrapperStyles.push(`background-color:${s.backgroundColor}`);
+          if (s.backgroundImage) wrapperStyles.push(`background-image:${s.backgroundImage}`);
+          if (s.backgroundSize) wrapperStyles.push(`background-size:${s.backgroundSize}`);
+          if (s.backgroundPosition) wrapperStyles.push(`background-position:${s.backgroundPosition}`);
+          if (s.border) wrapperStyles.push(`border:${s.border}`);
+          if (s.borderRadius) wrapperStyles.push(`border-radius:${s.borderRadius}`);
+          if (s.opacity && s.opacity !== '1') wrapperStyles.push(`opacity:${s.opacity}`);
+          if (s.transform) wrapperStyles.push(`transform:${s.transform}`);
+          if (s.transformOrigin) wrapperStyles.push(`transform-origin:${s.transformOrigin}`);
+
+          // 通过 SVG foreignObject 将控件完整 DOM（含 canvas 替换后的 img 和文本叠加层）渲染为图像
+          const serializer = new XMLSerializer();
+          const svgStr = `<svg xmlns="http://www.w3.org/2000/svg" width="${domW}" height="${domH}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml" style="position:relative;width:${domW}px;height:${domH}px;overflow:hidden;${wrapperStyles.join(';')}">${serializer.serializeToString(tempEl)}</div></foreignObject></svg>`;
+          const svgUrl = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgStr);
+          const widgetImg = new Image();
+          await new Promise((resolve, reject) => {
+            widgetImg.onload = resolve;
+            widgetImg.onerror = (e) => reject(new Error('SVG foreignObject 加载失败: ' + w.type));
+            widgetImg.src = svgUrl;
+          });
+
+          // 绘制到截图 canvas，应用父控件裁剪和透明度
+          ctx.save();
+          if (w.parentId) {
+            const parent = widgetMap.get(w.parentId);
+            if (parent) {
+              const clipTop = w.y < 0 ? (-w.y) : 0;
+              const clipLeft = w.x < 0 ? (-w.x) : 0;
+              const clipRight = (w.x + w.width) > parent.width ? (w.x + w.width - parent.width) : 0;
+              const clipBottom = (w.y + w.height) > parent.height ? (w.y + w.height - parent.height) : 0;
+              if (clipTop > 0 || clipLeft > 0 || clipRight > 0 || clipBottom > 0) {
+                ctx.beginPath();
+                ctx.rect(absPos.x + clipLeft, absPos.y + clipTop, parent.width - clipLeft - clipRight, parent.height - clipTop - clipBottom);
+                ctx.clip();
+              }
+            }
+          }
+          ctx.globalAlpha = w.alpha != null ? w.alpha / 255 : 1;
+          ctx.drawImage(widgetImg, absPos.x, absPos.y);
+          ctx.restore();
+        } catch (widgetErr) {
+          console.error('截图渲染控件失败:', w.type, w.id, widgetErr);
+        } finally {
+          document.body.removeChild(tempEl);
+        }
+      }
+    }
+
+    // 3. 导出 PNG
+    const link = document.createElement('a');
+    link.download = `sgl-preview-${page.name || 'page'}-${width}x${height}.png`;
+    link.href = screenshotCanvas.toDataURL('image/png');
+    link.click();
+    console.log('截图完成:', link.download);
+    showToast('截图已保存到下载文件夹: ' + link.download, 'success');
+  } catch (err) {
+    console.error('截图失败:', err);
+    showToast('截图失败: ' + (err && err.message ? err.message : '未知错误'), 'error');
+  }
+});
 
 document.querySelectorAll('[data-nav]').forEach(tab => {
   tab.addEventListener('click', () => navigate(tab.dataset.nav));

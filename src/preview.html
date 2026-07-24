@@ -20,6 +20,7 @@
     <div class="header-actions">
       <button class="btn btn-sm" id="btn-prev-page">← 上一页</button>
       <button class="btn btn-sm" id="btn-next-page">下一页 →</button>
+      <button class="btn btn-sm" id="btn-screenshot">📷 截图</button>
     </div>
   </header>
 
@@ -35,7 +36,12 @@
     <span id="status-page-size">-</span>
   </div>
 
-  <script src="sgl_renderer.js"></script>
+  <script type="module" src="sgl_renderer.js"></script>
   <script type="module" src="preview.js"></script>
+  <script>
+    document.addEventListener('contextmenu', function(e) {
+      e.preventDefault();
+    });
+  </script>
 </body>
 </html>

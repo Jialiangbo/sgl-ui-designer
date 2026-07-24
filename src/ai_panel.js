@@ -423,8 +423,11 @@ async function sendMessage(mode, userText) {
     if (pathScanned) return;
   }
 
-  // 构建消息历史
-  const systemMsg = { role: 'system', content: buildSystemPrompt() };
+  // 构建消息历史（传入当前画布控件，让 AI 感知画布状态）
+  const currentWidgets = (AppState.widgets || []).map(w => ({
+    type: w.type, id: w.id, x: w.x, y: w.y, width: w.width, height: w.height
+  }));
+  const systemMsg = { role: 'system', content: buildSystemPrompt(currentWidgets) };
 
   // 构建本次用户消息（用于发送）
   let userMsgForSend;
@@ -829,10 +832,39 @@ function applyAIPropsModification(modifications) {
   };
 
   let updatedCount = 0;
+  let deletedCount = 0;
+  // 先处理删除（倒序删除避免索引错位）
+  const idsToDelete = [];
   for (const [id, props] of Object.entries(modifications)) {
+    if (props.__delete === true) {
+      const idx = page.widgets.findIndex(pw => pw.id === id);
+      if (idx !== -1) {
+        idsToDelete.push(idx);
+        deletedCount++;
+      }
+    }
+  }
+  idsToDelete.sort((a, b) => b - a).forEach(idx => page.widgets.splice(idx, 1));
+
+  // 再处理属性修改（含 type 修改=换控件类型）
+  for (const [id, props] of Object.entries(modifications)) {
+    if (props.__delete === true) continue;
     const idx = page.widgets.findIndex(pw => pw.id === id);
     if (idx !== -1) {
       const widget = page.widgets[idx];
+      // 若修改 type，需要同步新类型的默认属性
+      if (props.type && props.type !== widget.type) {
+        const newDefaults = createWidgetDefaults(props.type);
+        if (newDefaults) {
+          // 保留 id 和位置，其余用新类型默认值，再覆盖 AI 指定的属性
+          const keepId = widget.id;
+          const keepPos = { x: widget.x, y: widget.y, width: widget.width, height: widget.height };
+          page.widgets[idx] = { ...newDefaults, ...props, id: keepId, ...keepPos, ...props };
+          // props 中的 x/y/width/height 优先级最高（已在末尾展开）
+          updatedCount++;
+          continue;
+        }
+      }
       // 合并属性（只覆盖传入的属性）
       for (const [key, value] of Object.entries(props)) {
         widget[key] = value;
@@ -842,7 +874,13 @@ function applyAIPropsModification(modifications) {
   }
 
   AppState.notify();
-  showToast(`已修改 ${updatedCount} 个控件的属性`, 'success');
+  if (deletedCount > 0 && updatedCount > 0) {
+    showToast(`已修改 ${updatedCount} 个控件，删除 ${deletedCount} 个控件`, 'success');
+  } else if (deletedCount > 0) {
+    showToast(`已删除 ${deletedCount} 个控件`, 'success');
+  } else {
+    showToast(`已修改 ${updatedCount} 个控件的属性`, 'success');
+  }
 }
 
 function undoLastAIApply() {

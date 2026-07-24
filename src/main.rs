@@ -2785,7 +2785,7 @@ fn git_is_ancestor(_local_repo: &std::path::Path, local_hash: &str, target_repo:
 fn sgl_version_compare_for_sync(
     local_sgl_dir: &std::path::Path,
     port_sgl_dir: &std::path::Path,
-    window: &tauri::Window,
+    _window: &tauri::Window,
 ) -> bool {
     // 任一目录不是 git 仓库则无法比较，保守允许同步
     let local_hash = match git_head_hash(local_sgl_dir) {
@@ -2806,17 +2806,6 @@ fn sgl_version_compare_for_sync(
     match git_is_ancestor(local_sgl_dir, &local_hash, port_sgl_dir, &port_hash) {
         Some(true) => {
             // 设计器本地落后，不允许同步（避免覆盖用户项目的最新 sgl）
-            let _ = window.emit(
-                "build-log",
-                serde_json::json!({
-                    "message": format!(
-                        "设计器内置 SGL 库({}) 落后于用户项目 SGL 库({})，跳过源码同步",
-                        &local_hash[..7.min(local_hash.len())],
-                        &port_hash[..7.min(port_hash.len())]
-                    ),
-                    "level": "warn"
-                }),
-            );
             false
         }
         Some(false) => {
@@ -2825,13 +2814,6 @@ fn sgl_version_compare_for_sync(
         }
         None => {
             // 无法判断（如分叉历史），保守允许同步
-            let _ = window.emit(
-                "build-log",
-                serde_json::json!({
-                    "message": "无法判断设计器与用户项目 SGL 库的版本关系，保守执行源码同步",
-                    "level": "info"
-                }),
-            );
             true
         }
     }
@@ -3058,93 +3040,23 @@ fn check_sgl_submodule_status(
         return Ok(serde_json::json!({ "exists": false, "up_to_date": false, "msg": "sgl 子模块尚未初始化" }));
     }
 
-    // 同时检测设计器自身 sgl 库是否落后远程（不影响子模块状态判断，仅供前端提示）
-    let designer_sgl_outdated = check_designer_sgl_outdated(&window);
-
     match is_sgl_submodule_up_to_date(&sgl_port_dir, &window) {
         Ok(true) => Ok(serde_json::json!({
             "exists": true,
             "up_to_date": true,
-            "designer_sgl_outdated": designer_sgl_outdated,
-            "msg": if designer_sgl_outdated {
-                "用户项目 sgl 子模块已是最新，但设计器内置 SGL 库有新版本可用（建议更新设计器）".to_string()
-            } else {
-                "sgl 子模块已是最新版本".to_string()
-            }
+            "msg": "sgl 子模块已是最新版本".to_string()
         })),
         Ok(false) => Ok(serde_json::json!({
             "exists": true,
             "up_to_date": false,
-            "designer_sgl_outdated": designer_sgl_outdated,
             "msg": "sgl 子模块有新版本可用".to_string()
         })),
         Err(e) => Ok(serde_json::json!({
             "exists": true,
             "up_to_date": false,
-            "designer_sgl_outdated": designer_sgl_outdated,
             "msg": format!("检查失败: {}", e)
         })),
     }
-}
-
-/// 检测设计器自身 sgl 库（CARGO_MANIFEST_DIR/sgl）是否落后远程仓库
-/// 返回 true 表示落后（有新版本可用），false 表示最新或无法判断
-fn check_designer_sgl_outdated(window: &tauri::Window) -> bool {
-    let app_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let local_sgl_dir = app_dir.join("sgl");
-    if !local_sgl_dir.exists() || !local_sgl_dir.join(".git").exists() {
-        return false;
-    }
-
-    // 带超时的 fetch（复用子模块的 fetch 逻辑，15 秒超时）
-    match run_git_fetch_with_timeout(&local_sgl_dir, window, 15) {
-        Ok(status) if status.success() => {}
-        _ => {
-            // fetch 失败（网络问题等），无法判断，不阻塞用户
-            let _ = window.emit(
-                "build-log",
-                serde_json::json!({ "message": "无法获取设计器内置 SGL 库的远程版本（可能无法访问 GitHub）", "level": "info" }),
-            );
-            return false;
-        }
-    }
-
-    let local_hash = match git_head_hash(&local_sgl_dir) {
-        Some(h) => h,
-        None => return false,
-    };
-
-    // 获取远程 main 分支的 commit
-    let remote_out = std::process::Command::new("git")
-        .current_dir(&local_sgl_dir)
-        .args(&["rev-parse", "origin/main"])
-        .output();
-    let remote_hash = match remote_out {
-        Ok(o) if o.status.success() => {
-            String::from_utf8_lossy(&o.stdout).trim().to_string()
-        }
-        _ => return false,
-    };
-
-    if remote_hash.is_empty() {
-        return false;
-    }
-
-    let outdated = local_hash != remote_hash;
-    if outdated {
-        let _ = window.emit(
-            "build-log",
-            serde_json::json!({
-                "message": format!(
-                    "设计器内置 SGL 库有新版本可用（本地: {}, 远程: {}），建议更新设计器的 sgl 目录",
-                    &local_hash[..7.min(local_hash.len())],
-                    &remote_hash[..7.min(remote_hash.len())]
-                ),
-                "level": "warn"
-            }),
-        );
-    }
-    outdated
 }
 
 fn sgl_submodule_path(sgl_port_dir: &std::path::Path) -> std::path::PathBuf {
@@ -3614,11 +3526,6 @@ fn build_project(
                     );
                 }
             }
-        } else {
-            let _ = window.emit(
-                "build-log",
-                serde_json::json!({ "message": "设计器内置 SGL 库版本落后于用户项目，跳过源码同步以保留用户项目的最新版本", "level": "warn" }),
-            );
         }
     }
 

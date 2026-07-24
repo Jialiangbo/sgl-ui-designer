@@ -1518,6 +1518,7 @@ function parseFontCFile(content) {
 
 function registerFontData(key, fontData) { _fontBitmapCache.set(key, fontData); }
 function getFontData(key) { return _fontBitmapCache.get(key) || null; }
+function removeFontData(key) { _fontBitmapCache.delete(key); }
 function fontDataKey(fontPath, size, bpp) { return `${fontPath}|${size}|${bpp}`; }
 
 /**
@@ -1599,6 +1600,9 @@ function drawCharacter(surf, x, y, chIndex, color, alpha, font) {
   if (cx1 > cx2 || cy1 > cy2) return;
 
   const bpp = font.bpp;
+  // SGL 项目色深为 RGB565，文字混合必须按 RGB565 色深执行才能与运行时一致
+  const fg565 = rgba8888ToRGB565(color.r, color.g, color.b);
+
   // 将像素坐标反向映射回字模坐标（最近邻），避免缩放时 rel_x/rel_y 超出字模尺寸而读到相邻字符
   for (let py = cy1; py <= cy2; py++) {
     const rel_y = Math.min(font_h - 1, Math.floor((py - py1) / z));
@@ -1628,16 +1632,22 @@ function drawCharacter(surf, x, y, chIndex, color, alpha, font) {
       const bg_a = (existing >> 24) & 0xff;
       const bg = { r: existing & 0xff, g: (existing >> 8) & 0xff, b: (existing >> 16) & 0xff };
 
-      const color_mix = colorMixer(color, bg, alpha_dot);
-      const final_color = alpha >= 255 ? color_mix : colorMixer(color_mix, bg, alpha);
-
-      if (bg_a === 0 && alpha_dot < 255) {
-        const final_alpha = Math.min(255, Math.round(alpha_dot * alpha / 255));
-        if (final_alpha > 0) {
-          surf.buf32[idx] = (final_alpha << 24) | (final_color.b << 16) | (final_color.g << 8) | final_color.r;
-        }
+      if (bg_a === 0) {
+        // 背景透明：简化合并，保留设计器对页面背景的 alpha 混合
+        const eff_alpha = (alpha_dot === 255) ? alpha
+                        : (alpha === 255) ? alpha_dot
+                        : Math.round(alpha_dot * alpha / 255);
+        const fgQuant = rgb565ToRGBA8888(fg565);
+        surf.buf32[idx] = (Math.min(255, eff_alpha) << 24) | (fgQuant.b << 16) | (fgQuant.g << 8) | fgQuant.r;
       } else {
-        surf.buf32[idx] = 0xff000000 | (final_color.b << 16) | (final_color.g << 8) | final_color.r;
+        // 背景不透明：严格按 SGL RGB565 两步混合
+        const bg565 = rgba8888ToRGB565(bg.r, bg.g, bg.b);
+        // Step 1: color_mix = sgl_color_mixer(fg, bg, alpha_dot)
+        const mix1_565 = (alpha_dot === 255) ? fg565 : colorMixerRGB565(fg565, bg565, alpha_dot);
+        // Step 2: *blend = sgl_color_mixer(color_mix, bg, alpha)
+        const result565 = (alpha >= 255) ? mix1_565 : colorMixerRGB565(mix1_565, bg565, alpha);
+        const result = rgb565ToRGBA8888(result565);
+        surf.buf32[idx] = 0xff000000 | (result.b << 16) | (result.g << 8) | result.r;
       }
     }
   }
@@ -4336,6 +4346,7 @@ const SGLRenderer = {
   parseFontCFile,
   registerFontData,
   getFontData,
+  removeFontData,
   fontDataKey,
   searchUnicodeChIndex,
   fontGetStringWidth,

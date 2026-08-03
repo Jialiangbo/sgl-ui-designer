@@ -842,6 +842,16 @@ export const AppState = {
         });
       });
     }
+    // 检测是否有 label 启用了 long 模式，若有则自动开启 CONFIG_SGL_ANIMATION 宏
+    // sgl_label_set_long_mode 受 CONFIG_SGL_ANIMATION 条件编译控制，未开启会导致编译失败
+    if (project.sgl_config && !project.sgl_config.animation) {
+      const hasLongMode = (project.pages || []).some(page =>
+        (page.widgets || []).some(w => w.type === 'label' && w.longMode)
+      );
+      if (hasLongMode) {
+        project.sgl_config.animation = 1;
+      }
+    }
     return project;
   },
 

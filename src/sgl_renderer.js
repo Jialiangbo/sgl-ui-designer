@@ -42,11 +42,12 @@ function colorToHex(c) {
  */
 function colorMixer(fg, bg, factor) {
   // SGL: bg + (fg - bg) * factor / 256，factor 范围 0-256
+  // SGL 使用 C 整数除法（向零截断），等价于 Math.trunc 而非 Math.round
   const f = Math.max(0, Math.min(256, factor));
   return {
-    r: Math.round((fg.r * f + bg.r * (256 - f)) / 256),
-    g: Math.round((fg.g * f + bg.g * (256 - f)) / 256),
-    b: Math.round((fg.b * f + bg.b * (256 - f)) / 256),
+    r: Math.trunc((fg.r * f + bg.r * (256 - f)) / 256),
+    g: Math.trunc((fg.g * f + bg.g * (256 - f)) / 256),
+    b: Math.trunc((fg.b * f + bg.b * (256 - f)) / 256),
   };
 }
 
@@ -879,6 +880,80 @@ function drawFillRing(surf, cx, cy, radiusIn, radiusOut, color, alpha) {
 // ============================================================
 
 /**
+ * SMOOTH 模式端点圆心计算（移植自 sgl_draw_arc.c:42-69 arc_dot_sin_cos）
+ * 计算弧形端点处的圆形渐变中心位置与半径
+ * @param {number} cx - 圆心 x（像素坐标）
+ * @param {number} cy - 圆心 y（像素坐标）
+ * @param {number} radiusIn - 内半径（像素）
+ * @param {number} radiusOut - 外半径（像素）
+ * @param {number} sinVal - sglSin(angle) 返回值（-32767~32767）
+ * @param {number} cosVal - sglCos(angle) 返回值（-32767~32767）
+ * @returns {Object|null} - {cx, cy, r, r2, rmax, outer} 或 null（r==0 时）
+ */
+function arcDotSinCos(cx, cy, radiusIn, radiusOut, sinVal, cosVal) {
+  const len = Math.trunc((radiusOut + radiusIn) / 2);
+  const r = Math.trunc((radiusOut - radiusIn) / 2);
+  if (r === 0) return null;
+
+  // SGL: 16348 = 32768/2，整数除法前加半除数实现四舍五入
+  let dx, dy;
+  if (sinVal < 0) {
+    dx = Math.trunc((sinVal * len - 16348) / 32768);
+  } else {
+    dx = Math.trunc((sinVal * len + 16348) / 32768);
+  }
+  if (cosVal < 0) {
+    dy = Math.trunc((cosVal * len - 16348) / 32768);
+  } else {
+    dy = Math.trunc((cosVal * len + 16348) / 32768);
+  }
+
+  return {
+    cx: cx - dx,
+    cy: cy - dy,
+    r: r + 1,
+    r2: r * r,
+    rmax: (r + 1) * (r + 1),
+    outer: 0
+  };
+}
+
+/**
+ * SMOOTH 模式端点圆 alpha 计算（移植自 sgl_draw_arc.c:72-101 arc_get_dot）
+ * 对两个端点 dot 计算像素 (ax, ay) 的最大 alpha 值
+ * @param {Array} dots - [dot0, dot1] 由 arcDotSinCos 返回
+ * @param {number} ax - 像素 x 坐标
+ * @param {number} ay - 像素 y 坐标
+ * @returns {number} - alpha 0-255
+ */
+function arcGetDot(dots, ax, ay) {
+  let max = 0;
+  // SGL: rate 基于 dots[0] 的 rmax-r2，outer 缓存在 dots[0] 上（两 dot 共用）
+  const rate = Math.trunc(0xff00 / (dots[0].rmax - dots[0].r2));
+  for (let k = 0; k < 2; k++) {
+    const p = dots[k];
+    const x = ax > p.cx ? ax - p.cx : p.cx - ax;
+    const y = ay > p.cy ? ay - p.cy : p.cy - ay;
+    if (x < p.r && y < p.r) {
+      const temp = x * x + y * y;
+      let alpha = 0;
+      if (temp >= p.rmax) {
+        alpha = 0;
+      } else if (temp > p.r2) {
+        if (dots[0].outer === 0) {
+          dots[0].outer = rate;
+        }
+        alpha = ((p.rmax - temp) * dots[0].outer) >> 8;
+      } else {
+        alpha = 255;
+      }
+      if (alpha > max) max = alpha;
+    }
+  }
+  return max;
+}
+
+/**
  * @param {object} desc - {cx, cy, radius_in, radius_out, start_angle, end_angle, mode, color, bg_color, alpha}
  * mode: 0=NORMAL, 1=RING, 2=NORMAL_SMOOTH, 3=RING_SMOOTH
  */
@@ -917,6 +992,15 @@ function drawFillArc(surf, desc) {
   const eRad = end_angle * Math.PI / 180;
   const sx = Math.sin(sRad), sy = -Math.cos(sRad);
   const ex = Math.sin(eRad), ey = -Math.cos(eRad);
+
+  // SMOOTH 模式：计算弧形两端点的圆形渐变 dot（移植自 sgl_draw_arc.c:151-154）
+  // 用 SGL 整数 sin/cos (-32767~32767) 计算端点圆心位置，确保与 SGL 仿真像素级一致
+  let arcDots = null;
+  if ((mode === 2 || mode === 3) && prIn > 0) {
+    const d0 = arcDotSinCos(pcx, pcy, prIn, prOut, sglSin(start_angle), -sglCos(start_angle));
+    const d1 = arcDotSinCos(pcx, pcy, prIn, prOut, sglSin(end_angle), -sglCos(end_angle));
+    if (d0 && d1) arcDots = [d0, d1];
+  }
 
   const x1 = Math.max(surf.clip.x1, pcx - prOut - 1);
   const x2 = Math.min(surf.clip.x2, pcx + prOut + 1);
@@ -966,6 +1050,34 @@ function drawFillArc(surf, desc) {
       } else if (mode === 1) {
         // RING 模式：范围外用 bg_color（使用 setEdgePixel 正确处理透明背景）
         setEdgePixel(surf, x, y, bg_color, edge_alpha, alpha);
+      } else if ((mode === 2 || mode === 3) && arcDots) {
+        // SMOOTH 模式（NORMAL_SMOOTH / RING_SMOOTH）：用端点 dot alpha 做圆形渐变混合
+        // SGL sgl_draw_arc.c:241-244:
+        //   dot_alpha = arc_get_dot(arc_dot, x, y);
+        //   bg = (mode == RING_SMOOTH) ? bg_color : *blend;
+        //   tmp_color = (dot_alpha < 255) ? sgl_color_mixer(color, bg, dot_alpha) : color;
+        const dot_alpha = arcGetDot(arcDots, x, y);
+        if (dot_alpha >= 255) {
+          // dot_alpha 满值：tmp_color = color，按 in-range 同样路径绘制
+          if (edge_alpha >= 255) {
+            setPixel(surf, x, y, color, alpha);
+          } else {
+            setEdgePixel(surf, x, y, color, edge_alpha, alpha);
+          }
+        } else if (dot_alpha > 0) {
+          // dot_alpha < 255：tmp_color = mixer(color, bg, dot_alpha)
+          // NORMAL_SMOOTH: bg = 当前像素 *blend；RING_SMOOTH: bg = bg_color
+          const bg = (mode === 3) ? bg_color : getPixel(surf, x, y);
+          const mixed = colorMixer(color, bg, dot_alpha);
+          // SGL: *blend = sgl_color_mixer(tmp_color, *blend, edge_alpha)
+          // 即用 edge_alpha 再次与背景混合，setEdgePixel 正好实现此逻辑
+          if (edge_alpha >= 255) {
+            setPixel(surf, x, y, mixed, alpha);
+          } else {
+            setEdgePixel(surf, x, y, mixed, edge_alpha, alpha);
+          }
+        }
+        // dot_alpha == 0：tmp_color = mixer(color, bg, 0) = bg，最终像素不变，跳过
       }
     }
   }
@@ -2798,7 +2910,9 @@ function drawExtImg(surf, imgData, w, h, rotation, scaleUniform, pivotX, pivotY,
     return;
   }
 
-  // 旋转 + 缩放路径：逆变换采样 + 双线性插值 + 边缘抗锯齿
+  // 旋转 + 缩放路径：逆变换采样 + 双线性插值
+  // SGL sgl_draw_xform_surf 不做边缘抗锯齿，仅逆变换采样源图片，
+  // src_x/src_y 在范围内则双线性插值后直接写入目标，超出范围跳过
   const hasIndepScale = (scaleX && scaleX !== 0) || (scaleY && scaleY !== 0);
   const sX = hasIndepScale ? (1 + (scaleX || 0) / 128) : (1 + (scaleUniform || 0) / 128);
   const sY = hasIndepScale ? (1 + (scaleY || 0) / 128) : (1 + (scaleUniform || 0) / 128);
@@ -2856,14 +2970,6 @@ function drawExtImg(surf, imgData, w, h, rotation, scaleUniform, pivotX, pivotY,
       // 完全在图片外则跳过
       if (srcXF < 0 || srcXF >= imgW || srcYF < 0 || srcYF >= imgH) continue;
 
-      // 边缘抗锯齿：计算到图片四条边的最小距离，转换为覆盖率
-      const dLeft = srcXF;
-      const dRight = imgW - 1 - srcXF;
-      const dTop = srcYF;
-      const dBottom = imgH - 1 - srcYF;
-      const edgeDist = Math.max(0, Math.min(1, Math.min(dLeft, dRight, dTop, dBottom)));
-      const edgeCov = Math.round(edgeDist * 255);
-
       // 双线性插值采样
       const q = bilinearSample(srcXF, srcYF);
       if (!q) continue;
@@ -2871,12 +2977,8 @@ function drawExtImg(surf, imgData, w, h, rotation, scaleUniform, pivotX, pivotY,
       const a = isOpaqueFmt ? 255 : q.a;
       if (a <= 0) continue;
 
-      // 应用边缘覆盖率到像素 alpha
-      const finalA = Math.min(255, Math.round(a * edgeCov / 255));
-      if (finalA <= 0) continue;
-
-      // SGL blend_pixel 两步混合
-      blendPixelRGB565TwoStep(surf, px, py, { r: q.r, g: q.g, b: q.b }, finalA, alpha);
+      // SGL blend_pixel 两步混合（直接使用双线性插值结果的 alpha）
+      blendPixelRGB565TwoStep(surf, px, py, { r: q.r, g: q.g, b: q.b }, a, alpha);
     }
   }
 }

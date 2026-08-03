@@ -7891,9 +7891,13 @@ function renderAll() {
   // 只有所有字体都成功恢复时才跳过异步预加载
   if (restored === fontKeys.length && restored > 0) {
     _initialFontPreloadDone = true;
+    logMessage(`字模加载完成（从本地缓存恢复 ${restored} 个字体）`, 'success');
     console.log(`[font] 同步恢复全部 ${restored} 个字体缓存，跳过异步预加载`);
   } else if (restored > 0) {
+    logMessage(`已从本地缓存恢复 ${restored}/${fontKeys.length} 个字模，正在加载剩余...`, 'info');
     console.log(`[font] 同步恢复 ${restored}/${fontKeys.length} 个字体缓存，仍需异步加载剩余`);
+  } else if (fontKeys.length > 0) {
+    logMessage(`本地缓存中未找到字模，正在加载 ${fontKeys.length} 个字体...`, 'info');
   }
 })();
 

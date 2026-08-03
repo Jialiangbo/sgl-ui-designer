@@ -183,7 +183,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><text x="4" y="17" font-size="14" font-weight="bold" fill="currentColor" stroke="none">Aa</text></svg>',
     category: 'text',
     defaultSize: [120, 24],
-    properties: ['text', 'textColor', 'bgColor', 'align', 'fontSize', 'fontFamily', 'fontBpp', 'alpha', 'textOffsetX', 'textOffsetY', 'textRotation', 'radius', 'textBuffer', 'textFmt', 'textFmtDynamic', 'locked']
+    properties: ['text', 'textColor', 'bgColor', 'align', 'fontSize', 'fontFamily', 'fontBpp', 'alpha', 'textOffsetX', 'textOffsetY', 'textRotation', 'radius', 'longMode', 'longModeSpeed', 'textBuffer', 'textFmt', 'textFmtDynamic', 'locked']
   },
   {
     type: 'textbox',
@@ -572,6 +572,8 @@ export const PROP_META = {
   msgOffsetX: { label: '消息文本 X 偏移', type: 'number', min: 0, max: 100 },
   msgOffsetY: { label: '消息文本 Y 偏移', type: 'number', min: 0, max: 100 },
   textRotation: { label: '文本旋转 (°)', type: 'number', min: -180, max: 180 },
+  longMode: { label: '长文本滚动', type: 'bool' },
+  longModeSpeed: { label: '滚动速度(ms)', type: 'number', min: 100, max: 10000 },
   titleHeight: { label: '标题栏高度', type: 'number', min: 0, max: 100 },
   msgLineMargin: { label: '消息行间距', type: 'number', min: 0, max: 50 },
   capSize: { label: '电池头尺寸(像素)', type: 'number', min: 0, max: 200 },
@@ -798,7 +800,7 @@ export function createWidgetDefaults(type) {
     case 'keyboard':
       return { ...base, cellColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, mainAlpha: 255, borderAlpha: 255, fontSize: 14, fontFamily: '', fontBpp: 4, btnColor: '#404040', textColor: '#000000', btnRadius: 0, btnAlpha: 255, btnMainAlpha: 255, btnBorderColor: '#000000', btnBorderWidth: 0, btnBorderAlpha: 255, btnPixmap: '', pixmap: '', textarea: '' };
     case 'label':
-      return { ...base, text: '标签文本', textColor: '#000000', bgColor: 'transparent', align: 'LEFT_MID', fontSize: 14, fontFamily: '', fontBpp: 4, textOffsetX: 0, textOffsetY: 0, textRotation: 0, radius: 0, textBuffer: '', textFmt: '', textFmtDynamic: '' };
+      return { ...base, text: '标签文本', textColor: '#000000', bgColor: 'transparent', align: 'LEFT_MID', fontSize: 14, fontFamily: '', fontBpp: 4, textOffsetX: 0, textOffsetY: 0, textRotation: 0, radius: 0, textBuffer: '', textFmt: '', textFmtDynamic: '', longMode: false, longModeSpeed: 3000 };
     case 'textbox':
       return { ...base, text: 'textbox', textColor: '#000000', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 10, fontSize: 14, fontFamily: '', fontBpp: 4, lineMargin: 1, pixmap: '', pixmapFormat: 'RGB565' };
     case 'textline':
@@ -1417,6 +1419,7 @@ function getSglCreateFn(type) {
     'numberkbd': 'sgl_numberkbd_create',
     'keyboard': 'sgl_keyboard_create',
     'label': 'sgl_label_create',
+    'label_ext': 'sgl_label_ext_create',
     'textbox': 'sgl_textbox_create',
     'textline': 'sgl_textline_create',
     'textlist': 'sgl_textlist_create',
@@ -1590,6 +1593,24 @@ function getSglSetters(w) {
       }
       if (shouldGenerateValue(w.textFmt, defaults, 'textFmt') && w.textFmt) setters.push(`sgl_label_set_text_fmt(${obj(w)}, "${escapeStr(w.textFmt)}");`);
       if (shouldGenerateValue(w.textFmtDynamic, defaults, 'textFmtDynamic') && w.textFmtDynamic) setters.push(`sgl_label_set_text_fmt_dynamic(${obj(w)}, "${escapeStr(w.textFmtDynamic)}");`);
+      if (w.longMode) setters.push(`sgl_label_set_long_mode(${obj(w)}, ${w.longModeSpeed || 3000}, true);`);
+      break;
+
+    case 'label_ext':
+      if (shouldGenerateFont(w, defaults)) {
+        const fontId = getFontId(w.fontFamily, w.fontSize, w.fontBpp || 4);
+        setters.push(`sgl_label_ext_set_font(${obj(w)}, &${fontId});`);
+      }
+      if (shouldGenerateValue(w.text, defaults, 'text')) setters.push(`sgl_label_ext_set_text(${obj(w)}, "${escapeStr(w.text)}");`);
+      if (shouldGenerateValue(w.textColor, defaults, 'textColor')) setters.push(`sgl_label_ext_set_text_color(${obj(w)}, ${hexToSglColor(w.textColor)});`);
+      if (shouldGenerateValue(w.bgColor, defaults, 'bgColor') && w.bgColor !== 'transparent') setters.push(`sgl_label_ext_set_bg_color(${obj(w)}, ${hexToSglColor(w.bgColor)});`);
+      if (shouldGenerateValue(w.align, defaults, 'align')) setters.push(`sgl_label_ext_set_text_align(${obj(w)}, SGL_ALIGN_${mapSglAlign(w.align)});`);
+      if (shouldGenerateValue(w.radius, defaults, 'radius')) setters.push(`sgl_label_ext_set_radius(${obj(w)}, ${w.radius});`);
+      if (shouldGenerateValue(w.textOffsetX, defaults, 'textOffsetX') || shouldGenerateValue(w.textOffsetY, defaults, 'textOffsetY')) {
+        setters.push(`sgl_label_ext_set_text_offset(${obj(w)}, ${w.textOffsetX || 0}, ${w.textOffsetY || 0});`);
+      }
+      if (shouldGenerateValue(w.textRotation, defaults, 'textRotation')) setters.push(`sgl_label_ext_set_text_rotation(${obj(w)}, ${w.textRotation});`);
+      if (shouldGenerateValue(w.alpha, defaults, 'alpha')) setters.push(`sgl_label_ext_set_alpha(${obj(w)}, ${w.alpha});`);
       break;
 
     case 'textbox':
@@ -1782,7 +1803,9 @@ function getSglSetters(w) {
       if (shouldGenerateValue(w.msgOffsetX, defaults, 'msgOffsetX')) setters.push(`sgl_msgbox_set_msg_x_offset(${obj(w)}, ${w.msgOffsetX});`);
       if (shouldGenerateValue(w.msgOffsetY, defaults, 'msgOffsetY')) setters.push(`sgl_msgbox_set_msg_y_offset(${obj(w)}, ${w.msgOffsetY});`);
       if (shouldGenerateValue(w.msgLineMargin, defaults, 'msgLineMargin')) setters.push(`sgl_msgbox_set_msg_line_margin(${obj(w)}, ${w.msgLineMargin});`);
-      emitAlphaGroup(setters, obj(w), 'sgl_msgbox', w.alpha, w.mainAlpha, w.borderAlpha);
+      if (w.alpha !== undefined && w.alpha < 255) setters.push(`sgl_msgbox_set_alpha(${obj(w)}, ${w.alpha});`);
+      if (w.mainAlpha !== undefined && w.mainAlpha < 255) setters.push(`sgl_msgbox_set_main_alpha(${obj(w)}, ${w.mainAlpha});`);
+      if (w.borderAlpha !== undefined && w.borderAlpha < 255) setters.push(`sgl_msgbox_set_border_alpha(${obj(w)}, ${w.borderAlpha});`);
       if (shouldGeneratePixmap(w.pixmap)) setters.push(`sgl_msgbox_set_pixmap(${obj(w)}, &${pixmapVarName(w.pixmap, w.pixmapFormat)});`);
       if (shouldGenerateValue(w.exitAnswer, defaults, 'exitAnswer') && w.exitAnswer) {
         setters.push(`static const char *${obj(w)}_answer = NULL; sgl_msgbox_set_exit_answer(${obj(w)}, &${obj(w)}_answer);`);
@@ -1862,7 +1885,9 @@ function getSglSetters(w) {
       if (shouldGenerateValue(w.borderColor, defaults, 'borderColor')) setters.push(`sgl_keyboard_set_border_color(${obj(w)}, ${hexToSglColor(w.borderColor)});`);
       if (shouldGenerateValue(w.borderWidth, defaults, 'borderWidth')) setters.push(`sgl_keyboard_set_border_width(${obj(w)}, ${w.borderWidth});`);
       if (shouldGenerateValue(w.radius, defaults, 'radius')) setters.push(`sgl_keyboard_set_radius(${obj(w)}, ${w.radius});`);
-      emitAlphaGroup(setters, obj(w), 'sgl_keyboard', w.alpha, w.mainAlpha, w.borderAlpha);
+      if (w.alpha !== undefined && w.alpha < 255) setters.push(`sgl_keyboard_set_alpha(${obj(w)}, ${w.alpha});`);
+      if (w.mainAlpha !== undefined && w.mainAlpha < 255) setters.push(`sgl_keyboard_set_main_alpha(${obj(w)}, ${w.mainAlpha});`);
+      if (w.borderAlpha !== undefined && w.borderAlpha < 255) setters.push(`sgl_keyboard_set_border_alpha(${obj(w)}, ${w.borderAlpha});`);
       if (shouldGenerateValue(w.btnColor, defaults, 'btnColor')) setters.push(`sgl_keyboard_set_btn_color(${obj(w)}, ${hexToSglColor(w.btnColor)});`);
       if (shouldGenerateValue(w.textColor, defaults, 'textColor')) setters.push(`sgl_keyboard_set_text_color(${obj(w)}, ${hexToSglColor(w.textColor)});`);
       if (shouldGenerateValue(w.btnRadius, defaults, 'btnRadius')) setters.push(`sgl_keyboard_set_btn_radius(${obj(w)}, ${w.btnRadius});`);
@@ -1885,6 +1910,7 @@ function getSglSetters(w) {
       if (shouldGenerateValue(w.text, defaults, 'text')) setters.push(`sgl_textline_set_text(${obj(w)}, "${escapeStr(w.text)}");`);
       if (shouldGenerateValue(w.textColor, defaults, 'textColor')) setters.push(`sgl_textline_set_text_color(${obj(w)}, ${hexToSglColor(w.textColor)});`);
       if (shouldGenerateValue(w.bgColor, defaults, 'bgColor') && !w.bgTransparent) setters.push(`sgl_textline_set_bg_color(${obj(w)}, ${hexToSglColor(w.bgColor)});`);
+      if (w.bgTransparent) setters.push(`sgl_textline_set_bg_transparent(${obj(w)});`);
       if (shouldGenerateValue(w.radius, defaults, 'radius')) setters.push(`sgl_textline_set_radius(${obj(w)}, ${w.radius});`);
       if (shouldGenerateValue(w.edgeMargin, defaults, 'edgeMargin')) setters.push(`sgl_textline_set_edge_margin(${obj(w)}, ${w.edgeMargin});`);
       if (shouldGenerateValue(w.lineMargin, defaults, 'lineMargin')) setters.push(`sgl_textline_set_line_margin(${obj(w)}, ${w.lineMargin});`);
@@ -2150,7 +2176,7 @@ function getSglSetters(w) {
         }
         // barchart 专用：间距和方向
         if (chartType === 'barchart') {
-          if (shouldGenerateValue(w.barSpacing, defaults, 'barSpacing')) setters.push(`${prefix}_set_bar_spacing(${obj(w)}, ${w.barSpacing}, 10);`);
+          if (shouldGenerateValue(w.barSpacing, defaults, 'barSpacing')) setters.push(`${prefix}_set_bar_spacing(${obj(w)}, ${w.barSpacing}, ${w.categoryGap || 0});`);
           if (shouldGenerateValue(w.orientation, defaults, 'orientation')) setters.push(`${prefix}_set_orientation(${obj(w)}, ${w.orientation});`);
         }
         // linechart 和 barchart 共有：开屏动画
@@ -2298,6 +2324,8 @@ function getSglSetters(w) {
 
     case 'img':
       if (shouldGeneratePixmap(w.pixmap)) setters.push(`sgl_img_set_pixmap(${obj(w)}, &${pixmapVarName(w.pixmap, w.pixmapFormat || 'RGB565')});`);
+      if (w.pixmapNum != null && w.pixmapNum > 1) setters.push(`sgl_img_set_pixmap_num(${obj(w)}, ${w.pixmapNum}, false);`);
+      if (w.pixmapIndex != null) setters.push(`sgl_img_set_pixmap_index(${obj(w)}, ${w.pixmapIndex});`);
       if (shouldGenerateValue(w.alpha, defaults, 'alpha')) setters.push(`sgl_img_set_alpha(${obj(w)}, ${w.alpha});`);
       break;
 

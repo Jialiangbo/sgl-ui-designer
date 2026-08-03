@@ -29,6 +29,18 @@ fn default_model() -> String { "gpt-4o-mini".to_string() }
 fn default_max_tokens() -> u32 { 8192 }
 fn default_temperature() -> f64 { 0.7 }
 
+// 按 UTF-8 字符边界安全截断字符串前 max_bytes 字节（避免中文等多字节字符处切片 panic）
+fn truncate_utf8(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 impl Default for LlmConfig {
     fn default() -> Self {
         Self {
@@ -227,7 +239,7 @@ pub async fn llm_chat(config: LlmConfig, messages: Vec<ChatMessage>) -> Result<L
             format!(
                 "解析 LLM 响应失败: {} (响应内容前200字: {})",
                 e,
-                &response_text[..response_text.len().min(200)]
+                truncate_utf8(&response_text, 200)
             )
         })?;
 
@@ -301,7 +313,7 @@ pub async fn llm_stream_chat(
     // 逐行读取 SSE 流
     use futures_util::StreamExt;
     let mut stream = response.bytes_stream();
-    let mut buffer = String::new();
+    let mut byte_buffer: Vec<u8> = Vec::new();
     let mut final_usage: Option<OpenAiUsage> = None;
 
     while let Some(chunk_result) = stream.next().await {
@@ -313,13 +325,13 @@ pub async fn llm_stream_chat(
             }
         };
 
-        let text = String::from_utf8_lossy(&chunk);
-        buffer.push_str(&text);
+        byte_buffer.extend_from_slice(&chunk);
 
-        // 处理完整的 SSE 事件行
-        while let Some(newline_pos) = buffer.find('\n') {
-            let line = buffer[..newline_pos].trim().to_string();
-            buffer = buffer[newline_pos + 1..].to_string();
+        while let Some(newline_pos) = byte_buffer.windows(1).position(|w| w[0] == b'\n') {
+            let line_bytes = byte_buffer[..newline_pos].to_vec();
+            byte_buffer = byte_buffer[newline_pos + 1..].to_vec();
+
+            let line = String::from_utf8_lossy(&line_bytes).trim().to_string();
 
             if line.is_empty() {
                 continue;
@@ -404,12 +416,12 @@ pub async fn llm_test_connection(config: LlmConfig) -> Result<String, String> {
     let text = response.text().await.unwrap_or_default();
 
     if !status.is_success() {
-        return Err(format!("API 返回错误 ({}): {}", status, &text[..text.len().min(200)]));
+        return Err(format!("API 返回错误 ({}): {}", status, truncate_utf8(&text, 200)));
     }
 
     // 尝试解析响应确认格式正确
     let _: OpenAiResponse = serde_json::from_str(&text)
-        .map_err(|e| format!("响应格式异常: {} (前100字: {})", e, &text[..text.len().min(100)]))?;
+        .map_err(|e| format!("响应格式异常: {} (前100字: {})", e, truncate_utf8(&text, 100)))?;
 
     Ok(format!("连接成功！API 响应正常 (HTTP {})", status))
 }
@@ -463,7 +475,7 @@ pub async fn llm_list_models(config: LlmConfig) -> Result<Vec<String>, String> {
         return Err(format!(
             "API 返回错误 ({}): {}",
             status,
-            &text[..text.len().min(200)]
+            truncate_utf8(&text, 200)
         ));
     }
 
@@ -482,6 +494,6 @@ pub async fn llm_list_models(config: LlmConfig) -> Result<Vec<String>, String> {
 
     Err(format!(
         "无法解析模型列表 (前200字: {})",
-        &text[..text.len().min(200)]
+        truncate_utf8(&text, 200)
     ))
 }

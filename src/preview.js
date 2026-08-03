@@ -2942,7 +2942,7 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
         if (imgData) {
           // 使用严格移植的 SGL ext_img 像素级渲染算法
           // SGL ext_img 设置 pixmap 后 coords 会被强制设为图片尺寸，绘制区域由图片决定
-          R.drawExtImg(surf, imgData, imgData.width, imgData.height, w.rotation, w.scaleUniform, w.pivotX, w.pivotY, eiAlpha, w.pixmapFormat);
+          R.drawExtImg(surf, imgData, imgData.width, imgData.height, w.rotation, w.scaleUniform, w.pivotX, w.pivotY, eiAlpha, w.pixmapFormat, w.scaleX, w.scaleY);
           flushWidget(surf);
         } else {
           preloadPixmapImage(eiPixmap, () => render());

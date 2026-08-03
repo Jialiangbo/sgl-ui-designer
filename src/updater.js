@@ -42,8 +42,8 @@ function notify(msg, type = 'info') {
  * @returns {number} v1 > v2 返回 1，v1 < v2 返回 -1，相等返回 0
  */
 function compareVersions(v1, v2) {
-  const a = String(v1).replace(/^v/i, '').split('.');
-  const b = String(v2).replace(/^v/i, '').split('.');
+  const a = String(v1).replace(/^v/i, '').split('-')[0].split('.');
+  const b = String(v2).replace(/^v/i, '').split('-')[0].split('.');
   const len = Math.max(a.length, b.length);
   for (let i = 0; i < len; i++) {
     const na = parseInt(a[i] || '0', 10);
@@ -51,6 +51,10 @@ function compareVersions(v1, v2) {
     if (na > nb) return 1;
     if (na < nb) return -1;
   }
+  const hasPre1 = String(v1).includes('-');
+  const hasPre2 = String(v2).includes('-');
+  if (hasPre1 && !hasPre2) return -1;
+  if (!hasPre1 && hasPre2) return 1;
   return 0;
 }
 
@@ -99,7 +103,7 @@ function formatSize(bytes) {
  * 显示"发现新版本"提示对话框，支持自动下载安装
  */
 function showUpdateAvailableDialog(tagName, releaseName, body, asset) {
-  const releaseNotes = (body || '').split('\r?\n').slice(0, 8).join('\n');
+  const releaseNotes = (body || '').split(/\r?\n/).slice(0, 8).join('\n');
   let msg = `发现新版本 ${tagName}！\n\n` +
             `版本名称：${releaseName || tagName}\n`;
   if (releaseNotes) {

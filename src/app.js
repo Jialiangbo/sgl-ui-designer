@@ -2,6 +2,8 @@
 import { SGL_WIDGET_TYPES, WIDGET_DEFAULTS, createWidgetDefaults, generateSGLCode, validateProjectFonts } from './sgl_api.js';
 import { invoke } from '@tauri-apps/api/core';
 import { open, save, message } from '@tauri-apps/plugin-dialog';
+import { registerFontFile } from './render_common.js';
+import { generateFontC } from './font_generator.js';
 
 export const AppState = {
   project: {
@@ -88,7 +90,11 @@ export const AppState = {
     this._redoStack.push(JSON.stringify(this.project));
     const snapshot = JSON.parse(this._undoStack.pop());
     this._undoPaused = true;
+    const oldPageId = this.currentPageId;
     this.project = snapshot;
+    if (!this.project.pages.find(p => p.id === oldPageId)) {
+      this.currentPageId = this.project.pages[0]?.id || '';
+    }
     this.selectedWidgetIds.clear();
     this._undoPaused = false;
     this.listeners.forEach(fn => fn());
@@ -101,7 +107,11 @@ export const AppState = {
     this._undoStack.push(JSON.stringify(this.project));
     const snapshot = JSON.parse(this._redoStack.pop());
     this._undoPaused = true;
+    const oldPageId = this.currentPageId;
     this.project = snapshot;
+    if (!this.project.pages.find(p => p.id === oldPageId)) {
+      this.currentPageId = this.project.pages[0]?.id || '';
+    }
     this.selectedWidgetIds.clear();
     this._undoPaused = false;
     this.listeners.forEach(fn => fn());
@@ -593,7 +603,9 @@ export const AppState = {
       const projectDir = this.projectPath.replace(/[/\\][^/\\]*$/, '');
       const codePath = projectDir + '/ui_' + this.project.name + '.c';
       const code = generateSGLCode(this.project);
-      await invoke('export_code', { path: codePath, code, project: this.project });
+      // 前端生成字模 C 文件内容，传给后端直接写入（不再依赖 sgl_font_conv.exe）
+      const fontFiles = await this.generateFontCFiles();
+      await invoke('export_code', { path: codePath, code, project: this.getProjectForRust(), fontFiles });
       return { ok: true, path: codePath };
     } catch (e) {
       return { ok: false, msg: String(e) };
@@ -610,10 +622,12 @@ export const AppState = {
         `• ${item.page} / ${item.widget}: ${item.reason} (${item.fontFamily || '无'})`
       ).join('\n');
       showToast(summary, 'error');
-      logMessage(`[${actionName}] ${summary}，操作已终止`, 'error');
-      issues.forEach(item => {
-        logMessage(`  - ${item.page} / ${item.widget}: ${item.reason} (${item.fontFamily || '无'})`, 'error');
-      });
+      if (this.logger) {
+        this.logger(`[${actionName}] ${summary}，操作已终止`, 'error');
+        issues.forEach(item => {
+          this.logger(`  - ${item.page} / ${item.widget}: ${item.reason} (${item.fontFamily || '无'})`, 'error');
+        });
+      }
       try {
         await message(`${summary}，请在右侧资源面板添加字体文件后再操作。\n\n${detail}`, { title: '字体资源缺失', kind: 'error' });
       } catch (e) {
@@ -636,7 +650,9 @@ export const AppState = {
 
     try {
       const code = generateSGLCode(this.project);
-      const result = await invoke('export_code_to_project', { project: this.getProjectForRust(), projectPath: this.projectPath, code });
+      // 在前端生成字模 C 文件内容，传给后端写入文件（不再依赖 sgl_font_conv.exe）
+      const fontFiles = await this.generateFontCFiles();
+      const result = await invoke('export_code_to_project', { project: this.getProjectForRust(), projectPath: this.projectPath, code, fontFiles });
       showToast('代码已导出', 'success');
       return { ok: true, msg: result };
     } catch (e) {
@@ -645,25 +661,128 @@ export const AppState = {
     }
   },
 
+  // 生成所有字体的字模 C 文件内容
+  // 严格对齐后端 font_id_from_family：sgl_font_{clean_name}_{size}_bpp{bpp}
+  // 只生成被控件实际使用的 font+size+bpp 组合，避免生成无用的字模文件
+  async generateFontCFiles() {
+    const fonts = this.project.resources?.fonts || [];
+    if (!fonts || fonts.length === 0) return [];
+
+    // 1. 从控件收集所有实际使用的 font+size+bpp 组合及对应字符
+    // key: fontPath|size|bpp -> Set<chars>
+    const fontUsageMap = new Map();
+    for (const page of (this.project.pages || [])) {
+      this._collectFontChars(page.widgets || [], fontUsageMap);
+    }
+
+    // 2. 构建 fontPath -> font 资源对象的映射（用于查 bpp/compress）
+    const fontMap = new Map();
+    for (const font of fonts) {
+      fontMap.set(font.path, font);
+      // 兼容路径分隔符差异
+      const normalized = font.path.replace(/\\/g, '/');
+      fontMap.set(normalized, font);
+    }
+
+    // 3. 遍历 fontUsageMap，只生成被使用的字模
+    const result = [];
+    const processed = new Set(); // 已处理的 fontPath|size|bpp（去重）
+    for (const [key, chars] of fontUsageMap.entries()) {
+      const [fontPath, sizeStr, bppStr] = key.split('|');
+      const size = parseInt(sizeStr, 10);
+      const bpp = parseInt(bppStr, 10);
+      const dedupeKey = `${fontPath}|${size}|${bpp}`;
+      if (processed.has(dedupeKey)) continue;
+      processed.add(dedupeKey);
+
+      // 查找对应的字体资源
+      let font = fontMap.get(fontPath);
+      if (!font) {
+        // 尝试规范化路径查找
+        const normalized = fontPath.replace(/\\/g, '/');
+        font = fontMap.get(normalized);
+      }
+      if (!font) {
+        console.warn('未找到字体资源:', fontPath);
+        continue;
+      }
+
+      // 字符集：必须有有效字符才生成字模（避免生成空 font_bitmap）
+      const symbols = Array.from(chars).join('');
+      if (!symbols || symbols.length === 0) {
+        console.warn('字体使用字符为空，跳过生成:', fontPath, size);
+        continue;
+      }
+
+      // 字体变量名与后端 font_id_from_family 一致
+      const fontFileName = font.path.replace(/[/\\]/g, '/').split('/').pop();
+      const cleanName = fontFileName.replace(/[^0-9a-zA-Z]/g, '_');
+      const compress = font.compress || 0;
+      const compressSuffix = compress > 0 ? '_compress' : '';
+      const fontId = `sgl_font_${cleanName}_${size}_bpp${bpp}${compressSuffix}`;
+
+      try {
+        const faceName = await registerFontFile(font.path);
+        if (!faceName) {
+          console.warn('字体加载失败:', font.path);
+          continue;
+        }
+        const cContent = generateFontC(faceName, size, bpp, symbols, compress > 0, fontId);
+        result.push({ fontId, fileName: `${fontId}.c`, content: cContent });
+      } catch (err) {
+        console.error('生成字模失败:', font.path, size, err);
+      }
+    }
+    return result;
+  },
+
+  // 递归收集控件使用的字体字符
+  _collectFontChars(widgets, fontUsageMap) {
+    for (const w of widgets) {
+      const fam = w.fontFamily;
+      if (fam && fam !== 'default' && fam !== '') {
+        const sz = w.fontSize || 14;
+        const bpp = w.fontBpp || 4;
+        const key = `${fam}|${sz}|${bpp}`;
+        if (!fontUsageMap.has(key)) fontUsageMap.set(key, new Set());
+        const chars = fontUsageMap.get(key);
+        const texts = [w.text, w.titleText, w.options, w.leftSlots, w.rightSlots, w.xLabels];
+        for (const t of texts) {
+          if (t) for (const ch of String(t)) { if (ch.charCodeAt(0) >= 0x20) chars.add(ch); }
+        }
+        if (w.type === 'chart') {
+          for (const ch of '0123456789.-') chars.add(ch);
+        }
+      }
+      for (const child of (w.widgets || [])) {
+        this._collectFontChars([child], fontUsageMap);
+      }
+    }
+  },
+
   // ============ 保存项目到文件 ============
   async saveProject() {
     try {
       let filePath = this.projectPath;
+      const isFirstSave = !filePath;
       if (!filePath) {
         filePath = await save({
           title: '保存项目',
           defaultPath: this.project.name + '.sgl',
-          filters: [{ name: 'SGL 项目文件', extensions: ['sgl'] }]
+          filters: [{ name: 'SGL 项目文件', extensions: ['sgl', 'json'] }]
         });
         if (!filePath) return { ok: false, msg: '取消保存' };
-        if (!filePath.endsWith('.sgl')) filePath += '.sgl';
+        if (!filePath.endsWith('.sgl') && !filePath.endsWith('.json')) filePath += '.sgl';
       }
       await invoke('save_project', { path: filePath, project: this.getProjectForRust() });
-      // 保存后重新加载，确保资源路径与文件一致（Rust端会将路径转为相对路径保存）
-      const saved = await invoke('load_project', { path: filePath });
-      if (saved) {
-        this.project = saved;
-        this.migrateProject();
+      // 仅首次保存时重新加载项目（同步资源路径），已保存过的项目不再重新加载以避免触发渲染
+      if (isFirstSave) {
+        const saved = await invoke('load_project', { path: filePath });
+        if (saved) {
+          this.project = saved;
+          this.migrateProject();
+          this.listeners.forEach(fn => fn());
+        }
       }
       this.projectPath = filePath;
       this.save();
@@ -678,7 +797,7 @@ export const AppState = {
     try {
       const filePath = await open({
         title: '打开项目',
-        filters: [{ name: 'SGL 项目文件', extensions: ['sgl'] }],
+        filters: [{ name: 'SGL 项目文件', extensions: ['sgl', 'json'] }],
         multiple: false
       });
       if (!filePath) return { ok: false, msg: '取消打开' };

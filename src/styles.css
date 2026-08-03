@@ -341,38 +341,6 @@ body {
 .log-content .log-line.warn { color: #f1fa8c; }
 .log-content .log-line.error { color: #ff5555; }
 
-.log-input-line {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 12px;
-  border-top: 1px solid var(--border);
-  background: var(--bg-primary);
-  flex-shrink: 0;
-}
-
-.log-prompt {
-  font-family: 'Consolas', 'Monaco', monospace;
-  font-size: 12px;
-  color: var(--accent-light);
-  user-select: none;
-}
-
-.log-input {
-  flex: 1;
-  background: transparent;
-  border: none;
-  outline: none;
-  color: var(--text-primary);
-  font-family: 'Consolas', 'Monaco', monospace;
-  font-size: 12px;
-  line-height: 1.6;
-}
-
-.log-input::placeholder {
-  color: var(--text-muted);
-}
-
 /* ============ 面板 ============ */
 .panel {
   padding: 16px;

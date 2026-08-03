@@ -1430,7 +1430,7 @@ function drawStringRealtime(surf, x, y, text, color, alpha, fontSize, fontFamily
 // ============================================================
 // SGL 字模位图渲染系统（所见即所得）
 // 移植自 sgl_draw_text.c / sgl_core.c
-// 使用 sgl_font_conv.exe 生成的字模数据，逐像素 alpha 混合
+// 使用前端 generateFontC 生成的字模数据，逐像素 alpha 混合
 // ============================================================
 
 const _fontBitmapCache = new Map();
@@ -1438,7 +1438,7 @@ const _OPA4_TABLE = [0, 17, 34, 51, 68, 85, 102, 119, 136, 153, 170, 187, 204, 2
 const _OPA2_TABLE = [0, 85, 170, 255];
 
 /**
- * 解析 sgl_font_conv.exe 生成的 C 文件为字模数据对象
+ * 解析前端生成的字模 C 文件为字模数据对象
  */
 function parseFontCFile(content) {
   // 移除所有 /* ... */ 注释，避免注释中的数字被误提取为字模数据
@@ -1980,8 +1980,10 @@ function drawPolygonBorderLine(surf, x1, y1, x2, y2, width, color, alpha) {
         const fade = radius_fp + 128 - dist;
         if (fade > 0) {
           const cov = fade >= 255 ? 255 : fade;
-          // 用 setEdgePixel 正确处理透明背景上的抗锯齿（保留 alpha 通道）
-          setEdgePixel(surf, px, py, color, cov, alpha);
+          // SGL: mix = cov * alpha >> 8; if (mix == 0 && cov != 0) mix = 1;
+          let mix = (cov * alpha) >> 8;
+          if (mix === 0 && cov !== 0) mix = 1;
+          setEdgePixel(surf, px, py, color, mix, 255);
         }
       }
     }
@@ -2037,8 +2039,10 @@ function drawPolygonBorderLine(surf, x1, y1, x2, y2, width, color, alpha) {
 
       if (fade > 0) {
         const cov = fade >= 255 ? 255 : fade;
-        // 用 setEdgePixel 正确处理透明背景上的抗锯齿（保留 alpha 通道）
-        setEdgePixel(surf, px, py, color, cov, alpha);
+        // SGL: mix = cov * alpha >> 8; if (mix == 0 && cov != 0) mix = 1;
+        let mix = (cov * alpha) >> 8;
+        if (mix === 0 && cov !== 0) mix = 1;
+        setEdgePixel(surf, px, py, color, mix, 255);
       }
     }
   }
@@ -2660,7 +2664,7 @@ function _expandBits(v, bits) {
  * @param {string} [pixmapFormat] - pixmap 格式（RGB565/ARGB4444/...），
  *                                  不透明格式忽略原图 alpha，透明格式使用原图 alpha
  */
-function drawExtImg(surf, imgData, w, h, rotation, scaleUniform, pivotX, pivotY, alpha, pixmapFormat) {
+function drawExtImg(surf, imgData, w, h, rotation, scaleUniform, pivotX, pivotY, alpha, pixmapFormat, scaleX, scaleY) {
   if (!imgData || alpha <= 0) return;
   // SGL ext_img 的 decode_pixel 不支持 RLE 压缩格式（default 分支返回黑色），
   // 设计器与 SGL 仿真一致：RLE 格式不渲染
@@ -2794,12 +2798,45 @@ function drawExtImg(surf, imgData, w, h, rotation, scaleUniform, pivotX, pivotY,
     return;
   }
 
-  // 旋转 + 缩放路径：逆变换采样
-  const scaleFactor = 1 + (scaleUniform || 0) / 128;
-  const invScale = 1 / scaleFactor;
+  // 旋转 + 缩放路径：逆变换采样 + 双线性插值 + 边缘抗锯齿
+  const hasIndepScale = (scaleX && scaleX !== 0) || (scaleY && scaleY !== 0);
+  const sX = hasIndepScale ? (1 + (scaleX || 0) / 128) : (1 + (scaleUniform || 0) / 128);
+  const sY = hasIndepScale ? (1 + (scaleY || 0) / 128) : (1 + (scaleUniform || 0) / 128);
+  const invScaleX = 1 / sX;
+  const invScaleY = 1 / sY;
   const rad = (rotation || 0) * Math.PI / 180;
   const sin = Math.sin(rad);
   const cos = Math.cos(rad);
+
+  // 双线性插值采样：对 2x2 邻域做 R/G/B/A 四通道加权平均
+  function bilinearSample(srcXF, srcYF) {
+    const x0 = Math.floor(srcXF);
+    const y0 = Math.floor(srcYF);
+    if (x0 < 0 || x0 >= imgW || y0 < 0 || y0 >= imgH) return null;
+    const x1 = Math.min(x0 + 1, imgW - 1);
+    const y1 = Math.min(y0 + 1, imgH - 1);
+    const dx = srcXF - x0;
+    const dy = srcYF - y0;
+    const dx1 = 1 - dx;
+    const dy1 = 1 - dy;
+
+    function getQ(x, y) {
+      const idx = (y * imgW + x) * 4;
+      return quantizeColor(src[idx], src[idx + 1], src[idx + 2], src[idx + 3]);
+    }
+
+    const p00 = getQ(x0, y0);
+    const p01 = getQ(x1, y0);
+    const p10 = getQ(x0, y1);
+    const p11 = getQ(x1, y1);
+
+    return {
+      r: Math.round((p00.r * dx1 + p01.r * dx) * dy1 + (p10.r * dx1 + p11.r * dx) * dy),
+      g: Math.round((p00.g * dx1 + p01.g * dx) * dy1 + (p10.g * dx1 + p11.g * dx) * dy),
+      b: Math.round((p00.b * dx1 + p01.b * dx) * dy1 + (p10.b * dx1 + p11.b * dx) * dy),
+      a: Math.round((p00.a * dx1 + p01.a * dx) * dy1 + (p10.a * dx1 + p11.a * dx) * dy)
+    };
+  }
 
   for (let py = 0; py < surf.h; py++) {
     const ly = py / z;
@@ -2808,20 +2845,38 @@ function drawExtImg(surf, imgData, w, h, rotation, scaleUniform, pivotX, pivotY,
       // 目标像素相对 pivot 的偏移
       const relX = lx - pvX;
       const relY = ly - pvY;
-      // 逆旋转 + 逆缩放，得到源图片中的相对位置
+      // 逆旋转 + 逆缩放，得到源图片中的位置
       const rxRot = cos * relX + sin * relY;
       const ryRot = -sin * relX + cos * relY;
-      const rx = rxRot * invScale;
-      const ry = ryRot * invScale;
-      const srcX = Math.floor(rx + pvX);
-      const srcY = Math.floor(ry + pvY);
-      if (srcX < 0 || srcX >= imgW || srcY < 0 || srcY >= imgH) continue;
-      const idx = (srcY * imgW + srcX) * 4;
-      const q = quantizeColor(src[idx], src[idx + 1], src[idx + 2], src[idx + 3]);
+      const rx = rxRot * invScaleX;
+      const ry = ryRot * invScaleY;
+      const srcXF = rx + pvX;
+      const srcYF = ry + pvY;
+
+      // 完全在图片外则跳过
+      if (srcXF < 0 || srcXF >= imgW || srcYF < 0 || srcYF >= imgH) continue;
+
+      // 边缘抗锯齿：计算到图片四条边的最小距离，转换为覆盖率
+      const dLeft = srcXF;
+      const dRight = imgW - 1 - srcXF;
+      const dTop = srcYF;
+      const dBottom = imgH - 1 - srcYF;
+      const edgeDist = Math.max(0, Math.min(1, Math.min(dLeft, dRight, dTop, dBottom)));
+      const edgeCov = Math.round(edgeDist * 255);
+
+      // 双线性插值采样
+      const q = bilinearSample(srcXF, srcYF);
+      if (!q) continue;
+
       const a = isOpaqueFmt ? 255 : q.a;
       if (a <= 0) continue;
+
+      // 应用边缘覆盖率到像素 alpha
+      const finalA = Math.min(255, Math.round(a * edgeCov / 255));
+      if (finalA <= 0) continue;
+
       // SGL blend_pixel 两步混合
-      blendPixelRGB565TwoStep(surf, px, py, { r: q.r, g: q.g, b: q.b }, a, alpha);
+      blendPixelRGB565TwoStep(surf, px, py, { r: q.r, g: q.g, b: q.b }, finalA, alpha);
     }
   }
 }

@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod llm;
+mod font_generator;
 
 use serde::{Deserialize, Deserializer, Serialize};
 use base64::Engine;
@@ -119,6 +120,27 @@ struct Widget {
     vertices: Option<String>,
     #[serde(default)]
     options: Option<String>,
+    #[serde(default, rename = "infiniteMode")]
+    infinite_mode: Option<bool>,
+    // battery 控件属性
+    #[serde(default, rename = "lowColor")]
+    low_color: Option<String>,
+    #[serde(default, rename = "mediumColor")]
+    medium_color: Option<String>,
+    #[serde(default, rename = "highColor")]
+    high_color: Option<String>,
+    #[serde(default, rename = "numCells")]
+    num_cells: Option<i32>,
+    #[serde(default, rename = "capSize")]
+    cap_size: Option<i32>,
+    #[serde(default, rename = "capPos")]
+    cap_pos: Option<i32>,
+    #[serde(default)]
+    charging: Option<bool>,
+    #[serde(default, rename = "chargingColor")]
+    charging_color: Option<String>,
+    #[serde(default, rename = "showPercentage")]
+    show_percentage: Option<bool>,
     // spectrum 控件属性
     #[serde(default, rename = "barColor")]
     bar_color: Option<String>,
@@ -358,6 +380,16 @@ struct ResourceItem {
     path: String,
 }
 
+/// 前端生成的字模 C 文件（替代 sgl_font_conv.exe 调用）
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct FontCFile {
+    #[serde(rename = "fontId")]
+    font_id: String,
+    #[serde(rename = "fileName")]
+    file_name: String,
+    content: String,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct Resources {
     fonts: Vec<ResourceItem>,
@@ -482,9 +514,13 @@ fn hex_to_sgl_rgb(hex: &str) -> String {
     if hex.len() != 7 || !hex.starts_with('#') {
         return "sgl_rgb(0x00, 0x00, 0x00)".to_string();
     }
-    let r = u8::from_str_radix(&hex[1..3], 16).unwrap_or(0);
-    let g = u8::from_str_radix(&hex[3..5], 16).unwrap_or(0);
-    let b = u8::from_str_radix(&hex[5..7], 16).unwrap_or(0);
+    let chars: Vec<char> = hex.chars().collect();
+    if chars.len() != 7 {
+        return "sgl_rgb(0x00, 0x00, 0x00)".to_string();
+    }
+    let r = u8::from_str_radix(&format!("{}{}", chars[1], chars[2]), 16).unwrap_or(0);
+    let g = u8::from_str_radix(&format!("{}{}", chars[3], chars[4]), 16).unwrap_or(0);
+    let b = u8::from_str_radix(&format!("{}{}", chars[5], chars[6]), 16).unwrap_or(0);
     format!("sgl_rgb(0x{:02X}, 0x{:02X}, 0x{:02X})", r, g, b)
 }
 
@@ -569,9 +605,13 @@ fn sgl_color(hex: &str) -> String {
     if hex.is_empty() || !hex.starts_with('#') || hex.len() != 7 {
         return "SGL_COLOR_BLACK".to_string();
     }
-    let r = u8::from_str_radix(&hex[1..3], 16).unwrap_or(0);
-    let g = u8::from_str_radix(&hex[3..5], 16).unwrap_or(0);
-    let b = u8::from_str_radix(&hex[5..7], 16).unwrap_or(0);
+    let chars: Vec<char> = hex.chars().collect();
+    if chars.len() != 7 {
+        return "SGL_COLOR_BLACK".to_string();
+    }
+    let r = u8::from_str_radix(&format!("{}{}", chars[1], chars[2]), 16).unwrap_or(0);
+    let g = u8::from_str_radix(&format!("{}{}", chars[3], chars[4]), 16).unwrap_or(0);
+    let b = u8::from_str_radix(&format!("{}{}", chars[5], chars[6]), 16).unwrap_or(0);
     format!("sgl_rgb({}, {}, {})", r, g, b)
 }
 
@@ -594,7 +634,7 @@ fn resolve_font_path(family: &str) -> Option<String> {
             return Some(p.to_string_lossy().to_string());
         }
     }
-    // 找不到则返回文件名（让 sgl_font_conv 自己尝试查找）
+    // 找不到则返回文件名（让前端字体加载逻辑尝试查找）
     Some(family.to_string())
 }
 
@@ -613,16 +653,18 @@ fn collect_fonts(project: &Project) -> Vec<(String, String, i32, i32, i32, Strin
                 let bpp = w.font_bpp.unwrap_or(4);
                 // 控件字体默认不压缩
                 let compress = 0;
-                // 提取文件名用于去重
-                let font_name = fam.replace('\\', "/").rsplit('/').next().unwrap_or(fam).to_string();
+                // 修复 #28: 使用完整路径作为去重 key，
+                // 避免不同目录下同名字体互相覆盖。
+                // 同一字体文件的多处引用共享字模。
+                let font_key = fam.replace('\\', "/");
                 // 跳过 "default" 字体
-                if font_name == "default" {
+                if font_key == "default" {
                     continue;
                 }
                 // 解析字体文件路径
                 let font_path = resolve_font_path(fam).unwrap_or_else(|| fam.clone());
                 let entry = map
-                    .entry((font_name.clone(), sz, bpp, compress))
+                    .entry((font_key, sz, bpp, compress))
                     .or_insert((font_path, HashSet::new()));
                 // 收集该控件使用的文本字符
                 if let Some(ref text) = w.text {
@@ -770,78 +812,6 @@ fn ensure_cmake_fonts_glob(cmake_path: &std::path::Path) -> Result<bool, String>
         }
     }
     Ok(false)
-}
-
-fn run_font_conv(
-    conv: &str,
-    name: &str,
-    path: &str,
-    sz: i32,
-    bpp: i32,
-    compress: i32,
-    symbols: &str,
-    fonts_dir: &std::path::Path,
-) -> Result<(), String> {
-    // 字体文件名不能包含中文或特殊字符
-    if has_non_ascii(name) {
-        return Err(format!("字体文件名不能包含中文或特殊字符: {}", name));
-    }
-
-    // 使用清理后的字体文件名，避免空格等特殊字符导致 sgl_font_conv 解析失败
-    let clean_name: String = name
-        .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { '_' })
-        .collect();
-
-    // 将原始字体文件复制到 fonts_dir 并使用清理后的文件名
-    let src_path = std::path::Path::new(path);
-    let temp_font_path = fonts_dir.join(&clean_name);
-    if src_path != temp_font_path.as_path() {
-        std::fs::copy(src_path, &temp_font_path)
-            .map_err(|e| format!("复制字体文件 {} 失败: {}", path, e))?;
-    }
-
-    // 压缩字体文件名添加 _compress 后缀以区分
-    let compress_suffix = if compress > 0 { "_compress" } else { "" };
-    let out_file = fonts_dir.join(format!("sgl_font_{}_{}_bpp{}{}.c", clean_name, sz, bpp, compress_suffix));
-    let out_str = out_file.to_string_lossy().to_string();
-    let font_arg = temp_font_path.to_string_lossy().to_string();
-
-    let mut cmd = std::process::Command::new(conv);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        // CREATE_NO_WINDOW (0x08000000): 隐藏控制台窗口，避免 sgl_font_conv.exe 弹出黑窗
-        cmd.creation_flags(0x08000000);
-    }
-    cmd.arg("--font").arg(&font_arg)
-        .arg("--size").arg(sz.to_string())
-        .arg("--bpp").arg(bpp.to_string())
-        .arg("--output").arg(&out_str);
-
-    // 启用 RLE 压缩（仅 bpp 2/4 有效）
-    if compress > 0 {
-        cmd.arg("--compress");
-    }
-
-    if !symbols.is_empty() {
-        let symbols_file = fonts_dir.join(format!("symbols_{}_{}_bpp{}{}.txt", clean_name, sz, bpp, compress_suffix));
-        std::fs::write(&symbols_file, symbols)
-            .map_err(|e| format!("写入 symbols 文件失败: {}", e))?;
-        cmd.arg("--symbols-file").arg(&symbols_file);
-    }
-
-    let output = cmd.output().map_err(|e| format!("调用 sgl_font_conv 失败: {}", e))?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        Err(format!(
-            "sgl_font_conv 返回非零状态 {:?}\nstdout: {}\nstderr: {}",
-            output.status.code(), stdout, stderr
-        ))
-    }
 }
 
 // ============ 图片取模 / pixmap 生成 ============
@@ -1027,12 +997,13 @@ fn rle_encode_pixmap(raw: &[u8], w: u32, h: u32, bpp: usize) -> Vec<u8> {
 
 fn parse_hex_color(hex: &str) -> Option<(u8, u8, u8)> {
     let hex = hex.trim_start_matches('#');
-    if hex.len() != 6 {
+    let chars: Vec<char> = hex.chars().collect();
+    if chars.len() != 6 {
         return None;
     }
-    let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-    let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-    let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+    let r = u8::from_str_radix(&format!("{}{}", chars[0], chars[1]), 16).ok()?;
+    let g = u8::from_str_radix(&format!("{}{}", chars[2], chars[3]), 16).ok()?;
+    let b = u8::from_str_radix(&format!("{}{}", chars[4], chars[5]), 16).ok()?;
     Some((r, g, b))
 }
 
@@ -1045,8 +1016,25 @@ struct ImageRgbaData {
     data: String, // base64 编码的 RGBA 字节数组
 }
 
+/// 验证路径扩展名为常见图片格式，防止任意文件读取
+fn is_image_file(path: &str) -> bool {
+    let p = std::path::Path::new(path);
+    if let Some(ext) = p.extension() {
+        let ext_lower = ext.to_string_lossy().to_lowercase();
+        matches!(
+            ext_lower.as_str(),
+            "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "tiff" | "tif" | "ico"
+        )
+    } else {
+        false
+    }
+}
+
 #[tauri::command]
 fn get_image_data_url(path: String) -> Result<ImageRgbaData, String> {
+    if !is_image_file(&path) {
+        return Err("只允许读取常见图片格式文件".to_string());
+    }
     let img = image::open(&path).map_err(|e| format!("无法打开图片 {}: {}", path, e))?;
     let rgba = img.to_rgba8();
     let (w, h) = rgba.dimensions();
@@ -1060,6 +1048,9 @@ fn get_image_data_url(path: String) -> Result<ImageRgbaData, String> {
 
 #[tauri::command]
 fn get_opaque_image_data_url(path: String, fill_color: String) -> Result<String, String> {
+    if !is_image_file(&path) {
+        return Err("只允许读取常见图片格式文件".to_string());
+    }
     let img = image::open(&path).map_err(|e| format!("无法打开图片 {}: {}", path, e))?;
     let rgba = img.to_rgba8();
     let (w, h) = rgba.dimensions();
@@ -1410,13 +1401,7 @@ fn generate_code(project: Project, window: tauri::Window) -> Result<String, Stri
     code.push_str("#include \"sgl.h\"\n");
     if !fonts.is_empty() {
         code.push_str("\n/* ============================================\n");
-        code.push_str(" * 字体字模声明\n");
-        code.push_str(" * 在导出目录的 fonts/ 子目录中运行以下命令生成字模文件：\n");
-        for (name, path, sz, bpp, compress, _symbols) in &fonts {
-            let compress_arg = if *compress > 0 { " --compress" } else { "" };
-            code.push_str(&format!(" *   sgl_font_conv.exe --font {} --size {} --bpp {}{} --output fonts/{}\n",
-                path, sz, bpp, compress_arg, font_filename(name, *sz, *bpp, *compress)));
-        }
+        code.push_str(" * 字体字模声明（字模 C 文件由设计器自动生成到 fonts/ 子目录）\n");
         code.push_str(" * ============================================ */\n");
         for (name, _path, sz, bpp, _compress, _symbols) in &fonts {
             code.push_str(&format!("extern const sgl_font_t {};\n", font_id_from_family(name, *sz, *bpp, *_compress)));
@@ -2375,9 +2360,156 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
     }
 }
 
+/// 规范化路径：解析 . 和 .. 组件，返回简化后的路径
+/// 规范化路径：解析 . 和 .. 组件，保留磁盘前缀（Windows）和根目录
+fn normalize_path(path: &std::path::Path) -> std::path::PathBuf {
+    let mut result = std::path::PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Normal(c) => result.push(c),
+            std::path::Component::ParentDir => { result.pop(); }
+            // 保留 RootDir 和 Prefix（Windows 盘符如 C:），避免丢失绝对路径信息
+            std::path::Component::RootDir => result.push(component.as_os_str()),
+            std::path::Component::Prefix(prefix) => result.push(prefix.as_os_str()),
+            std::path::Component::CurDir => {}
+        }
+    }
+    result
+}
+
+/// 检查路径是否在项目目录内（防止路径遍历攻击）
+/// 使用规范化后的路径逐个组件比较，避免字符串前缀误判
+fn is_inside_project(path: &std::path::Path, proj_dir: &std::path::Path) -> bool {
+    let norm_path = normalize_path(path);
+    let norm_proj = normalize_path(proj_dir);
+    // 使用 starts_with 进行路径前缀比较，确保子目录关系
+    // 额外检查：path 必须比 proj_dir 长，或者两者相等
+    let path_str = norm_path.to_string_lossy();
+    let proj_str = norm_proj.to_string_lossy();
+    let starts = path_str.starts_with(proj_str.as_ref());
+    if !starts {
+        return false;
+    }
+    // 确保不是部分匹配（如 /proj/foo 匹配 /proj/foobar）
+    if path_str.len() == proj_str.len() {
+        return true;
+    }
+    // proj_str 后面必须是路径分隔符
+    path_str.as_bytes().get(proj_str.len()) == Some(&b'\\') || path_str.as_bytes().get(proj_str.len()) == Some(&b'/')
+}
+
+/// 安全检查：验证路径是否为合法的项目内资源路径
+/// 用于 save_project 中防止恶意项目文件包含的绝对路径指向系统敏感文件
+fn is_safe_resource_path(path: &str, proj_dir: &std::path::Path) -> bool {
+    if path.is_empty() {
+        return false;
+    }
+    let p = std::path::Path::new(path);
+    if p.is_absolute() {
+        return is_inside_project(p, proj_dir);
+    }
+    // 相对路径：join到项目目录后检查
+    let joined = proj_dir.join(p);
+    is_inside_project(&joined, proj_dir)
+}
+
+/// 验证文件名为纯文件名（不含路径分隔符和 .. 组件），防止路径遍历写入
+fn is_safe_filename(name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    // 拒绝包含路径分隔符的文件名
+    if name.contains('/') || name.contains('\\') {
+        return false;
+    }
+    // 拒绝 .. 组件（防止 dir/../file 或 ..file 等变形）
+    if name.contains("..") {
+        return false;
+    }
+    // 拒绝空文件名、当前目录引用
+    if name == "." || name == ".." {
+        return false;
+    }
+    true
+}
+
+/// 验证导出路径为安全的代码文件扩展名，防止恶意写入系统文件
+fn is_safe_export_path(path: &str) -> bool {
+    if path.is_empty() {
+        return false;
+    }
+    let p = std::path::Path::new(path);
+    if let Some(ext) = p.extension() {
+        let ext_lower = ext.to_string_lossy().to_lowercase();
+        match ext_lower.as_str() {
+            "c" | "h" | "cpp" | "hpp" | "txt" | "md" => true,
+            _ => false,
+        }
+    } else {
+        // 无扩展名：拒绝（可能是目录或恶意文件）
+        false
+    }
+}
+
+/// 验证字符串只包含字母、数字和下划线（用于 C 标识符类配置）
+fn is_safe_c_identifier(s: &str) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+    s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// 将绝对路径转为相对于 proj_dir 的相对路径（仅当文件在 proj_dir 下时转换）
+fn path_to_rel(path: &str, proj_dir: &std::path::Path) -> String {
+    if path.is_empty() {
+        return path.to_string();
+    }
+    let p = std::path::Path::new(path);
+    if !p.is_absolute() {
+        return path.replace('\\', "/");
+    }
+    // 安全检查：只有 proj_dir 内的路径才允许转为相对路径
+    if is_inside_project(p, proj_dir) {
+        if let Ok(rel) = p.strip_prefix(proj_dir) {
+            return rel.to_string_lossy().replace('\\', "/");
+        }
+    }
+    // 不在项目目录内，返回空字符串（拒绝处理）
+    String::new()
+}
+
+/// 将相对路径转为绝对路径（基于 proj_dir），阻止路径遍历
+fn path_to_abs(path: &str, proj_dir: &std::path::Path) -> String {
+    if path.is_empty() {
+        return path.to_string();
+    }
+    let p = std::path::Path::new(path);
+    let norm = if p.is_absolute() {
+        normalize_path(p)
+    } else {
+        normalize_path(&proj_dir.join(p))
+    };
+    let norm_proj = normalize_path(proj_dir);
+    if !is_inside_project(&norm, &norm_proj) {
+        // 路径遍历检测：逃出项目目录时回退到项目目录
+        return norm_proj.to_string_lossy().replace('\\', "/");
+    }
+    norm.to_string_lossy().replace('\\', "/")
+}
+
 #[tauri::command]
 fn save_project(path: String, mut project: Project) -> Result<(), String> {
-    let proj_dir = std::path::Path::new(&path)
+    // 安全检查：项目文件必须是 .json 或 .sgl 扩展名
+    let p = std::path::Path::new(&path);
+    if let Some(ext) = p.extension() {
+        let ext_lower = ext.to_string_lossy().to_lowercase();
+        if ext_lower != "json" && ext_lower != "sgl" {
+            return Err("项目文件必须是 .json 或 .sgl 格式".to_string());
+        }
+    } else {
+        return Err("项目文件必须带有扩展名".to_string());
+    }
+    let proj_dir = p
         .parent()
         .ok_or_else(|| "无法获取项目目录".to_string())?;
 
@@ -2388,6 +2520,8 @@ fn save_project(path: String, mut project: Project) -> Result<(), String> {
     std::fs::create_dir_all(&images_dir).map_err(|e| format!("创建图片目录失败: {}", e))?;
 
     // 复制字体文件并更新路径为相对路径，处理同名冲突
+    // 同时构建 原路径 -> 新相对路径 映射，用于同步更新控件的 font_family
+    let mut font_path_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     {
         let mut used_names: std::collections::HashSet<String> = std::collections::HashSet::new();
         for font in &mut project.resources.fonts {
@@ -2410,13 +2544,21 @@ fn save_project(path: String, mut project: Project) -> Result<(), String> {
             }
             used_names.insert(dest_name.clone());
 
-            if src.exists() {
+            // 记录原路径到新路径的映射（用于同步控件 font_family）
+            let new_rel_path = format!("resources/fonts/{}", dest_name);
+            font_path_map.insert(font.path.clone(), new_rel_path.clone());
+            // 同时记录规范化后的路径（正斜杠）以应对路径分隔符差异
+            let normalized_old = font.path.replace('\\', "/");
+            font_path_map.insert(normalized_old, new_rel_path.clone());
+
+            // 安全检查：防止恶意项目文件包含指向项目目录外的绝对路径
+            if src.exists() && is_safe_resource_path(&font.path, proj_dir) {
                 let dest = fonts_dir.join(&dest_name);
                 if src.canonicalize().unwrap_or_default() != dest.canonicalize().unwrap_or_default() {
                     let _ = std::fs::copy(src, &dest);
                 }
             }
-            font.path = format!("resources/fonts/{}", dest_name);
+            font.path = new_rel_path;
             font.name = dest_name;
         }
     }
@@ -2443,7 +2585,8 @@ fn save_project(path: String, mut project: Project) -> Result<(), String> {
             }
             used_names.insert(dest_name.clone());
 
-            if src.exists() {
+            // 安全检查：防止恶意项目文件包含指向项目目录外的绝对路径
+            if src.exists() && is_safe_resource_path(&img.path, proj_dir) {
                 let dest = images_dir.join(&dest_name);
                 if src.canonicalize().unwrap_or_default() != dest.canonicalize().unwrap_or_default() {
                     let _ = std::fs::copy(src, &dest);
@@ -2451,6 +2594,42 @@ fn save_project(path: String, mut project: Project) -> Result<(), String> {
             }
             img.path = format!("resources/images/{}", dest_name);
             img.name = dest_name;
+        }
+    }
+
+    // 将页面和控件中的绝对路径转为相对路径
+    for page in &mut project.pages {
+        if let Some(ref mut p) = page.pixmap {
+            *p = path_to_rel(p, proj_dir);
+        }
+        for w in &mut page.widgets {
+            if let Some(ref mut p) = w.pixmap {
+                *p = path_to_rel(p, proj_dir);
+            }
+            if let Some(ref mut i) = w.icon {
+                *i = path_to_rel(i, proj_dir);
+            }
+            if let Some(ref mut l) = w.logo {
+                *l = path_to_rel(l, proj_dir);
+            }
+            if let Some(ref mut ff) = w.font_family {
+                if ff.is_empty() {
+                    continue;
+                }
+                // 优先使用 font_path_map 同步路径（保证控件 font_family 与 font.path 一致）
+                // 这样即使字体不在项目目录下，控件 font_family 也能正确指向 resources/fonts/xxx
+                if let Some(new_path) = font_path_map.get(ff) {
+                    *ff = new_path.clone();
+                } else {
+                    // 回退：原路径不在映射表中（可能是手动输入的路径），用 path_to_rel 处理
+                    let normalized = ff.replace('\\', "/");
+                    if let Some(new_path) = font_path_map.get(&normalized) {
+                        *ff = new_path.clone();
+                    } else if ff.contains('/') || ff.contains('\\') {
+                        *ff = path_to_rel(ff, proj_dir);
+                    }
+                }
+            }
         }
     }
 
@@ -2472,7 +2651,9 @@ fn load_project(path: String) -> Result<Project, String> {
         let p = std::path::Path::new(&font.path);
         if !p.is_absolute() {
             let abs = proj_dir.join(p);
-            font.path = abs.to_string_lossy().to_string();
+            font.path = abs.to_string_lossy().replace('\\', "/");
+        } else {
+            font.path = font.path.replace('\\', "/");
         }
     }
 
@@ -2480,7 +2661,32 @@ fn load_project(path: String) -> Result<Project, String> {
         let p = std::path::Path::new(&img.path);
         if !p.is_absolute() {
             let abs = proj_dir.join(p);
-            img.path = abs.to_string_lossy().to_string();
+            img.path = abs.to_string_lossy().replace('\\', "/");
+        } else {
+            img.path = img.path.replace('\\', "/");
+        }
+    }
+
+    // 将页面和控件中的相对路径还原为绝对路径
+    for page in &mut project.pages {
+        if let Some(ref mut p) = page.pixmap {
+            *p = path_to_abs(p, proj_dir);
+        }
+        for w in &mut page.widgets {
+            if let Some(ref mut p) = w.pixmap {
+                *p = path_to_abs(p, proj_dir);
+            }
+            if let Some(ref mut i) = w.icon {
+                *i = path_to_abs(i, proj_dir);
+            }
+            if let Some(ref mut l) = w.logo {
+                *l = path_to_abs(l, proj_dir);
+            }
+            if let Some(ref mut ff) = w.font_family {
+                if ff.contains('/') || ff.contains('\\') {
+                    *ff = path_to_abs(ff, proj_dir);
+                }
+            }
         }
     }
 
@@ -2488,7 +2694,11 @@ fn load_project(path: String) -> Result<Project, String> {
 }
 
 #[tauri::command]
-fn export_code(path: String, code: String, mut project: Project) -> Result<(), String> {
+fn export_code(path: String, code: String, mut project: Project, font_files: Vec<FontCFile>) -> Result<(), String> {
+    // 安全检查：导出路径必须是安全的代码文件扩展名
+    if !is_safe_export_path(&path) {
+        return Err("导出路径不安全：只允许 .c/.h/.cpp/.hpp/.txt/.md 文件".to_string());
+    }
     // 如果输出路径在项目目录下，尝试将图片资源相对路径转换为绝对路径
     if let Some(parent) = std::path::Path::new(&path).parent() {
         for img in &mut project.resources.images {
@@ -2500,9 +2710,61 @@ fn export_code(path: String, code: String, mut project: Project) -> Result<(), S
                 }
             }
         }
+        // 还原页面和控件中的相对路径
+        for page in &mut project.pages {
+            if let Some(ref mut p) = page.pixmap {
+                let pp = std::path::Path::new(p);
+                if !p.is_empty() && !pp.is_absolute() {
+                    let abs = parent.join(pp);
+                    if abs.exists() {
+                        *p = abs.to_string_lossy().to_string();
+                    }
+                }
+            }
+            for w in &mut page.widgets {
+                if let Some(ref mut pm) = w.pixmap {
+                    let pp = std::path::Path::new(pm);
+                    if !pm.is_empty() && !pp.is_absolute() {
+                        let abs = parent.join(pp);
+                        if abs.exists() {
+                            *pm = abs.to_string_lossy().to_string();
+                        }
+                    }
+                }
+                if let Some(ref mut ic) = w.icon {
+                    let pp = std::path::Path::new(ic);
+                    if !ic.is_empty() && !pp.is_absolute() {
+                        let abs = parent.join(pp);
+                        if abs.exists() {
+                            *ic = abs.to_string_lossy().to_string();
+                        }
+                    }
+                }
+                if let Some(ref mut lg) = w.logo {
+                    let pp = std::path::Path::new(lg);
+                    if !lg.is_empty() && !pp.is_absolute() {
+                        let abs = parent.join(pp);
+                        if abs.exists() {
+                            *lg = abs.to_string_lossy().to_string();
+                        }
+                    }
+                }
+                if let Some(ref mut ff) = w.font_family {
+                    if ff.contains('/') || ff.contains('\\') {
+                        let pp = std::path::Path::new(ff);
+                        if !pp.is_absolute() {
+                            let abs = parent.join(pp);
+                            if abs.exists() {
+                                *ff = abs.to_string_lossy().to_string();
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
-    let fonts = collect_fonts(&project);
+    let _fonts = collect_fonts(&project); // 仅用于代码生成参考，字模 C 文件由后端 Rust 用 FreeType 生成
 
     // 创建输出目录
     if let Some(parent) = std::path::Path::new(&path).parent() {
@@ -2510,47 +2772,90 @@ fn export_code(path: String, code: String, mut project: Project) -> Result<(), S
     }
 
     // 生成图片取模文件到 pixmaps/ 子目录
+    // 安全保护：只删除程序自己创建的目录（含标记文件），避免误删用户已有文件
     let out_dir = std::path::Path::new(&path).parent().unwrap_or(std::path::Path::new("."));
     let pixmaps_dir = out_dir.join("pixmaps");
-    if pixmaps_dir.exists() {
+    if pixmaps_dir.exists() && pixmaps_dir.join(".sgl_auto_gen").exists() {
         let _ = std::fs::remove_dir_all(&pixmaps_dir);
     }
     generate_pixmap_files(&project, &pixmaps_dir)?;
+    let _ = std::fs::write(pixmaps_dir.join(".sgl_auto_gen"), "");
 
     // 生成 icon 图标取模文件到 icons/ 子目录
     let icons_dir = out_dir.join("icons");
-    if icons_dir.exists() {
+    if icons_dir.exists() && icons_dir.join(".sgl_auto_gen").exists() {
         let _ = std::fs::remove_dir_all(&icons_dir);
     }
     generate_icon_files(&project, &icons_dir)?;
+    let _ = std::fs::write(icons_dir.join(".sgl_auto_gen"), "");
 
     std::fs::write(&path, code).map_err(|e| e.to_string())?;
 
-    // 如果有字体配置，调用 sgl_font_conv.exe 生成字模文件
-    if !fonts.is_empty() {
-        let fonts_dir = out_dir.join("fonts");
-
-        // 清空旧字模和 symbols 文件，避免残留垃圾
-        if fonts_dir.exists() {
-            let _ = std::fs::remove_dir_all(&fonts_dir);
-        }
-        std::fs::create_dir_all(&fonts_dir)
-            .map_err(|e| format!("创建 fonts 目录失败: {}", e))?;
-
-        let conv_path = find_sgl_font_conv();
-        if let Some(conv) = conv_path {
-            for (name, path, sz, bpp, compress, symbols) in &fonts {
-                run_font_conv(&conv, name, path, *sz, *bpp, *compress, symbols, &fonts_dir)
-                    .map_err(|e| format!("生成字模 {} 失败: {}", name, e))?;
-            }
+    // 用后端 Rust 调用 FreeType 生成字模 C 文件（与 sgl_font_conv 完全一致）
+    let proj_dir = out_dir;
+    let mut resolved_font_paths: std::collections::HashMap<String, std::path::PathBuf> = std::collections::HashMap::new();
+    for font in &project.resources.fonts {
+        let p = std::path::Path::new(&font.path);
+        let abs_path = if p.is_absolute() {
+            p.to_path_buf()
         } else {
-            return Err("未找到 sgl_font_conv.exe，请确保其在设计器 exe 同目录或 PATH 中".to_string());
+            proj_dir.join(p)
+        };
+        resolved_font_paths.insert(font.path.clone(), abs_path.clone());
+        let normalized = font.path.replace('\\', "/");
+        resolved_font_paths.insert(normalized, abs_path);
+    }
+
+    let mut generated_font_files: Vec<FontCFile> = Vec::new();
+    for (_font_name, font_path_str, size, bpp, compress, symbols) in &_fonts {
+        let font_abs_path = {
+            if let Some(p) = resolved_font_paths.get(font_path_str) {
+                p.clone()
+            } else {
+                let p = std::path::Path::new(font_path_str);
+                if p.is_absolute() {
+                    p.to_path_buf()
+                } else {
+                    proj_dir.join(p)
+                }
+            }
+        };
+
+        if !font_abs_path.exists() {
+            continue;
+        }
+
+        let font_id = font_id_from_family(font_path_str, *size, *bpp, *compress);
+        match font_generator::generate_font_c(
+            &font_abs_path,
+            *size,
+            *bpp,
+            symbols,
+            *compress > 0,
+            &font_id,
+        ) {
+            Ok(content) => {
+                generated_font_files.push(FontCFile {
+                    font_id: font_id.clone(),
+                    file_name: format!("{}.c", font_id),
+                    content,
+                });
+            }
+            Err(e) => {
+                return Err(format!("生成字模失败 {}: {}", font_id, e));
+            }
         }
     }
+
+    // 写入字模 C 文件到 fonts/ 目录
+    let fonts_dir = out_dir.join("fonts");
+    if fonts_dir.exists() && fonts_dir.join(".sgl_auto_gen").exists() {
+        let _ = std::fs::remove_dir_all(&fonts_dir);
+    }
+    write_font_c_files(&generated_font_files, &fonts_dir)?;
+    let _ = std::fs::write(fonts_dir.join(".sgl_auto_gen"), "");
     Ok(())
 }
-
-const SGL_FONT_CONV_EXE: &[u8] = include_bytes!("../resources/sgl_font_conv.exe");
 
 // ============ 编译相关命令 ============
 
@@ -2567,6 +2872,22 @@ fn which_command_path(name: &str) -> Option<String> {
     None
 }
 
+#[cfg(windows)]
+fn setup_hidden_window(cmd: &mut std::process::Command) {
+    use std::os::windows::process::CommandExt;
+    cmd.creation_flags(0x08000000);
+}
+
+#[cfg(not(windows))]
+fn setup_hidden_window(_cmd: &mut std::process::Command) {}
+
+fn run_command_output_hidden(program: &str, args: &[&str], cwd: &std::path::Path) -> Result<std::process::Output, String> {
+    let mut cmd = std::process::Command::new(program);
+    cmd.current_dir(cwd).args(args);
+    setup_hidden_window(&mut cmd);
+    cmd.output().map_err(|e| format!("启动 {} 失败: {}", program, e))
+}
+
 /// 执行命令并将 stdout/stderr 实时推送到前端控制台（build-log 事件）
 fn run_command_stream(
     program: &str,
@@ -2577,13 +2898,13 @@ fn run_command_stream(
     use std::io::{BufRead, BufReader};
     use std::process::{Command, Stdio};
 
-    let mut child = Command::new(program)
-        .current_dir(cwd)
+    let mut cmd = Command::new(program);
+    cmd.current_dir(cwd)
         .args(args)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("启动 {} 失败: {}", program, e))?;
+        .stderr(Stdio::piped());
+    setup_hidden_window(&mut cmd);
+    let mut child = cmd.spawn().map_err(|e| format!("启动 {} 失败: {}", program, e))?;
 
     let stdout = child.stdout.take().ok_or("无法捕获标准输出")?;
     let stderr = child.stderr.take().ok_or("无法捕获标准错误")?;
@@ -2611,6 +2932,21 @@ fn run_command_stream(
     child.wait().map_err(|e| format!("等待 {} 结束失败: {}", program, e))
 }
 
+/// 判断 git stderr 行是否为网络慢/不可达类错误（低速中止属主动保护行为，
+/// 原始英文 fatal 信息对用户有误导性，统一替换为一条友好提示）
+fn is_git_network_error_line(line: &str) -> bool {
+    line.contains("Operation too slow")
+        || line.contains("unable to access")
+        || line.contains("Could not connect")
+        || line.contains("Failed to connect")
+        || line.contains("Could not resolve host")
+        || line.contains("Connection was reset")
+        || line.contains("Recv failure")
+        || line.contains("timed out")
+        || line.contains("SSL_ERROR")
+        || line.contains("GnuTLS recv error")
+}
+
 /// 带超时和环境变量的 run_command_stream（用于 git 网络操作）
 /// timeout_secs: 总超时秒数（0 表示不超时）
 /// envs: 额外环境变量（如 GIT_HTTP_LOW_SPEED_TIME 用于低速检测）
@@ -2635,6 +2971,7 @@ fn run_command_stream_with_timeout(
     for (k, v) in envs {
         cmd.env(k, v);
     }
+    setup_hidden_window(&mut cmd);
 
     let mut child = cmd
         .spawn()
@@ -2656,9 +2993,22 @@ fn run_command_stream_with_timeout(
 
     std::thread::spawn(move || {
         let reader = BufReader::new(stderr);
+        let mut network_err_reported = false;
         for line in reader.lines() {
             if let Ok(l) = line {
-                let _ = w_err.emit("build-log", serde_json::json!({"message": l, "level": "error"}));
+                // 该函数仅用于 git 网络命令：git 把进度信息也写到 stderr，
+                // 且网络慢导致的低速中止属预期保护行为，按 warn 输出避免误导性的红色错误
+                if is_git_network_error_line(&l) {
+                    if !network_err_reported {
+                        network_err_reported = true;
+                        let _ = w_err.emit("build-log", serde_json::json!({
+                            "message": "网络连接 GitHub 过慢或中断，已中止本次网络操作",
+                            "level": "warn"
+                        }));
+                    }
+                    continue;
+                }
+                let _ = w_err.emit("build-log", serde_json::json!({"message": l, "level": "warn"}));
             }
         }
     });
@@ -2748,11 +3098,7 @@ fn copy_dir_contents(src: &std::path::Path, dst: &std::path::Path) -> Result<(),
 
 /// 获取指定 git 仓库的 HEAD commit hash（失败返回 None）
 fn git_head_hash(repo_dir: &std::path::Path) -> Option<String> {
-    let out = std::process::Command::new("git")
-        .current_dir(repo_dir)
-        .args(&["rev-parse", "HEAD"])
-        .output()
-        .ok()?;
+    let out = run_command_output_hidden("git", &["rev-parse", "HEAD"], repo_dir).ok()?;
     if !out.status.success() {
         return None;
     }
@@ -2766,11 +3112,7 @@ fn git_head_hash(repo_dir: &std::path::Path) -> Option<String> {
 fn git_is_ancestor(_local_repo: &std::path::Path, local_hash: &str, target_repo: &std::path::Path, target_hash: &str) -> Option<bool> {
     // 在 target 仓库中判断 local_hash 是否是 target_hash 的祖先
     // 需要 target 仓库能识别 local_hash（通常两仓库同源，commit hash 通用）
-    let out = std::process::Command::new("git")
-        .current_dir(target_repo)
-        .args(&["merge-base", "--is-ancestor", local_hash, target_hash])
-        .output()
-        .ok()?;
+    let out = run_command_output_hidden("git", &["merge-base", "--is-ancestor", local_hash, target_hash], target_repo).ok()?;
     // exit 0: local 是 target 的祖先（local 落后）；exit 1: 不是；其他: 错误
     match out.status.code() {
         Some(0) => Some(true),
@@ -2888,7 +3230,7 @@ fn sync_sgl_source(src: &std::path::Path, dst: &std::path::Path) -> Result<usize
 
 /// 导出代码到项目目录的 code/ 子文件夹
 #[tauri::command]
-fn export_code_to_project(mut project: Project, project_path: String, code: String) -> Result<String, String> {
+fn export_code_to_project(mut project: Project, project_path: String, code: String, font_files: Vec<FontCFile>) -> Result<String, String> {
     let proj_dir = std::path::Path::new(&project_path)
         .parent()
         .ok_or_else(|| "无法获取项目目录".to_string())?;
@@ -2902,9 +3244,6 @@ fn export_code_to_project(mut project: Project, project_path: String, code: Stri
             img.path = proj_dir.join(p).to_string_lossy().to_string();
         }
     }
-
-    // 生成代码
-    let fonts = collect_fonts(&project);
 
     // 生成图片取模文件到 code/pixmaps/ 子目录
     let pixmaps_dir = code_dir.join("pixmaps");
@@ -2935,25 +3274,70 @@ fn export_code_to_project(mut project: Project, project_path: String, code: Stri
     let code_config_path = code_dir.join("sgl_config.h");
     generate_sgl_config_h(&project.sgl_config, &code_config_path)?;
 
-    // 生成字模文件到 code/fonts/ 目录
-    if !fonts.is_empty() {
-        let fonts_dir = code_dir.join("fonts");
-        if fonts_dir.exists() {
-            let _ = std::fs::remove_dir_all(&fonts_dir);
-        }
-        std::fs::create_dir_all(&fonts_dir)
-            .map_err(|e| format!("创建 fonts 目录失败: {}", e))?;
+    // 用后端 Rust 调用 FreeType 生成字模 C 文件（与 sgl_font_conv 完全一致）
+    let collected_fonts = collect_fonts(&project);
 
-        let conv_path = find_sgl_font_conv();
-        if let Some(conv) = conv_path {
-            for (name, path, sz, bpp, compress, symbols) in &fonts {
-                run_font_conv(&conv, name, path, *sz, *bpp, *compress, symbols, &fonts_dir)
-                    .map_err(|e| format!("生成字模 {} 失败: {}", name, e))?;
-            }
+    // 解析字体路径为绝对路径
+    let mut resolved_font_paths: std::collections::HashMap<String, std::path::PathBuf> = std::collections::HashMap::new();
+    for font in &project.resources.fonts {
+        let p = std::path::Path::new(&font.path);
+        let abs_path = if p.is_absolute() {
+            p.to_path_buf()
         } else {
-            return Err("未找到 sgl_font_conv.exe".to_string());
+            proj_dir.join(p)
+        };
+        resolved_font_paths.insert(font.path.clone(), abs_path.clone());
+        let normalized = font.path.replace('\\', "/");
+        resolved_font_paths.insert(normalized, abs_path);
+    }
+
+    let mut generated_font_files: Vec<FontCFile> = Vec::new();
+    for (_font_name, font_path_str, size, bpp, compress, symbols) in &collected_fonts {
+        let font_abs_path = {
+            if let Some(p) = resolved_font_paths.get(font_path_str) {
+                p.clone()
+            } else {
+                let p = std::path::Path::new(font_path_str);
+                if p.is_absolute() {
+                    p.to_path_buf()
+                } else {
+                    proj_dir.join(p)
+                }
+            }
+        };
+
+        if !font_abs_path.exists() {
+            continue;
+        }
+
+        let font_id = font_id_from_family(font_path_str, *size, *bpp, *compress);
+        match font_generator::generate_font_c(
+            &font_abs_path,
+            *size,
+            *bpp,
+            symbols,
+            *compress > 0,
+            &font_id,
+        ) {
+            Ok(content) => {
+                generated_font_files.push(FontCFile {
+                    font_id: font_id.clone(),
+                    file_name: format!("{}.c", font_id),
+                    content,
+                });
+            }
+            Err(e) => {
+                return Err(format!("生成字模失败 {}: {}", font_id, e));
+            }
         }
     }
+
+    // 写入字模 C 文件到 code/fonts/ 目录
+    let fonts_dir = code_dir.join("fonts");
+    if fonts_dir.exists() {
+        let _ = std::fs::remove_dir_all(&fonts_dir);
+    }
+    write_font_c_files(&generated_font_files, &fonts_dir)?;
 
     Ok(format!("代码已导出到 {}", code_dir.to_string_lossy()))
 }
@@ -3041,30 +3425,39 @@ fn check_sgl_submodule_status(
     }
 
     match is_sgl_submodule_up_to_date(&sgl_port_dir, &window) {
-        Ok(true) => Ok(serde_json::json!({
+        Ok((true, true)) => Ok(serde_json::json!({
             "exists": true,
             "up_to_date": true,
             "msg": "sgl 子模块已是最新版本".to_string()
         })),
-        Ok(false) => Ok(serde_json::json!({
+        Ok((false, true)) => Ok(serde_json::json!({
             "exists": true,
             "up_to_date": false,
             "msg": "sgl 子模块有新版本可用".to_string()
         })),
+        Ok((true, false)) => Ok(serde_json::json!({
+            "exists": true,
+            "up_to_date": true,
+            "stale": true,
+            "msg": "sgl 子模块可能是最新版本（基于上次缓存信息，网络获取失败）".to_string()
+        })),
+        Ok((false, false)) => Ok(serde_json::json!({
+            "exists": true,
+            "up_to_date": false,
+            "stale": true,
+            "msg": "sgl 子模块可能有新版本（基于上次缓存信息，网络获取失败）".to_string()
+        })),
         Err(e) => Ok(serde_json::json!({
             "exists": true,
             "up_to_date": false,
+            "check_failed": true,
             "msg": format!("检查失败: {}", e)
         })),
     }
 }
 
 fn sgl_submodule_path(sgl_port_dir: &std::path::Path) -> std::path::PathBuf {
-    use std::process::Command;
-    let output = Command::new("git")
-        .current_dir(sgl_port_dir)
-        .args(&["config", "-f", ".gitmodules", "--get", "submodule.sgl.path"])
-        .output();
+    let output = run_command_output_hidden("git", &["config", "-f", ".gitmodules", "--get", "submodule.sgl.path"], sgl_port_dir);
     match output {
         Ok(o) if o.status.success() => {
             let p = String::from_utf8_lossy(&o.stdout).trim().to_string();
@@ -3075,11 +3468,7 @@ fn sgl_submodule_path(sgl_port_dir: &std::path::Path) -> std::path::PathBuf {
 }
 
 fn sgl_submodule_branch(sgl_port_dir: &std::path::Path) -> String {
-    use std::process::Command;
-    let output = Command::new("git")
-        .current_dir(sgl_port_dir)
-        .args(&["config", "-f", ".gitmodules", "--get", "submodule.sgl.branch"])
-        .output();
+    let output = run_command_output_hidden("git", &["config", "-f", ".gitmodules", "--get", "submodule.sgl.branch"], sgl_port_dir);
     match output {
         Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
         _ => "main".to_string(),
@@ -3097,15 +3486,15 @@ fn run_git_fetch_with_timeout(
     use std::process::{Command, Stdio};
     use std::time::Duration;
 
-    let mut child = Command::new("git")
-        .current_dir(submodule_path)
+    let mut cmd = Command::new("git");
+    cmd.current_dir(submodule_path)
         .args(&["fetch", "origin"])
         .env("GIT_HTTP_LOW_SPEED_TIME", "5")
         .env("GIT_HTTP_LOW_SPEED_LIMIT", "1000")
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("启动 git fetch 失败: {}", e))?;
+        .stderr(Stdio::piped());
+    setup_hidden_window(&mut cmd);
+    let mut child = cmd.spawn().map_err(|e| format!("启动 git fetch 失败: {}", e))?;
 
     let stdout = child.stdout.take().ok_or("无法捕获标准输出")?;
     let stderr = child.stderr.take().ok_or("无法捕获标准错误")?;
@@ -3123,9 +3512,21 @@ fn run_git_fetch_with_timeout(
 
     std::thread::spawn(move || {
         let reader = BufReader::new(stderr);
+        let mut network_err_reported = false;
         for line in reader.lines() {
             if let Ok(l) = line {
-                let _ = w_err.emit("build-log", serde_json::json!({"message": l, "level": "error"}));
+                // git fetch 的进度和低速中止信息都走 stderr，属预期行为，按 warn 输出
+                if is_git_network_error_line(&l) {
+                    if !network_err_reported {
+                        network_err_reported = true;
+                        let _ = w_err.emit("build-log", serde_json::json!({
+                            "message": "网络连接 GitHub 过慢或中断，已中止版本检查",
+                            "level": "warn"
+                        }));
+                    }
+                    continue;
+                }
+                let _ = w_err.emit("build-log", serde_json::json!({"message": l, "level": "warn"}));
             }
         }
     });
@@ -3148,39 +3549,65 @@ fn run_git_fetch_with_timeout(
 }
 
 /// 检查 sgl 子模块本地版本是否与远程一致（git fetch 日志实时输出到控制台）
+/// 返回 (是否最新, fetch是否成功)，fetch失败时用本地缓存的 origin/branch 降级比较
 fn is_sgl_submodule_up_to_date(
     sgl_port_dir: &std::path::Path,
     window: &tauri::Window,
-) -> Result<bool, String> {
+) -> Result<(bool, bool), String> {
     use std::process::Command;
     let submodule_path = sgl_submodule_path(sgl_port_dir);
     if !submodule_path.exists() || !submodule_path.join(".git").exists() {
-        return Ok(false);
+        return Ok((false, true));
     }
     let branch = sgl_submodule_branch(sgl_port_dir);
 
-    // 带超时的 fetch，避免国内访问 GitHub 长时间挂起
-    let fetch_status = run_git_fetch_with_timeout(&submodule_path, window, 15)
-        .map_err(|e| format!("获取 sgl 子模块远程信息失败: {}", e))?;
-    if !fetch_status.success() {
-        return Err("获取 sgl 子模块远程信息失败（可能无法访问 GitHub）".to_string());
-    }
-
-    let local = Command::new("git")
-        .current_dir(&submodule_path)
-        .args(&["rev-parse", "HEAD"])
-        .output()
+    // 先获取本地 HEAD
+    let local = run_command_output_hidden("git", &["rev-parse", "HEAD"], &submodule_path)
         .map_err(|e| format!("获取 sgl 子模块本地版本失败: {}", e))?;
     let local_rev = String::from_utf8_lossy(&local.stdout).trim().to_string();
 
-    let remote = Command::new("git")
-        .current_dir(&submodule_path)
-        .args(&["rev-parse", &format!("origin/{}", branch)])
-        .output()
+    // 带超时的 fetch，避免国内访问 GitHub 长时间挂起
+    let fetch_result = run_git_fetch_with_timeout(&submodule_path, window, 30);
+    let fetch_ok = match &fetch_result {
+        Ok(status) => status.success(),
+        Err(e) => {
+            let _ = window.emit("build-log", serde_json::json!({
+                "message": format!("git fetch 失败，尝试用本地缓存信息比较: {}", e),
+                "level": "warn"
+            }));
+            false
+        }
+    };
+
+    if !fetch_ok {
+        // fetch 失败：尝试用本地已有的 origin/branch 缓存信息比较
+        let remote = match run_command_output_hidden("git", &["rev-parse", &format!("origin/{}", branch)], &submodule_path) {
+            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+            _ => String::new(),
+        };
+        if local_rev.is_empty() || remote.is_empty() {
+            return Err(format!(
+                "无法获取远程版本且本地无缓存（本地: '{}'，origin/{}: '{}'）",
+                local_rev, branch, remote
+            ));
+        }
+        // fetch 失败但本地有缓存：返回比较结果，标记 fetch 未成功
+        return Ok((local_rev == remote, false));
+    }
+
+    // fetch 成功：正常比较
+    let remote = run_command_output_hidden("git", &["rev-parse", &format!("origin/{}", branch)], &submodule_path)
         .map_err(|e| format!("获取 sgl 子模块远程版本失败: {}", e))?;
     let remote_rev = String::from_utf8_lossy(&remote.stdout).trim().to_string();
 
-    Ok(!local_rev.is_empty() && !remote_rev.is_empty() && local_rev == remote_rev)
+    if local_rev.is_empty() || remote_rev.is_empty() {
+        return Err(format!(
+            "无法解析 sgl 子模块版本（本地: '{}'，远程 origin/{}: '{}'）",
+            local_rev, branch, remote_rev
+        ));
+    }
+
+    Ok((local_rev == remote_rev, true))
 }
 
 /// 将 sgl-port 仓库的 sgl 子模块更新到远程最新分支；先检查版本，已最新则跳过
@@ -3191,14 +3618,8 @@ fn update_sgl_submodules_to_latest(
     use std::process::Command;
 
     // 让子模块跟踪 main 分支（仅对 sgl 子模块做此配置）
-    let _ = Command::new("git")
-        .current_dir(sgl_port_dir)
-        .args(&["config", "-f", ".gitmodules", "submodule.sgl.branch", "main"])
-        .output();
-    let _ = Command::new("git")
-        .current_dir(sgl_port_dir)
-        .args(&["submodule", "sync", "--recursive"])
-        .output();
+    let _ = run_command_output_hidden("git", &["config", "-f", ".gitmodules", "submodule.sgl.branch", "main"], sgl_port_dir);
+    let _ = run_command_output_hidden("git", &["submodule", "sync", "--recursive"], sgl_port_dir);
 
     // sync_sgl_source 会修改 sgl-port/sgl/source 下的文件，导致子模块有本地修改
     // 更新前必须清理这些修改（git checkout），否则 git submodule update 会因 checkout 冲突失败
@@ -3210,20 +3631,14 @@ fn update_sgl_submodules_to_latest(
             serde_json::json!({"message": "清理 sgl 子模块本地修改（sync_sgl_source 产生）", "level": "info"}),
         );
         // git checkout . 会还原已跟踪文件的修改，git clean -fd 会删除未跟踪文件和目录
-        let _ = Command::new("git")
-            .current_dir(&submodule_path)
-            .args(&["checkout", "."])
-            .output();
-        let _ = Command::new("git")
-            .current_dir(&submodule_path)
-            .args(&["clean", "-fd"])
-            .output();
+        let _ = run_command_output_hidden("git", &["checkout", "."], &submodule_path);
+        let _ = run_command_output_hidden("git", &["clean", "-fd"], &submodule_path);
     }
 
     // 先对比本地与远程版本，已最新则跳过网络更新
     match is_sgl_submodule_up_to_date(sgl_port_dir, window) {
-        Ok(true) => return Ok("sgl 子模块已是最新版本，跳过更新".to_string()),
-        Ok(false) => {}
+        Ok((true, _)) => return Ok("sgl 子模块已是最新版本，跳过更新".to_string()),
+        Ok((false, _)) => {}
         Err(e) => eprintln!("检查 sgl 子模块版本失败，继续尝试更新: {}", e),
     }
 
@@ -3344,9 +3759,9 @@ fn clone_sgl_port(project_path: String, window: tauri::Window) -> Result<String,
         let updated = cmake_content
             .replace("${DEMO_DIR}/test.c", "${DEMO_DIR}/ui.c")
             .replace("${DEMO_DIR}/bg.c", "");
-        // 清理可能产生的空行
+        // 清理可能产生的空行（只删除被替换为空的行）
         let cleaned: String = updated.lines()
-            .filter(|line| line.trim().len() > 0 || !line.contains("DEMO_DIR"))
+            .filter(|line| !line.trim().is_empty())
             .collect::<Vec<_>>()
             .join("\n");
         let _ = std::fs::write(&cmake_path, cleaned);
@@ -3357,6 +3772,12 @@ fn clone_sgl_port(project_path: String, window: tauri::Window) -> Result<String,
 
 /// 根据项目配置生成 sgl_config.h
 fn generate_sgl_config_h(config: &SglConfig, path: &std::path::Path) -> Result<(), String> {
+    // 安全检查：heap_algo 必须是合法的 C 标识符，防止代码注入
+    let safe_heap_algo = if is_safe_c_identifier(&config.heap_algo) {
+        config.heap_algo.clone()
+    } else {
+        "tlsf".to_string()
+    };
     let content = format!(
         r#"//********************************************************************
 //* SGL Configuration File                                           //
@@ -3428,7 +3849,7 @@ fn generate_sgl_config_h(config: &SglConfig, path: &std::path::Path) -> Result<(
         config.font_small_table,
         config.boot_logo,
         config.theme_dark,
-        config.heap_algo,
+        safe_heap_algo,
         config.heap_memory_size,
         config.label_rotation,
         config.font_song23,
@@ -3447,6 +3868,7 @@ fn build_project(
     mut project: Project,
     project_path: String,
     code: String,
+    font_files: Vec<FontCFile>,
     update_sgl: Option<bool>,
     window: tauri::Window,
 ) -> Result<String, String> {
@@ -3495,11 +3917,18 @@ fn build_project(
 
     // 同步设计器内置 SGL 库源码（sgl/source/）到 sgl-port-windows-vscode/sgl/source/
     // 确保设计器对 SGL 库的修改（如 sgl_draw_rect.c 格式解码、sgl_checkbox.h 新 API）在仿真器中生效
-    // 源路径使用编译时设计器项目根目录，而非用户项目目录（用户项目可能没有 sgl/ 子目录）
     //
     // 版本保护：只有当设计器本地 sgl 版本 >= 用户项目 sgl 版本时才同步源码，
     // 避免设计器本地 sgl 落后时覆盖用户项目的最新 sgl（导致编译失败）
-    let app_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let app_dir = if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(parent) = exe_path.parent() {
+            parent.to_path_buf()
+        } else {
+            std::path::PathBuf::from(".")
+        }
+    } else {
+        std::path::PathBuf::from(".")
+    };
     let local_sgl_source = app_dir.join("sgl").join("source");
     let port_sgl_source = sgl_port_dir.join("sgl").join("source");
     let mut sgl_source_changed = false;
@@ -3620,7 +4049,89 @@ fn build_project(
     }
 
     // 先导出代码到 code/ 目录
-    let fonts = collect_fonts(&project);
+    // 字模 C 文件由后端 Rust 用 FreeType 直接生成（不再依赖前端 generateFontCFiles 或 sgl_font_conv.exe）
+    // 优势：与 sgl_font_conv 完全一致（同用 FreeType），无需 emscripten，无需外部 exe
+
+    // 收集所有控件使用的字体（font_name, font_path, size, bpp, compress, symbols）
+    let collected_fonts = collect_fonts(&project);
+    let _ = window.emit(
+        "build-log",
+        serde_json::json!({ "message": format!("收集到 {} 个字体需要生成字模", collected_fonts.len()), "level": "info" }),
+    );
+
+    // 解析字体路径为绝对路径（font_path 可能是相对路径如 resources/fonts/xxx.ttf）
+    // 同时构建 font_path -> 绝对路径 的映射，便于后续处理
+    let mut resolved_font_paths: std::collections::HashMap<String, std::path::PathBuf> = std::collections::HashMap::new();
+    for font in &project.resources.fonts {
+        let p = std::path::Path::new(&font.path);
+        let abs_path = if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            proj_dir.join(p)
+        };
+        resolved_font_paths.insert(font.path.clone(), abs_path.clone());
+        // 兼容路径分隔符差异
+        let normalized = font.path.replace('\\', "/");
+        resolved_font_paths.insert(normalized, abs_path);
+    }
+
+    // 用 Rust 调用 FreeType 生成字模 C 文件
+    let mut generated_font_files: Vec<FontCFile> = Vec::new();
+    for (_font_name, font_path_str, size, bpp, compress, symbols) in &collected_fonts {
+        // 解析字体路径为绝对路径
+        let font_abs_path = {
+            // 先查映射表
+            if let Some(p) = resolved_font_paths.get(font_path_str) {
+                p.clone()
+            } else {
+                // 回退：直接作为路径处理
+                let p = std::path::Path::new(font_path_str);
+                if p.is_absolute() {
+                    p.to_path_buf()
+                } else {
+                    proj_dir.join(p)
+                }
+            }
+        };
+
+        if !font_abs_path.exists() {
+            let _ = window.emit(
+                "build-log",
+                serde_json::json!({ "message": format!("字体文件不存在，跳过: {} -> {}", font_path_str, font_abs_path.display()), "level": "warn" }),
+            );
+            continue;
+        }
+
+        let font_id = font_id_from_family(font_path_str, *size, *bpp, *compress);
+        let _ = window.emit(
+            "build-log",
+            serde_json::json!({ "message": format!("生成字模: {} ({}px, {}bpp, compress={}, symbols_len={})", font_id, size, bpp, compress, symbols.chars().count()), "level": "info" }),
+        );
+
+        match font_generator::generate_font_c(
+            &font_abs_path,
+            *size,
+            *bpp,
+            symbols,
+            *compress > 0,
+            &font_id,
+        ) {
+            Ok(content) => {
+                generated_font_files.push(FontCFile {
+                    font_id: font_id.clone(),
+                    file_name: format!("{}.c", font_id),
+                    content,
+                });
+            }
+            Err(e) => {
+                let _ = window.emit(
+                    "build-log",
+                    serde_json::json!({ "message": format!("生成字模失败 {}: {}", font_id, e), "level": "error" }),
+                );
+                return Err(format!("生成字模失败 {}: {}", font_id, e));
+            }
+        }
+    }
 
     // 生成图片取模文件到 code/pixmaps/ 子目录
     let pixmaps_dir = code_dir.join("pixmaps");
@@ -3640,24 +4151,23 @@ fn build_project(
     let ui_c = code_dir.join("ui.c");
     std::fs::write(&ui_c, &code).map_err(|e| format!("写入 ui.c 失败: {}", e))?;
 
-    // 生成字模文件
-    if !fonts.is_empty() {
-        let fonts_dir = code_dir.join("fonts");
-        if fonts_dir.exists() {
-            let _ = std::fs::remove_dir_all(&fonts_dir);
-        }
-        std::fs::create_dir_all(&fonts_dir)
-            .map_err(|e| format!("创建 fonts 目录失败: {}", e))?;
-        let conv_path = find_sgl_font_conv();
-        if let Some(conv) = conv_path {
-            for (name, path, sz, bpp, compress, symbols) in &fonts {
-                run_font_conv(&conv, name, path, *sz, *bpp, *compress, symbols, &fonts_dir)
-                    .map_err(|e| format!("生成字模 {} 失败: {}", name, e))?;
-            }
-        } else {
-            return Err("未找到 sgl_font_conv.exe".to_string());
-        }
+    // 写入字模 C 文件到 code/fonts/ 目录
+    let fonts_dir = code_dir.join("fonts");
+    if fonts_dir.exists() {
+        let _ = std::fs::remove_dir_all(&fonts_dir);
     }
+    let _ = window.emit(
+        "build-log",
+        serde_json::json!({ "message": format!("后端生成字模文件数量: {}", generated_font_files.len()), "level": "info" }),
+    );
+    for f in &generated_font_files {
+        let first_line = f.content.lines().next().unwrap_or("(空)").chars().take(80).collect::<String>();
+        let _ = window.emit(
+            "build-log",
+            serde_json::json!({ "message": format!("字模文件: {} (fontId={}, 内容首行: {})", f.file_name, f.font_id, first_line), "level": "info" }),
+        );
+    }
+    write_font_c_files(&generated_font_files, &fonts_dir)?;
 
     // 复制 UI 代码到 sgl-port 的 demo/ui.c
     let demo_dir = sgl_port_dir.join("demo");
@@ -3693,6 +4203,30 @@ fn build_project(
     if fonts_dir.exists() {
         copy_dir_contents(&fonts_dir, &demo_fonts_dir)
             .map_err(|e| format!("复制字模文件到 demo 失败: {}", e))?;
+    }
+    // 诊断日志：列出 demo/fonts 目录中的实际文件
+    let _ = window.emit(
+        "build-log",
+        serde_json::json!({ "message": format!("demo/fonts 目录文件列表: {}", list_font_files(&demo_fonts_dir)), "level": "info" }),
+    );
+
+    // 字模文件写入 demo/fonts/ 后，检测文件列表是否变化
+    // 若变化则删除 CMakeCache.txt，触发重新 configure 让 GLOB 收集新字模源文件
+    // 修复 #26: 先确保 build_dir 存在，再写 manifest，避免首次编译写入失败
+    if !build_dir.exists() {
+        let _ = std::fs::create_dir_all(&build_dir);
+    }
+    let new_fonts_list = list_font_files(&demo_fonts_dir);
+    let fonts_manifest_file = build_dir.join(".fonts_manifest");
+    let prev_fonts_list = std::fs::read_to_string(&fonts_manifest_file).unwrap_or_default();
+    if new_fonts_list != prev_fonts_list {
+        let _ = std::fs::write(&fonts_manifest_file, &new_fonts_list);
+        let _ = std::fs::remove_file(build_dir.join("CMakeCache.txt"));
+        let _ = std::fs::remove_file(build_dir.join("Makefile"));
+        let _ = window.emit(
+            "build-log",
+            serde_json::json!({ "message": "字模文件列表已变化，触发重新 configure", "level": "info" }),
+        );
     }
 
     // 生成干净的 main.c，不引用 gImage_test 等外部资源
@@ -3884,17 +4418,17 @@ fn append_log(project_path: String, message: String) -> Result<(), String> {
     if !log_dir.exists() {
         std::fs::create_dir_all(&log_dir).map_err(|e| format!("创建 log 目录失败: {}", e))?;
     }
-    let now = std::time::SystemTime::now();
-    let datetime: std::time::SystemTime = std::time::UNIX_EPOCH.into();
-    let duration = now.duration_since(datetime).map_err(|e| format!("时间错误: {}", e))?;
-    let secs = duration.as_secs();
-    // 简单计算日期和时间（避免引入 chrono）
-    let days = secs / 86400;
-    let time_of_day = secs % 86400;
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    // 将 UTC 秒数转换为本地时间（避免引入 chrono 依赖）
+    let local_secs = unix_to_local_secs(now_secs);
+    let days = local_secs / 86400;
+    let time_of_day = local_secs % 86400;
     let hours = time_of_day / 3600;
     let minutes = (time_of_day % 3600) / 60;
     let seconds = time_of_day % 60;
-    // 计算日期：从 1970-01-01 开始
     let (year, month, day) = days_to_date(days);
     let log_file_name = format!("{:04}-{:02}-{:02}.log", year, month, day);
     let log_file = log_dir.join(&log_file_name);
@@ -3909,6 +4443,64 @@ fn append_log(project_path: String, message: String) -> Result<(), String> {
     f.write_all(line.as_bytes())
         .map_err(|e| format!("写入日志失败: {}", e))?;
     Ok(())
+}
+
+/// 将 UTC 秒数转换为本地时区的秒数
+/// 通过调用系统 date 命令获取本地时间，避免引入 chrono 依赖
+fn unix_to_local_secs(utc_secs: u64) -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    // 简化方案：估算 UTC 与本地时间偏差
+    // 通过获取当前 SystemTime 两次（一次 UTC + 通过 date 命令获取本地时间戳）
+    // 计算差值得到偏移，再对传入的 utc_secs 应用偏移
+    let utc_now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let local_now = read_local_time_secs();
+    if let Some(local) = local_now {
+        let offset = local as i64 - utc_now as i64;
+        (utc_secs as i64 + offset).max(0) as u64
+    } else {
+        utc_secs
+    }
+}
+
+/// 通过系统 date 命令获取当前本地时间戳（秒）
+/// 返回 None 表示无法获取（回退到 UTC）
+fn read_local_time_secs() -> Option<u64> {
+    #[cfg(windows)]
+    {
+        use std::process::Command;
+        // Windows: 通过 cmd /c echo %date% %time% 不易解析，改用 powershell
+        let output = run_command_output_hidden("powershell", &["-NoProfile", "-Command", "([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [DateTimeOffset]::Now.ToUnixTimeSeconds())"], std::path::Path::new("."))
+            .ok()?;
+        // 输出是 UTC 减 local = 偏移秒数（CST 为 -28800 = UTC-8）
+        if !output.status.success() {
+            return None;
+        }
+        let s = String::from_utf8_lossy(&output.stdout);
+        let offset: i64 = s.trim().parse().ok()?;
+        // 我们要的是 local_secs，需要：local = utc + offset
+        // 这里 offset 是 utc - local，所以 local = utc - offset
+        let utc_now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        Some((utc_now - offset).max(0) as u64)
+    }
+    #[cfg(unix)]
+    {
+        use std::process::Command;
+        let output = Command::new("date")
+            .arg("+%s")
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let s = String::from_utf8_lossy(&output.stdout);
+        s.trim().parse().ok()
+    }
 }
 
 fn days_to_date(days_since_epoch: u64) -> (u64, u64, u64) {
@@ -4106,116 +4698,36 @@ fn run_simulator(project_path: String) -> Result<String, String> {
     }
 
     use std::process::Command;
-    Command::new(&simulator)
-        .current_dir(simulator.parent().unwrap_or(&sgl_port_dir))
-        .spawn()
-        .map_err(|e| format!("启动模拟器失败: {}", e))?;
+    let mut cmd = Command::new(&simulator);
+    cmd.current_dir(simulator.parent().unwrap_or(&sgl_port_dir));
+    setup_hidden_window(&mut cmd);
+    cmd.spawn().map_err(|e| format!("启动模拟器失败: {}", e))?;
 
     Ok("模拟器已启动".to_string())
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-struct ExecResult {
-    stdout: String,
-    stderr: String,
-    exit_code: i32,
-}
-
-/// 调用 sgl_font_conv.exe 生成字体 C 文件并返回内容，供前端解析为字模位图数据
-/// 实现 SGL 内核字模位图渲染（所见即所得）
-#[tauri::command]
-fn generate_font_c_content(
-    font_path: String,
-    size: i32,
-    bpp: i32,
-    symbols: Option<String>,
-) -> Result<String, String> {
-    // 解析字体文件路径（与 collect_fonts/run_font_conv 一致的逻辑）
-    let resolved = resolve_font_path(&font_path).unwrap_or_else(|| font_path.clone());
-    let path = std::path::Path::new(&resolved);
-    if !path.exists() {
-        return Err(format!("字体文件不存在: {}", resolved));
-    }
-
-    // 字体名称（清理后）
-    let name = path
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| "font".to_string());
-    let clean_name: String = name
-        .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { '_' })
-        .collect();
-
-    // 查找 sgl_font_conv.exe
-    let conv = find_sgl_font_conv()
-        .ok_or_else(|| "未找到 sgl_font_conv.exe".to_string())?;
-
-    // 临时输出目录
-    let temp_dir = std::env::temp_dir().join("sgl_ui_designer_fonts");
-    std::fs::create_dir_all(&temp_dir)
-        .map_err(|e| format!("创建临时目录失败: {}", e))?;
-
-    // 将字体文件复制到临时目录（使用清理后的文件名）
-    let temp_font_path = temp_dir.join(&clean_name);
-    if path != temp_font_path.as_path() {
-        std::fs::copy(path, &temp_font_path)
-            .map_err(|e| format!("复制字体文件失败: {}", e))?;
-    }
-
-    let out_file = temp_dir.join(format!(
-        "sgl_font_{}_{}_bpp{}.c",
-        clean_name, size, bpp
-    ));
-    let out_str = out_file.to_string_lossy().to_string();
-    let font_arg = temp_font_path.to_string_lossy().to_string();
-
-    let mut cmd = std::process::Command::new(&conv);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        // CREATE_NO_WINDOW (0x08000000): 隐藏控制台窗口，避免 sgl_font_conv.exe 弹出黑窗
-        cmd.creation_flags(0x08000000);
-    }
-    cmd.arg("--font")
-        .arg(&font_arg)
-        .arg("--size")
-        .arg(size.to_string())
-        .arg("--bpp")
-        .arg(bpp.to_string())
-        .arg("--output")
-        .arg(&out_str);
-
-    // 符号表（可选）：指定字符集，减少字模大小
-    if let Some(ref syms) = symbols {
-        if !syms.is_empty() {
-            let symbols_file = temp_dir.join(format!(
-                "symbols_{}_{}_bpp{}.txt",
-                clean_name, size, bpp
-            ));
-            std::fs::write(&symbols_file, syms)
-                .map_err(|e| format!("写入 symbols 文件失败: {}", e))?;
-            cmd.arg("--symbols-file").arg(&symbols_file);
+/// 检查目录路径是否为敏感的系统目录，防止信息泄露
+fn is_sensitive_system_dir(path: &std::path::Path) -> bool {
+    let path_str = path.to_string_lossy().to_lowercase();
+    // Windows 系统敏感目录
+    let sensitive = [
+        "\\windows\\",
+        "\\program files\\",
+        "\\program files (x86)\\",
+        "\\programdata\\",
+        "\\users\\",
+        "\\$recycle.bin",
+        "\\system volume information",
+        "\\config\\",
+        "\\syswow64\\",
+        "\\drivers\\",
+    ];
+    for s in &sensitive {
+        if path_str.contains(s) {
+            return true;
         }
     }
-
-    let output = cmd
-        .output()
-        .map_err(|e| format!("调用 sgl_font_conv 失败: {}", e))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        return Err(format!(
-            "sgl_font_conv 返回非零状态\nstdout: {}\nstderr: {}",
-            stdout, stderr
-        ));
-    }
-
-    // 读取生成的 C 文件内容
-    let content = std::fs::read_to_string(&out_file)
-        .map_err(|e| format!("读取字模 C 文件失败: {}", e))?;
-
-    Ok(content)
+    false
 }
 
 /// 列出指定目录下的文件和子目录
@@ -4228,6 +4740,9 @@ fn list_directory(path: String) -> Result<serde_json::Value, String> {
     }
     if !dir.is_dir() {
         return Err(format!("不是目录: {}", path));
+    }
+    if is_sensitive_system_dir(dir) {
+        return Err("拒绝访问系统敏感目录".to_string());
     }
 
     let entries = fs::read_dir(dir).map_err(|e| format!("读取目录失败: {}", e))?;
@@ -4274,61 +4789,27 @@ fn list_directory(path: String) -> Result<serde_json::Value, String> {
     }))
 }
 
-/// 在系统 shell 中执行命令（Windows 使用 cmd /c）
-#[tauri::command]
-fn exec_command(command: String, cwd: Option<String>) -> Result<ExecResult, String> {
-    use std::process::Command;
-
-    let mut cmd = Command::new("cmd");
-    cmd.arg("/c").arg(&command);
-
-    if let Some(dir) = cwd {
-        cmd.current_dir(dir);
-    } else if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            cmd.current_dir(dir);
-        }
+/// 将前端生成的字模 C 文件直接写入到 fonts 目录（替代 sgl_font_conv.exe 调用）
+/// font_files: 前端 generateFontCFiles() 返回的 {fontId, fileName, content} 数组
+/// fonts_dir: 目标 fonts 目录路径
+fn write_font_c_files(font_files: &[FontCFile], fonts_dir: &std::path::Path) -> Result<(), String> {
+    if font_files.is_empty() {
+        return Ok(());
     }
-
-    let output = cmd.output().map_err(|e| format!("执行命令失败: {}", e))?;
-
-    Ok(ExecResult {
-        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-        exit_code: output.status.code().unwrap_or(-1),
-    })
+    std::fs::create_dir_all(fonts_dir)
+        .map_err(|e| format!("创建 fonts 目录失败: {}", e))?;
+    for f in font_files {
+        // 安全检查：防止 file_name 包含路径遍历组件
+        if !is_safe_filename(&f.file_name) {
+            return Err(format!("非法字模文件名（含路径分隔符）: {}", f.file_name));
+        }
+        let path = fonts_dir.join(&f.file_name);
+        std::fs::write(&path, &f.content)
+            .map_err(|e| format!("写入字模文件 {} 失败: {}", f.file_name, e))?;
+    }
+    Ok(())
 }
 
-fn find_sgl_font_conv() -> Option<String> {
-    // 1. 当前 exe 同目录
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let p = dir.join("sgl_font_conv.exe");
-            if p.exists() { return Some(p.to_string_lossy().to_string()); }
-        }
-    }
-    // 2. 释放内嵌的 sgl_font_conv.exe 到临时目录
-    if let Ok(temp_dir) = std::env::var("TEMP") {
-        let dir = std::path::PathBuf::from(&temp_dir);
-        let p = dir.join("sgl_font_conv.exe");
-        if p.exists() { return Some(p.to_string_lossy().to_string()); }
-        // 释放
-        if std::fs::write(&p, SGL_FONT_CONV_EXE).is_ok() {
-            return Some(p.to_string_lossy().to_string());
-        }
-    }
-    // 3. 当前工作目录
-    let p = std::path::PathBuf::from("sgl_font_conv.exe");
-    if p.exists() { return Some(p.to_string_lossy().to_string()); }
-    // 4. PATH
-    if let Ok(paths) = std::env::var("PATH") {
-        for p in std::env::split_paths(&paths) {
-            let full = p.join("sgl_font_conv.exe");
-            if full.exists() { return Some(full.to_string_lossy().to_string()); }
-        }
-    }
-    None
-}
 
 /// 下载更新安装包并启动安装程序，然后退出当前应用
 #[tauri::command]
@@ -4401,9 +4882,7 @@ fn main() {
             append_log,
             get_image_data_url,
             get_opaque_image_data_url,
-            generate_font_c_content,
             list_directory,
-            exec_command,
             download_and_install_update,
             // LLM 模块
             llm::load_llm_config,
@@ -4415,7 +4894,8 @@ fn main() {
             // AI 对话历史独立存储
             load_ai_chat_history,
             save_ai_chat_history,
-            clear_ai_chat_history
+            clear_ai_chat_history,
+            generate_font_c
         ])
         .run(tauri::generate_context!());
 
@@ -4541,6 +5021,29 @@ mod tests {
     }
 }
 
+/// 生成字模 C 文件（供设计器/预览页调用，确保前端渲染与 SGL 仿真使用同一份字模数据）
+/// font_path: 字体文件绝对路径
+/// size: 字号
+/// bpp: 位深 (1/2/4)
+/// symbols: 需要生成字模的字符
+/// compress: 是否启用 RLE 压缩
+/// font_name: 字体名称（用于生成变量名）
+#[tauri::command]
+fn generate_font_c(
+    font_path: String,
+    size: i32,
+    bpp: i32,
+    symbols: String,
+    compress: bool,
+    font_name: String,
+) -> Result<String, String> {
+    let path = std::path::Path::new(&font_path);
+    if !path.exists() {
+        return Err(format!("字体文件不存在: {}", font_path));
+    }
+    font_generator::generate_font_c(path, size, bpp, &symbols, compress, &font_name)
+}
+
 /// 读取项目独立存储的 AI 对话历史（与项目文件分离，避免项目文件膨胀）
 /// path 为项目文件路径，对话历史存储在同目录的 .ai_chat_history.json
 #[tauri::command]
@@ -4591,12 +5094,26 @@ fn save_ai_chat_history(project_path: String, history: serde_json::Value) -> Res
     let content = serde_json::to_string_pretty(&history)
         .map_err(|e| format!("序列化对话历史失败: {}", e))?;
 
-    // 原子写入：先写临时文件，再重命名
+    // 原子写入：先写临时文件，再 rename 覆盖（在 Windows 上 rename 替换现有文件也是原子的）
     fs::write(&tmp_file, content)
         .map_err(|e| format!("写入临时文件失败: {}", e))?;
 
+    // Windows 上 fs::rename 不能直接覆盖现有文件，需要先备份旧文件再恢复
+    // 但跨平台最简单可靠的做法：若目标已存在先 remove 再 rename
     if history_file.exists() {
-        fs::remove_file(&history_file).ok();
+        // 备份到带时间戳的临时文件，避免极端情况下历史丢失
+        let backup_file = project_dir.join(format!(
+            ".ai_chat_history.json.bak.{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0)
+        ));
+        if let Err(e) = fs::rename(&history_file, &backup_file) {
+            // 备份失败时直接清理旧文件，保证 rename 能成功
+            let _ = fs::remove_file(&history_file);
+            let _ = e;
+        }
     }
     fs::rename(&tmp_file, &history_file)
         .map_err(|e| format!("重命名临时文件失败: {}", e))?;

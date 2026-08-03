@@ -1,4 +1,5 @@
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
+import { generateFontC } from './font_generator.js';
 
 // ============ SGL 字体文件名 → 浏览器可用字体栈 映射 ============
 export const SGL_FONT_MAP = {
@@ -155,20 +156,128 @@ export async function preloadProjectFonts(fonts) {
 }
 
 // ============ SGL 字模位图数据加载（所见即所得） ============
-// 调用后端 generate_font_c_content 生成字体 C 文件，解析为字模数据并缓存到 SGLRenderer
+// 前端 generateFontC 直接生成字体 C 文件内容，解析为字模数据并缓存到 SGLRenderer
 
 const _fontDataPromises = new Map(); // key → Promise<fontData>
 const _failedFontKeys = new Set(); // 加载失败的 key，避免重复尝试导致死循环
+const _fontErrors = new Map(); // key → 错误信息字符串
+
+// 字体生成队列控制：限制同时进行的字体生成任务数，避免后端阻塞
+const FONT_QUEUE_MAX_CONCURRENT = 8; // 最多同时进行 8 个字体生成任务
+let _fontQueueRunning = 0;
+const _fontQueue = []; // 等待队列
+
+function runFontQueue() {
+  while (_fontQueue.length > 0 && _fontQueueRunning < FONT_QUEUE_MAX_CONCURRENT) {
+    const { promise, resolver, rejecter } = _fontQueue.shift();
+    _fontQueueRunning++;
+    promise().then(result => {
+      resolver(result);
+    }).catch(err => {
+      rejecter(err);
+    }).finally(() => {
+      _fontQueueRunning--;
+      runFontQueue();
+    });
+  }
+}
+
+function enqueueFontTask(taskFn) {
+  return new Promise((resolve, reject) => {
+    _fontQueue.push({
+      promise: taskFn,
+      resolver: resolve,
+      rejecter: reject
+    });
+    runFontQueue();
+  });
+}
+
+/** 获取字体加载失败的错误信息 */
+export function getFontError(fontPath, size, bpp) {
+  const key = `${fontPath}|${size}|${bpp}`;
+  return _fontErrors.get(key) || null;
+}
 
 /**
  * 加载 SGL 字模位图数据
- * 调用后端 sgl_font_conv.exe 生成字体 C 文件，解析为字模数据，注册到 SGLRenderer
+ * 调用前端 generateFontC 生成字体 C 文件，解析为字模数据，注册到 SGLRenderer
  * @param {string} fontPath - 字体文件路径（如 'simsun.ttc' 或完整路径）
  * @param {number} size - 字号
  * @param {number} bpp - bpp (1/2/4)
  * @param {string} [symbols] - 可选字符集
  * @returns {Promise<object|null>} 字模数据对象
  */
+// localStorage 字模缓存 key 前缀
+const FONT_CACHE_PREFIX = 'sgl_font_cache_';
+
+function getFontCacheKey(fontPath, size, bpp) {
+  return `${FONT_CACHE_PREFIX}${fontPath.replace(/[/\\]/g, '_')}_${size}_${bpp}`;
+}
+
+function getCachedFontC(fontPath, size, bpp) {
+  try {
+    const cacheKey = getFontCacheKey(fontPath, size, bpp);
+    const cached = localStorage.getItem(cacheKey);
+    if (cached) {
+      const { symbols: cachedSymbols, cContent } = JSON.parse(cached);
+      return { cachedSymbols, cContent };
+    }
+  } catch (e) {
+    console.warn('读取字模缓存失败:', e);
+  }
+  return null;
+}
+
+function setCachedFontC(fontPath, size, bpp, symbols, cContent) {
+  try {
+    const cacheKey = getFontCacheKey(fontPath, size, bpp);
+    localStorage.setItem(cacheKey, JSON.stringify({ symbols, cContent }));
+  } catch (e) {
+    console.warn('保存字模缓存失败:', e);
+  }
+}
+
+export function hasLocalFontCache(fontPath, size, bpp, symbols) {
+  const cached = getCachedFontC(fontPath, size, bpp);
+  if (!cached || !cached.cContent) return false;
+  if (!symbols) return true;
+  return symbols.split('').every(ch => cached.cachedSymbols.includes(ch));
+}
+
+/**
+ * 同步从 localStorage 恢复字体数据到内存（避免页面切换后异步加载导致的重新渲染）
+ * @param {Array} fontKeys - [{fontPath, size, bpp, symbols}] 需要恢复的字体列表
+ * @returns {number} 成功恢复的数量
+ */
+export function restoreFontCacheSync(fontKeys) {
+  if (!window.SGLRenderer || !window.SGLRenderer.parseFontCFile) return 0;
+  let restored = 0;
+  for (const { fontPath, size, bpp, symbols } of fontKeys) {
+    if (!fontPath || fontPath === 'default') continue;
+    const key = `${fontPath}|${size}|${bpp}`;
+    // 已在内存中则跳过
+    if (window.SGLRenderer.getFontData(key)) { restored++; continue; }
+    // 从 localStorage 同步恢复
+    const cached = getCachedFontC(fontPath, size, bpp);
+    if (cached && cached.cContent) {
+      // 检查缓存是否包含所需字符
+      const needSymbols = symbols || '';
+      const hasAllChars = !needSymbols || needSymbols.split('').every(ch => cached.cachedSymbols.includes(ch));
+      if (hasAllChars) {
+        try {
+          const fontData = window.SGLRenderer.parseFontCFile(cached.cContent);
+          window.SGLRenderer.registerFontData(key, fontData);
+          restored++;
+        } catch (e) {
+          console.warn('同步恢复字体缓存失败:', fontPath, size, bpp, e);
+        }
+      }
+    }
+  }
+  return restored;
+}
+
 export async function loadSglFontData(fontPath, size, bpp, symbols) {
   if (!fontPath || fontPath === 'default') return null;
   const key = `${fontPath}|${size}|${bpp}`;
@@ -184,22 +293,58 @@ export async function loadSglFontData(fontPath, size, bpp, symbols) {
     return _fontDataPromises.get(key);
   }
 
-  const promise = (async () => {
+  const promise = enqueueFontTask(async () => {
     try {
-      const cContent = await invoke('generate_font_c_content', {
-        fontPath, size, bpp, symbols: symbols || null,
-      });
+      const fontName = `sgl_font_${fontPath.replace(/[/\\]/g, '/').split('/').pop().replace(/[^\w]/g, '_')}_${size}_bpp${bpp}`;
+      let cContent;
+      
+      // 先检查 localStorage 缓存
+      const cached = getCachedFontC(fontPath, size, bpp);
+      if (cached && cached.cContent) {
+        // 检查缓存的 symbols 是否包含当前需要的所有字符
+        const needSymbols = symbols || '';
+        const hasAllChars = needSymbols.split('').every(ch => cached.cachedSymbols.includes(ch));
+        if (hasAllChars) {
+          cContent = cached.cContent;
+        }
+      }
+      
+      // 没有缓存或缓存不包含所需字符，调用后端生成
+      if (!cContent) {
+        try {
+          cContent = await invoke('generate_font_c', {
+            fontPath,
+            size,
+            bpp,
+            symbols: symbols || '',
+            compress: false,
+            fontName,
+          });
+        } catch (e) {
+          console.warn('后端字模生成失败，回退到前端 Canvas 生成:', e);
+          const familyName = await registerFontFile(fontPath);
+          if (!familyName) {
+            throw new Error('字体文件加载失败');
+          }
+          cContent = generateFontC(familyName, size, bpp, symbols || '');
+        }
+        // 缓存到 localStorage
+        setCachedFontC(fontPath, size, bpp, symbols || '', cContent);
+      }
+      
       const fontData = window.SGLRenderer.parseFontCFile(cContent);
       window.SGLRenderer.registerFontData(key, fontData);
       return fontData;
     } catch (err) {
-      console.warn('加载 SGL 字模数据失败:', fontPath, size, bpp, err);
-      _failedFontKeys.add(key); // 记录失败，避免重复加载
+      const errMsg = typeof err === 'string' ? err : (err.message || JSON.stringify(err));
+      _fontErrors.set(key, errMsg);
+      console.warn('加载 SGL 字模数据失败:', fontPath, size, bpp, errMsg);
+      _failedFontKeys.add(key);
       return null;
     } finally {
       _fontDataPromises.delete(key);
     }
-  })();
+  });
   _fontDataPromises.set(key, promise);
   return promise;
 }

@@ -1,12 +1,31 @@
-import { AppState, navigate, showToast, initNav, setupUpdateChecker, setupWindowControls } from './app.js';
+import { AppState, navigate, showToast } from './app.js';
 import { invoke } from '@tauri-apps/api/core';
 import { confirm } from '@tauri-apps/plugin-dialog';
 import { PROVIDER_PRESETS, DEFAULT_LLM_CONFIG } from './llm/llm_config.js';
 
-initNav('settings');
-setupWindowControls();
-setupUpdateChecker();
-AppState.init();
+const _comboBoxDropLists = new Map();
+let _comboDocClickListener = null;
+
+function _ensureComboDocListener() {
+  if (_comboDocClickListener) return;
+  _comboDocClickListener = (e) => {
+    _comboBoxDropLists.forEach((dropList, comboWrap) => {
+      if (!comboWrap.contains(e.target)) {
+        dropList.style.display = 'none';
+      }
+    });
+  };
+  document.addEventListener('click', _comboDocClickListener);
+}
+
+function registerComboClickClose(comboWrap, dropList) {
+  _ensureComboDocListener();
+  _comboBoxDropLists.set(comboWrap, dropList);
+}
+
+function unregisterComboClickClose(comboWrap) {
+  _comboBoxDropLists.delete(comboWrap);
+}
 
 const $ = id => document.getElementById(id);
 
@@ -48,7 +67,6 @@ function ensureSglConfig() {
       font_consolas24_compress: 0
     };
   } else {
-    // 补充新增字段默认值（兼容旧项目数据）
     const cfg = AppState.project.sgl_config;
     if (cfg.fbdev_even_coords == null) cfg.fbdev_even_coords = 0;
     if (cfg.focused_color == null) cfg.focused_color = '#00FF00';
@@ -61,8 +79,6 @@ function ensureSglConfig() {
   }
 }
 
-// 从 sgl-port-windows-vscode/demo/sgl_config.h 读取配置同步到当前项目
-// 这样用户在 sgl_config.h 中手动修改的参数会被同步到 SGL 配置页面
 async function syncConfigFromFile() {
   if (!AppState.projectPath) return false;
   try {
@@ -73,7 +89,6 @@ async function syncConfigFromFile() {
       return true;
     }
   } catch (e) {
-    // 文件不存在或解析失败时静默处理（如未克隆 sgl-port 项目）
     console.log('读取 sgl_config.h 失败:', e);
   }
   return false;
@@ -90,7 +105,6 @@ function refresh() {
     if (el.type === 'checkbox') {
       el.checked = !!val;
     } else if (el.type === 'color') {
-      // 颜色输入框需要 #RRGGBB 格式
       el.value = (val && typeof val === 'string') ? val : '#000000';
     } else {
       el.value = val;
@@ -111,74 +125,10 @@ function bindChange(id, key, parser = v => v) {
   });
 }
 
-// SGL 配置绑定：用户修改后立即写入 sgl_config.h 文件
-document.querySelectorAll('.sgl-cfg').forEach(el => {
-  el.addEventListener('change', () => {
-    ensureSglConfig();
-    const key = el.dataset.key;
-    if (el.type === 'checkbox') {
-      AppState.project.sgl_config[key] = el.checked ? 1 : 0;
-    } else if (el.type === 'color') {
-      // 颜色选择器值已经是 #RRGGBB 格式，直接存储
-      AppState.project.sgl_config[key] = el.value;
-    } else if (el.tagName === 'SELECT' && el.dataset.key === 'heap_algo') {
-      AppState.project.sgl_config[key] = el.value;
-    } else {
-      AppState.project.sgl_config[key] = parseInt(el.value) || 0;
-    }
-    AppState.save();
-    // 写入 sgl_config.h 文件，保证页面与文件一致
-    if (AppState.projectPath) {
-      invoke('write_sgl_config_to_file', {
-        projectPath: AppState.projectPath,
-        config: AppState.project.sgl_config
-      }).catch(e => console.log('写入 sgl_config.h 失败:', e));
-    }
-  });
-});
-
-// 单独保存 sgl_config.h 按钮：弹出文件保存对话框，让用户选择保存路径
-const saveSglConfigBtn = $('btn-save-sgl-config');
-if (saveSglConfigBtn) {
-  saveSglConfigBtn.addEventListener('click', async () => {
-    ensureSglConfig();
-    let defaultPath = 'sgl_config.h';
-    // 默认路径优先使用项目下的 sgl-port 路径（如果存在），便于用户直接确认保存
-    if (AppState.projectPath) {
-      const projDir = AppState.projectPath.replace(/[\\/][^\\/]*$/, '');
-      const candidate = projDir + '\\sgl-port-windows-vscode\\demo\\sgl_config.h';
-      defaultPath = candidate;
-    }
-    let targetPath = null;
-    try {
-      const { save } = await import('@tauri-apps/plugin-dialog');
-      targetPath = await save({
-        title: '保存 sgl_config.h',
-        defaultPath,
-        filters: [{ name: 'C Header File', extensions: ['h'] }]
-      });
-    } catch (e) {
-      showToast('打开保存对话框失败: ' + e, 'error');
-      return;
-    }
-    if (!targetPath) return; // 用户取消
-    try {
-      await invoke('write_sgl_config_to_custom_path', {
-        config: AppState.project.sgl_config,
-        targetPath
-      });
-      showToast('已保存 sgl_config.h 到: ' + targetPath, 'success');
-    } catch (e) {
-      showToast('保存失败: ' + e, 'error');
-    }
-  });
-}
-
 function ensureAsciiFonts() {
   if (!Array.isArray(AppState.project.ascii_fonts)) {
     AppState.project.ascii_fonts = [];
   }
-  // 兼容旧数据：字符串数组转成对象数组，补充缺失的 compress 字段
   AppState.project.ascii_fonts = AppState.project.ascii_fonts
     .map(item => {
       if (typeof item === 'string') {
@@ -196,6 +146,13 @@ function renderAsciiFontList() {
   const fonts = AppState.project.resources?.fonts || [];
   ensureAsciiFonts();
   const list = AppState.project.ascii_fonts;
+  if (_comboBoxDropLists.size > 0) {
+    const toRemove = [];
+    _comboBoxDropLists.forEach((_, comboWrap) => {
+      if (!container.contains(comboWrap)) toRemove.push(comboWrap);
+    });
+    toRemove.forEach(w => unregisterComboClickClose(w));
+  }
   container.innerHTML = '';
   if (fonts.length === 0) {
     container.innerHTML = '<span style="color:var(--text-muted);font-size:12px;font-weight:normal;">资源面板中暂无字体</span>';
@@ -285,11 +242,7 @@ function renderAsciiFontList() {
       AppState.save();
     });
 
-    document.addEventListener('click', (e) => {
-      if (!comboWrap.contains(e.target)) {
-        toggleList(false);
-      }
-    });
+    registerComboClickClose(comboWrap, dropList);
 
     comboWrap.appendChild(sizeInput);
     comboWrap.appendChild(dropBtn);
@@ -314,7 +267,6 @@ function renderAsciiFontList() {
     });
     bppGroup.appendChild(bppSelect);
 
-    // RLE 压缩选项
     const compressGroup = document.createElement('div');
     compressGroup.className = 'form-group';
     compressGroup.innerHTML = '<label class="form-label">RLE压缩</label>';
@@ -358,68 +310,7 @@ function renderAsciiFontList() {
   });
 }
 
-const addBtn = $('btn-add-ascii-font');
-if (addBtn) {
-  addBtn.addEventListener('click', () => {
-    ensureAsciiFonts();
-    const fonts = AppState.project.resources?.fonts || [];
-    const first = fonts.length > 0 ? (fonts[0].path || fonts[0].name) : '';
-    AppState.project.ascii_fonts.push({ name: first, size: 16, bpp: 4, compress: 0 });
-    AppState.save();
-    renderAsciiFontList();
-  });
-}
-
-document.querySelectorAll('[data-nav]').forEach(tab => {
-  tab.addEventListener('click', () => navigate(tab.dataset.nav));
-});
-
-// 进入 SGL 配置页面时：
-// 1. 若项目未保存，提示用户是否保存项目（保存后才能定位 sgl_config.h）
-// 2. 保存后（或已保存）读取 sgl_config.h 同步外部修改，再刷新页面
-(async () => {
-  if (!AppState.projectPath) {
-    const ok = await confirm('当前项目尚未保存，是否保存项目以读取 SGL 配置文件？', {
-      title: '提示',
-      kind: 'info',
-      okLabel: '保存项目',
-      cancelLabel: '暂不保存'
-    });
-    if (ok) {
-      const result = await AppState.saveProject();
-      if (!result.ok) {
-        // 用户取消保存或保存失败，显示默认值
-        refresh();
-        return;
-      }
-      showToast('项目已保存', 'success');
-    } else {
-      // 用户选择不保存，显示默认值
-      refresh();
-      return;
-    }
-  }
-  await syncConfigFromFile();
-  refresh();
-})();
-
-// ============ AI 配置逻辑 ============
-
 let _aiConfig = { ...DEFAULT_LLM_CONFIG };
-
-// 加载已有配置
-(async () => {
-  try {
-    const cfg = await invoke('load_llm_config');
-    if (cfg) {
-      _aiConfig = cfg;
-      applyAiConfigToForm();
-    }
-  } catch (e) {
-    // 首次使用，显示默认值
-    applyAiConfigToForm();
-  }
-})();
 
 function applyAiConfigToForm() {
   const baseUrl = $('ai-base-url');
@@ -431,8 +322,10 @@ function applyAiConfigToForm() {
   if (model) model.value = _aiConfig.model || '';
   if (apiKey) apiKey.value = _aiConfig.api_key || '';
   if (maxTokens) maxTokens.value = _aiConfig.max_tokens || DEFAULT_LLM_CONFIG.max_tokens;
-  if (temperature) temperature.value = _aiConfig.temperature || 0.7;
-  // 高亮当前 Provider
+  if (temperature) {
+    const t = _aiConfig.temperature;
+    temperature.value = Number.isFinite(t) ? t : 0.7;
+  }
   document.querySelectorAll('.ai-provider-btn').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.provider === _aiConfig.provider);
   });
@@ -443,147 +336,255 @@ function readAiConfigFromForm() {
   _aiConfig.model = ($('ai-model')?.value || '').trim();
   _aiConfig.api_key = ($('ai-api-key')?.value || '').trim();
   _aiConfig.max_tokens = parseInt($('ai-max-tokens')?.value) || DEFAULT_LLM_CONFIG.max_tokens;
-  _aiConfig.temperature = parseFloat($('ai-temperature')?.value) || 0.7;
+  const tempVal = parseFloat($('ai-temperature')?.value);
+  _aiConfig.temperature = Number.isFinite(tempVal) ? tempVal : 0.7;
   return _aiConfig;
 }
 
-// Provider 快捷选择
-document.querySelectorAll('.ai-provider-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    const provider = btn.dataset.provider;
-    const preset = PROVIDER_PRESETS[provider];
-    if (!preset) return;
-    _aiConfig.provider = provider;
-    _aiConfig.base_url = preset.base_url;
-    _aiConfig.model = preset.model;
-    applyAiConfigToForm();
-    document.querySelectorAll('.ai-provider-btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-  });
-});
-
-// API Key 显示/隐藏
-const toggleKeyBtn = $('ai-toggle-key-vis');
-if (toggleKeyBtn) {
-  toggleKeyBtn.addEventListener('click', () => {
-    const input = $('ai-api-key');
-    if (input.type === 'password') {
-      input.type = 'text';
-      toggleKeyBtn.textContent = '🔒';
-    } else {
-      input.type = 'password';
-      toggleKeyBtn.textContent = '👁';
+async function initAiConfig() {
+  try {
+    const cfg = await invoke('load_llm_config');
+    if (cfg) {
+      _aiConfig = cfg;
     }
-  });
+  } catch (e) {}
+  applyAiConfigToForm();
 }
 
-// 保存配置
-const saveBtn = $('ai-btn-save');
-if (saveBtn) {
-  saveBtn.addEventListener('click', async () => {
-    const config = readAiConfigFromForm();
-    const status = $('ai-config-status');
-    try {
-      await invoke('save_llm_config', { config });
-      // 同步更新 ai_panel 中的 _currentConfig 缓存
-      _aiConfig = config;
+export async function init() {
+  AppState.init();
+
+  document.querySelectorAll('.sgl-cfg').forEach(el => {
+    el.addEventListener('change', () => {
+      ensureSglConfig();
+      const key = el.dataset.key;
+      if (el.type === 'checkbox') {
+        AppState.project.sgl_config[key] = el.checked ? 1 : 0;
+      } else if (el.type === 'color') {
+        AppState.project.sgl_config[key] = el.value;
+      } else if (el.tagName === 'SELECT' && el.dataset.key === 'heap_algo') {
+        AppState.project.sgl_config[key] = el.value;
+      } else {
+        const raw = el.value.trim();
+        const parsed = parseInt(raw, 10);
+        if (raw === '' || !Number.isFinite(parsed) || parsed < 1) {
+          showToast(`配置项 ${key} 必须为大于 0 的整数`, 'error');
+          el.value = AppState.project.sgl_config[key] || 1;
+          return;
+        }
+        AppState.project.sgl_config[key] = parsed;
+      }
+      AppState.save();
+      if (AppState.projectPath) {
+        invoke('write_sgl_config_to_file', {
+          projectPath: AppState.projectPath,
+          config: AppState.project.sgl_config
+        }).catch(e => console.log('写入 sgl_config.h 失败:', e));
+      }
+    });
+  });
+
+  const saveSglConfigBtn = $('btn-save-sgl-config');
+  if (saveSglConfigBtn) {
+    saveSglConfigBtn.addEventListener('click', async () => {
+      ensureSglConfig();
+      let defaultPath = 'sgl_config.h';
+      if (AppState.projectPath) {
+        const projDir = AppState.projectPath.replace(/[\\/][^\\/]*$/, '');
+        const candidate = projDir + '\\sgl-port-windows-vscode\\demo\\sgl_config.h';
+        defaultPath = candidate;
+      }
+      let targetPath = null;
       try {
-        localStorage.setItem('sgl_llm_config_cache', JSON.stringify(config));
-      } catch {}
-      status.textContent = '✅ 配置已保存';
-      status.style.color = 'var(--success)';
-    } catch (e) {
-      status.textContent = '❌ 保存失败: ' + e;
-      status.style.color = 'var(--error)';
-    }
-    setTimeout(() => { status.textContent = ''; }, 3000);
-  });
-}
+        const { save } = await import('@tauri-apps/plugin-dialog');
+        targetPath = await save({
+          title: '保存 sgl_config.h',
+          defaultPath,
+          filters: [{ name: 'C Header File', extensions: ['h'] }]
+        });
+      } catch (e) {
+        showToast('打开保存对话框失败: ' + e, 'error');
+        return;
+      }
+      if (!targetPath) return;
+      try {
+        await invoke('write_sgl_config_to_custom_path', {
+          config: AppState.project.sgl_config,
+          targetPath
+        });
+        showToast('已保存 sgl_config.h 到: ' + targetPath, 'success');
+      } catch (e) {
+        showToast('保存失败: ' + e, 'error');
+      }
+    });
+  }
 
-// 测试连接
-const testBtn = $('ai-btn-test');
-if (testBtn) {
-  testBtn.addEventListener('click', async () => {
-    const config = readAiConfigFromForm();
-    const status = $('ai-config-status');
-    if (!config.api_key) {
-      status.textContent = '⚠️ 请先填写 API Key';
-      status.style.color = 'var(--warning)';
-      return;
-    }
-    if (!config.base_url) {
-      status.textContent = '⚠️ 请先填写 API 地址';
-      status.style.color = 'var(--warning)';
-      return;
-    }
-    status.textContent = '⏳ 正在测试连接...';
-    status.style.color = 'var(--text-muted)';
-    testBtn.disabled = true;
-    try {
-      const result = await invoke('llm_test_connection', { config });
-      status.textContent = '✅ ' + result;
-      status.style.color = 'var(--success)';
-    } catch (e) {
-      status.textContent = '❌ ' + e;
-      status.style.color = 'var(--error)';
-    }
-    testBtn.disabled = false;
-    setTimeout(() => { status.textContent = ''; }, 5000);
-  });
-}
+  const addBtn = $('btn-add-ascii-font');
+  if (addBtn) {
+    addBtn.addEventListener('click', () => {
+      ensureAsciiFonts();
+      const fonts = AppState.project.resources?.fonts || [];
+      const first = fonts.length > 0 ? (fonts[0].path || fonts[0].name) : '';
+      AppState.project.ascii_fonts.push({ name: first, size: 16, bpp: 4, compress: 0 });
+      AppState.save();
+      renderAsciiFontList();
+    });
+  }
 
-// 获取模型列表
-const fetchModelsBtn = $('ai-fetch-models');
-const modelSelect = $('ai-model-select');
-if (fetchModelsBtn && modelSelect) {
-  fetchModelsBtn.addEventListener('click', async () => {
-    const config = readAiConfigFromForm();
-    const status = $('ai-config-status');
-    if (!config.api_key) {
-      status.textContent = '⚠️ 请先填写 API Key';
-      status.style.color = 'var(--warning)';
-      return;
-    }
-    if (!config.base_url) {
-      status.textContent = '⚠️ 请先填写 API 地址';
-      status.style.color = 'var(--warning)';
-      return;
-    }
-    status.textContent = '⏳ 正在获取模型列表...';
-    status.style.color = 'var(--text-muted)';
-    fetchModelsBtn.disabled = true;
-    try {
-      const models = await invoke('llm_list_models', { config });
-      if (!models || models.length === 0) {
-        status.textContent = '⚠️ 未获取到模型';
+  document.querySelectorAll('.ai-provider-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const provider = btn.dataset.provider;
+      const preset = PROVIDER_PRESETS[provider];
+      if (!preset) return;
+      _aiConfig.provider = provider;
+      _aiConfig.base_url = preset.base_url;
+      _aiConfig.model = preset.model;
+      applyAiConfigToForm();
+      document.querySelectorAll('.ai-provider-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+    });
+  });
+
+  const toggleKeyBtn = $('ai-toggle-key-vis');
+  if (toggleKeyBtn) {
+    toggleKeyBtn.addEventListener('click', () => {
+      const input = $('ai-api-key');
+      if (input.type === 'password') {
+        input.type = 'text';
+        toggleKeyBtn.textContent = '🔒';
+      } else {
+        input.type = 'password';
+        toggleKeyBtn.textContent = '👁';
+      }
+    });
+  }
+
+  const saveBtn = $('ai-btn-save');
+  if (saveBtn) {
+    saveBtn.addEventListener('click', async () => {
+      const config = readAiConfigFromForm();
+      const status = $('ai-config-status');
+      try {
+        await invoke('save_llm_config', { config });
+        _aiConfig = config;
+        try {
+          localStorage.setItem('sgl_llm_config_cache', JSON.stringify(config));
+        } catch {}
+        status.textContent = '✅ 配置已保存';
+        status.style.color = 'var(--success)';
+      } catch (e) {
+        status.textContent = '❌ 保存失败: ' + e;
+        status.style.color = 'var(--error)';
+      }
+      setTimeout(() => { status.textContent = ''; }, 3000);
+    });
+  }
+
+  const testBtn = $('ai-btn-test');
+  if (testBtn) {
+    testBtn.addEventListener('click', async () => {
+      const config = readAiConfigFromForm();
+      const status = $('ai-config-status');
+      if (!config.api_key) {
+        status.textContent = '⚠️ 请先填写 API Key';
         status.style.color = 'var(--warning)';
         return;
       }
-      // 填充下拉框
-      modelSelect.innerHTML = '';
-      models.sort().forEach(m => {
-        const opt = document.createElement('option');
-        opt.value = m;
-        opt.textContent = m;
-        modelSelect.appendChild(opt);
-      });
-      modelSelect.style.display = 'block';
-      status.textContent = `✅ 获取到 ${models.length} 个模型，点击选择：`;
-      status.style.color = 'var(--success)';
-    } catch (e) {
-      status.textContent = '❌ ' + e;
-      status.style.color = 'var(--error)';
-      modelSelect.style.display = 'none';
-    }
-    fetchModelsBtn.disabled = false;
-    setTimeout(() => { status.textContent = ''; }, 5000);
-  });
+      if (!config.base_url) {
+        status.textContent = '⚠️ 请先填写 API 地址';
+        status.style.color = 'var(--warning)';
+        return;
+      }
+      status.textContent = '⏳ 正在测试连接...';
+      status.style.color = 'var(--text-muted)';
+      testBtn.disabled = true;
+      try {
+        const result = await invoke('llm_test_connection', { config });
+        status.textContent = '✅ ' + result;
+        status.style.color = 'var(--success)';
+      } catch (e) {
+        status.textContent = '❌ ' + e;
+        status.style.color = 'var(--error)';
+      }
+      testBtn.disabled = false;
+      setTimeout(() => { status.textContent = ''; }, 5000);
+    });
+  }
 
-  // 点击模型选项 → 填入输入框
-  modelSelect.addEventListener('change', () => {
-    const modelInput = $('ai-model');
-    if (modelInput && modelSelect.value) {
-      modelInput.value = modelSelect.value;
+  const fetchModelsBtn = $('ai-fetch-models');
+  const modelSelect = $('ai-model-select');
+  if (fetchModelsBtn && modelSelect) {
+    fetchModelsBtn.addEventListener('click', async () => {
+      const config = readAiConfigFromForm();
+      const status = $('ai-config-status');
+      if (!config.api_key) {
+        status.textContent = '⚠️ 请先填写 API Key';
+        status.style.color = 'var(--warning)';
+        return;
+      }
+      if (!config.base_url) {
+        status.textContent = '⚠️ 请先填写 API 地址';
+        status.style.color = 'var(--warning)';
+        return;
+      }
+      status.textContent = '⏳ 正在获取模型列表...';
+      status.style.color = 'var(--text-muted)';
+      fetchModelsBtn.disabled = true;
+      try {
+        const models = await invoke('llm_list_models', { config });
+        if (!models || models.length === 0) {
+          status.textContent = '⚠️ 未获取到模型';
+          status.style.color = 'var(--warning)';
+          return;
+        }
+        modelSelect.innerHTML = '';
+        models.sort().forEach(m => {
+          const opt = document.createElement('option');
+          opt.value = m;
+          opt.textContent = m;
+          modelSelect.appendChild(opt);
+        });
+        modelSelect.style.display = 'block';
+        status.textContent = `✅ 获取到 ${models.length} 个模型，点击选择：`;
+        status.style.color = 'var(--success)';
+      } catch (e) {
+        status.textContent = '❌ ' + e;
+        status.style.color = 'var(--error)';
+        modelSelect.style.display = 'none';
+      }
+      fetchModelsBtn.disabled = false;
+      setTimeout(() => { status.textContent = ''; }, 5000);
+    });
+
+    modelSelect.addEventListener('change', () => {
+      const modelInput = $('ai-model');
+      if (modelInput && modelSelect.value) {
+        modelInput.value = modelSelect.value;
+      }
+    });
+  }
+
+  initAiConfig();
+
+  if (!AppState.projectPath) {
+    const ok = await confirm('当前项目尚未保存，是否保存项目以读取 SGL 配置文件？', {
+      title: '提示',
+      kind: 'info',
+      okLabel: '保存项目',
+      cancelLabel: '暂不保存'
+    });
+    if (ok) {
+      const result = await AppState.saveProject();
+      if (!result.ok) {
+        refresh();
+        return;
+      }
+      showToast('项目已保存', 'success');
+    } else {
+      refresh();
+      return;
     }
-  });
+  }
+  await syncConfigFromFile();
+  refresh();
 }

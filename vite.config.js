@@ -1,26 +1,34 @@
 import { defineConfig } from 'vite';
+import { resolve } from 'path';
+
+const root = resolve(__dirname, 'src');
+console.log('[vite.config] root =', root);
 
 export default defineConfig({
-  base: './',
-  root: 'src',
+  root,
   build: {
-    outDir: '../dist',
+    outDir: resolve(__dirname, 'dist'),
     emptyOutDir: true,
-    minify: 'esbuild',
+    sourcemap: true,
     rollupOptions: {
       input: {
-        index: __dirname + '/src/index.html',
-        editor: __dirname + '/src/editor.html',
-        preview: __dirname + '/src/preview.html',
-        settings: __dirname + '/src/settings.html',
-        components: __dirname + '/src/components.html'
+        index: resolve(root, 'index.html'),
+        editor: resolve(root, 'editor.html'),
+        components: resolve(root, 'components.html'),
+        settings: resolve(root, 'settings.html')
+      },
+      output: {
+        entryFileNames: 'assets/[name]-[hash].js',
+        chunkFileNames: 'assets/[name]-[hash].js',
+        assetFileNames: 'assets/[name]-[hash][extname]'
       }
     }
   },
-  clearScreen: false,
   server: {
     port: 1420,
-    strictPort: true,
-    host: false
+    strictPort: true
+  },
+  optimizeDeps: {
+    force: true
   }
 });

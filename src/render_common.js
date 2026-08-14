@@ -1,4 +1,4 @@
-import { invoke, convertFileSrc } from '@tauri-apps/api/core';
+﻿import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { generateFontC } from './font_generator.js';
 
 // ============ SGL 字体文件名 → 浏览器可用字体栈 映射 ============
@@ -30,6 +30,23 @@ export function setFontLoadCallback(cb) {
 
 const registeredFontFaces = new Map();
 const FONT_FACE_LOAD_PROMISES = new Map();
+
+// 根据字体完整路径生成稳定且唯一的 CSS 字体族名。
+// 不能只取文件名做净化：CJK / 同名文件会让多个字体族名撞车，
+// 导致 document.fonts 中多个 FontFace 共用一个 family，浏览器按字形混用 → 乱码。
+// 这里保留可读前缀 + 路径哈希后缀，保证每个字体路径对应唯一族名。
+function fontFamilyNameForPath(fontPath) {
+  if (!fontPath) return 'sgl_font_default';
+  const s = String(fontPath);
+  let h = 0;
+  for (let i = 0; i < s.length; i++) {
+    h = (h * 31 + s.charCodeAt(i)) | 0;
+  }
+  const suffix = (h >>> 0).toString(36);
+  const fileName = s.replace(/[/\\]/g, '/').split('/').pop();
+  const safe = (fileName.replace(/[^\w]/g, '_').slice(0, 24)) || 'f';
+  return `sgl_font_${safe}_${suffix}`;
+}
 
 // 将本地资源路径转换为 Tauri 可访问的 asset URL（图片/字体通用）
 export function toAssetUrl(path) {
@@ -132,9 +149,26 @@ export async function registerFontFile(fontPath) {
   const promise = (async () => {
     try {
       const fileName = fontPath.replace(/[/\\]/g, '/').split('/').pop();
-      const familyName = `sgl_font_${fileName.replace(/[^\w]/g, '_')}`;
+      const familyName = fontFamilyNameForPath(fontPath);
       const url = convertFileSrc(fontPath);
-      const fontFace = new FontFace(familyName, `url("${url}")`);
+      // TTC/OTC 集合字体：Tauri asset 协议可能返回错误 MIME 类型导致 FontFace 拒绝加载
+      // 改用 fetch + ArrayBuffer 方式，浏览器直接解析字体二进制，绕过 Content-Type 问题
+      const lowerName = fileName.toLowerCase();
+      let fontFace;
+      if (lowerName.endsWith('.ttc') || lowerName.endsWith('.otc')) {
+        try {
+          const resp = await fetch(url);
+          if (!resp.ok) throw new Error(`fetch 失败: ${resp.status}`);
+          const buf = await resp.arrayBuffer();
+          fontFace = new FontFace(familyName, buf);
+        } catch (fetchErr) {
+          // fetch 失败时回退到 URL 方式
+          console.warn('TTC fetch 加载失败，回退到 URL 方式:', fontPath, fetchErr);
+          fontFace = new FontFace(familyName, `url("${url}")`);
+        }
+      } else {
+        fontFace = new FontFace(familyName, `url("${url}")`);
+      }
       await fontFace.load();
       document.fonts.add(fontFace);
       registeredFontFaces.set(fontPath, familyName);
@@ -208,16 +242,34 @@ export function getFontError(fontPath, size, bpp) {
  * @param {string} [symbols] - 可选字符集
  * @returns {Promise<object|null>} 字模数据对象
  */
-// localStorage 字模缓存 key 前缀
-const FONT_CACHE_PREFIX = 'sgl_font_cache_';
+// localStorage 字模缓存 key 前缀（v9: 强制清除 v8 旧缓存，解决字模位图内容损坏导致的乱码）
+const FONT_CACHE_PREFIX = 'sgl_font_cache_v10_';
+// 字体文件指纹（大小+修改时间）缓存：避免每次读缓存都 invoke Rust
+const FONT_FP_CACHE = new Map();
 
-function getFontCacheKey(fontPath, size, bpp) {
-  return `${FONT_CACHE_PREFIX}${fontPath.replace(/[/\\]/g, '_')}_${size}_${bpp}`;
+function getFontCacheKey(fontPath, size, bpp, fingerprint) {
+  const fp = fingerprint || '';
+  return `${FONT_CACHE_PREFIX}${fontPath.replace(/[/\\]/g, '_')}_${size}_${bpp}_${fp}`;
 }
 
-function getCachedFontC(fontPath, size, bpp) {
+async function getFontFileFingerprint(fontPath) {
+  if (!fontPath) return '';
+  if (FONT_FP_CACHE.has(fontPath)) return FONT_FP_CACHE.get(fontPath);
   try {
-    const cacheKey = getFontCacheKey(fontPath, size, bpp);
+    const fp = await invoke('get_font_file_fingerprint', { fontPath });
+    FONT_FP_CACHE.set(fontPath, fp || '');
+    return fp || '';
+  } catch (e) {
+    console.warn('获取字体指纹失败:', fontPath, e);
+    FONT_FP_CACHE.set(fontPath, '');
+    return '';
+  }
+}
+
+async function getCachedFontC(fontPath, size, bpp) {
+  try {
+    const fp = await getFontFileFingerprint(fontPath);
+    const cacheKey = getFontCacheKey(fontPath, size, bpp, fp);
     const cached = localStorage.getItem(cacheKey);
     if (cached) {
       const { symbols: cachedSymbols, cContent } = JSON.parse(cached);
@@ -229,48 +281,145 @@ function getCachedFontC(fontPath, size, bpp) {
   return null;
 }
 
-function setCachedFontC(fontPath, size, bpp, symbols, cContent) {
+function getCachedFontCSync(fontPath, size, bpp) {
+  // 同步版本：优先用已在内存中的 fingerprint，否则返回 null（不使用缓存）
   try {
-    const cacheKey = getFontCacheKey(fontPath, size, bpp);
+    const fp = FONT_FP_CACHE.get(fontPath);
+    if (!fp) return null;
+    const cacheKey = getFontCacheKey(fontPath, size, bpp, fp);
+    const cached = localStorage.getItem(cacheKey);
+    if (cached) {
+      const { symbols: cachedSymbols, cContent } = JSON.parse(cached);
+      return { cachedSymbols, cContent };
+    }
+  } catch (e) {
+    console.warn('读取字模缓存失败:', e);
+  }
+  return null;
+}
+
+async function setCachedFontC(fontPath, size, bpp, symbols, cContent) {
+  try {
+    const fp = await getFontFileFingerprint(fontPath);
+    const cacheKey = getFontCacheKey(fontPath, size, bpp, fp);
     localStorage.setItem(cacheKey, JSON.stringify({ symbols, cContent }));
   } catch (e) {
     console.warn('保存字模缓存失败:', e);
   }
 }
 
-export function hasLocalFontCache(fontPath, size, bpp, symbols) {
-  const cached = getCachedFontC(fontPath, size, bpp);
+/** 清除指定字体的所有 localStorage 缓存（兼容所有版本前缀，避免旧版本残留导致一致性问题） */
+function removeFontCacheByKey(fontPath, size, bpp) {
+  if (!fontPath) return;
+  const pathKey = fontPath.replace(/[/\\]/g, '_');
+  const suffix = `_${size}_${bpp}_`;
+  const keysToRemove = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (!k) continue;
+    // 匹配 sgl_font_cache_vN_<path>_<size>_<bpp>_<fingerprint>
+    if (k.includes(pathKey) && k.includes(suffix) && /sgl_font_cache_v\d+_/.test(k)) {
+      keysToRemove.push(k);
+    }
+  }
+  for (const k of keysToRemove) localStorage.removeItem(k);
+  console.log(`[removeFontCacheByKey] 清理 ${keysToRemove.length} 个缓存项: ${fontPath} size=${size} bpp=${bpp}`);
+}
+
+export async function hasLocalFontCache(fontPath, size, bpp, symbols) {
+  const cached = await getCachedFontC(fontPath, size, bpp);
   if (!cached || !cached.cContent) return false;
   if (!symbols) return true;
   return symbols.split('').every(ch => cached.cachedSymbols.includes(ch));
 }
 
 /**
- * 同步从 localStorage 恢复字体数据到内存（避免页面切换后异步加载导致的重新渲染）
+ * 从 localStorage 恢复字体数据到内存（支持带指纹的 v2 缓存）
+ * 异步版：每次都会查询字体文件指纹，确保替换/删除字体后缓存失效
  * @param {Array} fontKeys - [{fontPath, size, bpp, symbols}] 需要恢复的字体列表
- * @returns {number} 成功恢复的数量
+ * @returns {Promise<number>} 成功恢复的数量
  */
-export function restoreFontCacheSync(fontKeys) {
+export async function restoreFontCache(fontKeys) {
+  if (!window.SGLRenderer || !window.SGLRenderer.parseFontCFile) return 0;
+  // 先批量拉取所有字体的指纹（避免每个字体单独 invoke）
+  const fps = await Promise.all(fontKeys.map(async k => {
+    if (!k.fontPath || k.fontPath === 'default') return '';
+    return getFontFileFingerprint(k.fontPath);
+  }));
+  let restored = 0;
+  for (let i = 0; i < fontKeys.length; i++) {
+    const { fontPath, size, bpp, symbols } = fontKeys[i];
+    if (!fontPath || fontPath === 'default') continue;
+    const key = `${fontPath}|${size}|${bpp}`;
+    if (window.SGLRenderer.getFontData(key)) { restored++; continue; }
+    try {
+      const fp = fps[i] || '';
+      const cacheKey = getFontCacheKey(fontPath, size, bpp, fp);
+      const raw = localStorage.getItem(cacheKey);
+      if (!raw) continue;
+      const { symbols: cachedSymbols, cContent } = JSON.parse(raw);
+      const needSymbols = symbols || '';
+      const hasAllChars = !needSymbols || needSymbols.split('').every(ch => cachedSymbols.includes(ch));
+      if (!hasAllChars) continue;
+      console.log(`[font] restoreFontCache ${fontPath} size=${size} bpp=${bpp} cContent.len=${cContent.length}`);
+      const fontData = window.SGLRenderer.parseFontCFile(cContent);
+      console.log(`[font] restoreFontCache parsed:`, {
+        font_height: fontData.font_height,
+        base_line: fontData.base_line,
+        bpp: fontData.bpp,
+        bitmap_len: fontData.bitmap.length,
+        table_len: fontData.table.length,
+        table_0: fontData.table[0],
+        table_1: fontData.table[1],
+        table_2: fontData.table[2],
+        unicode_len: fontData.unicode.length,
+        unicode_0: fontData.unicode[0],
+      });
+      // 一致性校验：bitmap_index 范围必须有效，否则丢弃缓存
+      if (!validateFontData(fontData)) {
+        console.log(`[font] restoreFontCache 字模一致性校验失败，丢弃缓存: ${key}`);
+        removeFontCacheByKey(fontPath, size, bpp);
+        continue;
+      }
+      window.SGLRenderer.registerFontData(key, fontData);
+      restored++;
+    } catch (e) {
+      console.warn('恢复字体缓存失败:', fontPath, size, bpp, e);
+    }
+  }
+  return restored;
+}
+
+/**
+ * 同步快速路径恢复：仅当 fingerprint 已在内存中存在时才使用 localStorage 缓存
+ * 不会阻塞初始化，后续异步 loadSglFontData 会兜底重新生成
+ * @param {Array} fontKeys
+ * @returns {number}
+ */
+export function restoreFontCacheFast(fontKeys) {
   if (!window.SGLRenderer || !window.SGLRenderer.parseFontCFile) return 0;
   let restored = 0;
   for (const { fontPath, size, bpp, symbols } of fontKeys) {
     if (!fontPath || fontPath === 'default') continue;
     const key = `${fontPath}|${size}|${bpp}`;
-    // 已在内存中则跳过
     if (window.SGLRenderer.getFontData(key)) { restored++; continue; }
-    // 从 localStorage 同步恢复
-    const cached = getCachedFontC(fontPath, size, bpp);
+    const cached = getCachedFontCSync(fontPath, size, bpp);
     if (cached && cached.cContent) {
-      // 检查缓存是否包含所需字符
       const needSymbols = symbols || '';
       const hasAllChars = !needSymbols || needSymbols.split('').every(ch => cached.cachedSymbols.includes(ch));
       if (hasAllChars) {
         try {
           const fontData = window.SGLRenderer.parseFontCFile(cached.cContent);
+          // 一致性校验：bitmap_index 范围必须有效，否则丢弃缓存
+          if (!validateFontData(fontData)) {
+            console.log(`[restoreFontCacheFast] 字模一致性校验失败，丢弃缓存: ${key}`);
+            removeFontCacheByKey(fontPath, size, bpp);
+            continue;
+          }
           window.SGLRenderer.registerFontData(key, fontData);
           restored++;
         } catch (e) {
-          console.warn('同步恢复字体缓存失败:', fontPath, size, bpp, e);
+          console.warn('快速恢复字体缓存失败:', fontPath, size, bpp, e);
         }
       }
     }
@@ -298,12 +447,11 @@ export async function loadSglFontData(fontPath, size, bpp, symbols) {
       const fontName = `sgl_font_${fontPath.replace(/[/\\]/g, '/').split('/').pop().replace(/[^\w]/g, '_')}_${size}_bpp${bpp}`;
       let cContent;
       
-      // 先检查 localStorage 缓存
-      const cached = getCachedFontC(fontPath, size, bpp);
+      // 先检查 localStorage 缓存（v2 带指纹）
+      const cached = await getCachedFontC(fontPath, size, bpp);
       if (cached && cached.cContent) {
-        // 检查缓存的 symbols 是否包含当前需要的所有字符
         const needSymbols = symbols || '';
-        const hasAllChars = needSymbols.split('').every(ch => cached.cachedSymbols.includes(ch));
+        const hasAllChars = !needSymbols || needSymbols.split('').every(ch => cached.cachedSymbols.includes(ch));
         if (hasAllChars) {
           cContent = cached.cContent;
         }
@@ -328,11 +476,43 @@ export async function loadSglFontData(fontPath, size, bpp, symbols) {
           }
           cContent = generateFontC(familyName, size, bpp, symbols || '');
         }
-        // 缓存到 localStorage
-        setCachedFontC(fontPath, size, bpp, symbols || '', cContent);
+        // 缓存到 localStorage（v2 带指纹）
+        await setCachedFontC(fontPath, size, bpp, symbols || '', cContent);
       }
       
+      // 诊断日志：输出 C 文件内容长度和前 200 字符
+      console.log(`[font] loadSglFontData ${fontPath} size=${size} bpp=${bpp} cContent.len=${cContent.length}`);
+      console.log(`[font] cContent head:`, cContent.substring(0, 200));
       const fontData = window.SGLRenderer.parseFontCFile(cContent);
+      // 诊断日志：输出字模数据关键字段
+      console.log(`[font] parseFontCFile ${fontPath} size=${size} bpp=${bpp}:`, {
+        font_height: fontData.font_height,
+        base_line: fontData.base_line,
+        bpp: fontData.bpp,
+        compress: fontData.compress,
+        bitmap_len: fontData.bitmap.length,
+        table_len: fontData.table.length,
+        table_0: fontData.table[0],
+        table_1: fontData.table[1],
+        table_2: fontData.table[2],
+        unicode_len: fontData.unicode.length,
+        unicode_0: fontData.unicode[0],
+      });
+      // 字模有效性校验（修复"添加字体后文字消失/不是字"）：
+      // 若位图全为 0（FreeType 渲染该字体返回了空字形），属于无效字模。
+      // 丢弃并回退 CSS——CSS 层使用 registerFontFile 注册的"用户真实字体" FontFace，
+      // 因此回退后仍能以用户添加的字体正常显示文字，而非空白/消失。
+      let _hasInk = false;
+      const _bmp = fontData.bitmap;
+      for (let _i = 0; _i < _bmp.length; _i++) {
+        if (_bmp[_i] !== 0) { _hasInk = true; break; }
+      }
+      if (!_hasInk) {
+        console.warn(`[font] 字模位图全空（无效字模，FreeType 渲染该字体返回空字形），丢弃并回退 CSS: ${fontPath} size=${size} bpp=${bpp}`);
+        try { removeFontCacheByKey(fontPath, size, bpp); } catch (_e) { /* 忽略清缓存失败 */ }
+        _failedFontKeys.add(key);
+        return null;
+      }
       window.SGLRenderer.registerFontData(key, fontData);
       return fontData;
     } catch (err) {
@@ -356,10 +536,74 @@ export async function loadSglFontData(fontPath, size, bpp, symbols) {
  * @param {number} bpp
  * @returns {object|null}
  */
+/** 校验字模数据完整性（table/bitmap 索引范围一致性），返回 true 表示有效 */
+export function validateFontData(fd) {
+  if (!fd) return false;
+  if (!fd.bitmap || !fd.table || fd.table.length < 2 || !fd.unicode || fd.unicode.length === 0) {
+    console.log('[validateFontData] 基础字段无效', {
+      bitmap_len: fd.bitmap?.length,
+      table_len: fd.table?.length,
+      unicode_len: fd.unicode?.length,
+    });
+    return false;
+  }
+  const t0 = fd.table[0];
+  if (t0 && (t0.adv_w !== 0 || t0.box_w !== 0 || t0.box_h !== 0)) {
+    console.log('[validateFontData] table[0] 非reserved entry', t0);
+    return false;
+  }
+  const bpp = fd.bpp || 4;
+  let invalidCount = 0;
+  for (let i = 1; i < fd.table.length; i++) {
+    const e = fd.table[i];
+    if (!e || e.box_w <= 0 || e.box_h <= 0) continue;
+    const neededBits = e.box_w * e.box_h * bpp;
+    const neededBytes = Math.ceil(neededBits / 8);
+    if (e.bitmap_index + neededBytes > fd.bitmap.length) {
+      invalidCount++;
+      if (invalidCount <= 3) {
+        console.log(`[validateFontData] table[${i}] bitmap_index越界`, {
+          bitmap_index: e.bitmap_index,
+          needed_bytes: neededBytes,
+          bitmap_len: fd.bitmap.length,
+          box_w: e.box_w, box_h: e.box_h, bpp,
+        });
+      }
+    }
+  }
+  if (invalidCount > 0) {
+    console.log(`[validateFontData] 共 ${invalidCount} 个字形越界，判定为无效字模`);
+    return false;
+  }
+  return true;
+}
+
 export function getSglFontData(fontPath, size, bpp) {
   if (!fontPath || fontPath === 'default') return null;
   if (!window.SGLRenderer) return null;
-  return window.SGLRenderer.getFontData(`${fontPath}|${size}|${bpp}`);
+  const key = `${fontPath}|${size}|${bpp}`;
+  const fd = window.SGLRenderer.getFontData(key);
+  console.log(`[getSglFontData] key=${key} fd=${fd ? '存在' : 'null'}`, fd ? {
+    bitmap_len: fd.bitmap?.length,
+    table_len: fd.table?.length,
+    unicode_len: fd.unicode?.length,
+    compress: fd.compress,
+  } : null);
+  if (!fd) return null;
+  const valid = validateFontData(fd);
+  if (!valid) {
+    console.log(`[getSglFontData] 字模一致性校验失败，移除内存缓存: ${key}`);
+    window.SGLRenderer.removeFontData(key);
+    return null;
+  }
+  return fd;
+}
+
+export function removeSglFontData(fontPath, size, bpp) {
+  if (!window.SGLRenderer) return;
+  const key = `${fontPath}|${size}|${bpp}`;
+  window.SGLRenderer.removeFontData(key);
+  console.log(`[removeSglFontData] 移除内存缓存: ${key}`);
 }
 
 /**
@@ -379,7 +623,7 @@ export function getCssFontStack(family) {
   if (SGL_FONT_MAP[family]) return SGL_FONT_MAP[family];
   const fileName = family.replace(/[/\\]/g, '/').split('/').pop();
   if (SGL_FONT_MAP[fileName]) return SGL_FONT_MAP[fileName];
-  const familyName = `sgl_font_${fileName.replace(/[^\w]/g, '_')}`;
+  const familyName = fontFamilyNameForPath(family);
   if (!registeredFontFaces.has(family)) {
     registerFontFile(family);
   }

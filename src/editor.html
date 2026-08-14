@@ -39,7 +39,6 @@
     <nav class="nav-tabs">
       <button class="nav-tab" data-nav="index">首页</button>
       <button class="nav-tab active" data-nav="editor">编辑器</button>
-      <button class="nav-tab" data-nav="preview">预览</button>
       <button class="nav-tab" data-nav="components">代码</button>
       <button class="nav-tab" data-nav="settings">SGL配置</button>
     </nav>
@@ -104,6 +103,10 @@
       <div class="canvas-toolbar">
         <div class="page-tabs" id="page-tabs"></div>
         <span style="flex:1;"></span>
+        <button class="btn btn-sm btn-preview" id="btn-enter-preview" title="进入交互预览（可点击/拖动控件模拟运行态）">👁 预览</button>
+        <button class="btn btn-sm btn-exit-preview" id="btn-exit-preview" title="退出预览回到编辑" style="display:none;">✏ 编辑</button>
+        <button class="btn btn-sm btn-screenshot" id="btn-screenshot" title="截图画布为 PNG" style="display:none;">📷 截图</button>
+        <div class="toolbar-divider"></div>
         <button class="btn btn-sm" id="btn-zoom-out" title="缩小">−</button>
         <span id="zoom-label" style="min-width:48px;text-align:center;font-size:12px;color:var(--text-secondary);">100%</span>
         <button class="btn btn-sm" id="btn-zoom-in" title="放大">+</button>
@@ -115,6 +118,9 @@
         <canvas class="ruler-v" id="ruler-v" width="20"></canvas>
         <div class="canvas-viewport" id="canvas-viewport">
           <div class="canvas" id="canvas" tabindex="0">
+          </div>
+          <div class="preview-container" id="preview-container" style="display:none;">
+            <div class="preview-frame" id="preview-frame"></div>
           </div>
         </div>
       </div>

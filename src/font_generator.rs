@@ -322,12 +322,61 @@ struct FontData {
     base_line: i32,
 }
 
+/// 从 TTC/OTTC 类集合字体中选择能覆盖最多目标字符的 face_index
+fn select_best_face_index(font_path: &Path, codes: &[u32]) -> isize {
+    let library = match get_font_library() {
+        Ok(l) => l,
+        Err(_) => return 0,
+    };
+    // 先获取集合字体中包含的 face 数量
+    // 用 face_index = -1 打开可读取 num_faces（普通 ttf/otf 只有 1 个 face）
+    let num_faces: isize = library
+        .new_face(font_path, -1)
+        .ok()
+        .as_ref()
+        .map(|f| f.raw().num_faces as isize)
+        .unwrap_or(1);
+
+    if num_faces <= 1 {
+        return 0;
+    }
+
+    // 尝试每个 face，统计 glyph_index 不为 0 的字符数，选择覆盖最多的
+    let mut best_face: isize = 0;
+    let mut best_count: usize = 0;
+    let mut idx: isize = 0;
+    while idx < num_faces {
+        if let Ok(face) = library.new_face(font_path, idx) {
+            let mut count: usize = 0;
+            for &code in codes {
+                if let Some(gi) = face.get_char_index(code as usize) {
+                    if gi != 0 {
+                        count += 1;
+                    }
+                }
+            }
+            if count > best_count {
+                best_count = count;
+                best_face = idx;
+            }
+            if count >= codes.len() {
+                break;
+            }
+        }
+        idx += 1;
+    }
+    best_face
+}
+
 /// 渲染所有字形（对齐 font_render.c font_render_init）
 fn font_render(font_path: &Path, pixel_size: i32, codes: &[u32]) -> Result<FontData, String> {
     let library = get_font_library()?;
+    // TTC/OTTC 集合字体选择能覆盖最多目标字符的 face_index
+    let face_index = select_best_face_index(font_path, codes);
+    eprintln!("[font_render] {} face_index={} codes={}", font_path.display(), face_index, codes.len());
     let face = library
-        .new_face(font_path, 0)
-        .map_err(|e| format!("加载字体失败 {}: {}", font_path.display(), e))?;
+        .new_face(font_path, face_index)
+        .map_err(|e| format!("加载字体失败 {} (face={}): {}", font_path.display(), face_index, e))?;
 
     face.set_pixel_sizes(0, pixel_size as u32)
         .map_err(|e| format!("set_pixel_sizes 失败: {}", e))?;
@@ -356,7 +405,15 @@ fn font_render(font_path: &Path, pixel_size: i32, codes: &[u32]) -> Result<FontD
             let raw = glyph_slot.raw();
             (*raw).linearHoriAdvance as i64
         };
-        let adv_w = ((linear_hori_advance as f64 / 65536.0) * 16.0 + 0.5) as i32;
+        let mut adv_w = ((linear_hori_advance as f64 / 65536.0) * 16.0 + 0.5) as i32;
+        // TTC 字体某些字号的 linearHoriAdvance 可能为 0，用 advance().x (26.6格式) 作为 fallback
+        if adv_w == 0 {
+            let advance_x = glyph_slot.advance().x as i64;
+            if advance_x > 0 {
+                adv_w = ((advance_x as f64 / 64.0) * 16.0 + 0.5) as i32;
+                eprintln!("[font_render] linearHoriAdvance=0, fallback advance().x={} adv_w={} code={} size={}", advance_x, adv_w, code, pixel_size);
+            }
+        }
 
         // 对齐 C: box_w = (int)bmp->width
         let box_w = bitmap.width() as i32;
@@ -371,17 +428,21 @@ fn font_render(font_path: &Path, pixel_size: i32, codes: &[u32]) -> Result<FontD
         let buffer = bitmap.buffer();
         let pixel_count = (box_w as usize) * (box_h as usize);
         let mut pixels = vec![0u8; pixel_count];
-        // FreeType bitmap 的 pitch 可能与 box_w 不同，需要按行复制
-        let pitch = bitmap.pitch().abs() as usize;
-        if pitch == box_w as usize || pitch == 0 {
-            // 紧凑排列
+        // FreeType bitmap.pitch: 正值=top-down(行从顶到底)，负值=bottom-up(行从底到顶)
+        // 必须按实际方向读取，否则字形上下颠倒导致"乱码"
+        let pitch_raw = bitmap.pitch();
+        let pitch_abs = pitch_raw.unsigned_abs() as usize;
+        let is_bottom_up = pitch_raw < 0;
+        if (pitch_abs == box_w as usize || pitch_abs == 0) && !is_bottom_up {
+            // 正向紧凑排列（最常见）
             if buffer.len() >= pixel_count {
                 pixels.copy_from_slice(&buffer[..pixel_count]);
             }
         } else {
-            // 按 pitch 复制每行
+            // 按 pitch 复制每行：bottom-up 时源行号要反转（buffer[0] 是底行 → 填到 dst 的最后一行）
             for row in 0..(box_h as usize) {
-                let src_start = row * pitch;
+                let src_row = if is_bottom_up { (box_h as usize) - 1 - row } else { row };
+                let src_start = src_row * pitch_abs;
                 let src_end = src_start + (box_w as usize);
                 if src_end <= buffer.len() {
                     let dst_start = row * (box_w as usize);
@@ -401,6 +462,7 @@ fn font_render(font_path: &Path, pixel_size: i32, codes: &[u32]) -> Result<FontD
             descent = glyph_bottom;
         }
 
+        eprintln!("[font_render]   code=0x{:X} adv_w={} box_w={} box_h={} ofs_x={} ofs_y={} pixels={}", code, adv_w, box_w, box_h, ofs_x, ofs_y, pixels.len());
         glyphs.push(Glyph {
             code,
             adv_w,
@@ -419,6 +481,7 @@ fn font_render(font_path: &Path, pixel_size: i32, codes: &[u32]) -> Result<FontD
     }
 
     // 对齐 C: out->font_height = ascent - descent; out->base_line = -descent
+    eprintln!("[font_render] {} 完成: glyphs={}/{} ascent={} descent={}", font_path.display(), glyphs.len(), codes.len(), ascent, descent);
     Ok(FontData {
         glyphs,
         font_height: ascent - descent,
@@ -505,6 +568,10 @@ fn write_sgl_font(font_name: &str, font: &FontData, cmap: &CmapPlan, bpp: i32, c
     let mut total_bitmap_size: usize = 0;
     for i in 0..glyph_count {
         let bm = render_glyph_bitmap(&font.glyphs[i], bpp, compress);
+        eprintln!("[font_gen] glyph {} code=0x{:X} bpp={} compress={} bitmap_bytes={} offset={}", i, font.glyphs[i].code, bpp, compress, bm.len(), total_bitmap_size);
+        // 输出 bitmap 前 16 字节用于诊断
+        let head: Vec<String> = bm.iter().take(16).map(|b| format!("0x{:02x}", b)).collect();
+        eprintln!("[font_gen]   bitmap head: {}", head.join(", "));
         compiled.push(CompiledGlyph {
             bitmap_offset: total_bitmap_size,
             bitmap_data: bm,

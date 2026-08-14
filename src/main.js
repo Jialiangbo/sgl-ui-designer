@@ -198,11 +198,6 @@ const PAGE_TEMPLATES = {
       </div>
     </aside>
   `,
-  preview: `
-    <div class="preview-container" id="preview-container">
-      <div class="preview-frame" id="preview-frame"></div>
-    </div>
-  `,
   components: `
     <div class="code-container">
       <div class="code-toolbar">
@@ -522,11 +517,6 @@ const HEADER_ACTIONS = {
       <span>运行</span>
     </button>
   `,
-  preview: `
-    <button class="btn btn-sm" id="btn-prev-page">← 上一页</button>
-    <button class="btn btn-sm" id="btn-next-page">下一页 →</button>
-    <button class="btn btn-sm" id="btn-screenshot">📷 截图</button>
-  `,
   components: `
     <button class="btn btn-sm" id="btn-copy">复制代码</button>
     <button class="btn btn-primary btn-sm" id="btn-download" title="导出C代码到项目目录">导出</button>
@@ -544,11 +534,6 @@ const STATUS_BARS = {
     <span id="status-font" style="color: var(--error);"></span>
     <span style="margin-left:auto;" id="status-api">API: SGL v2.0</span>
   `,
-  preview: `
-    <span id="status-current-page">页面 1 / 1</span>
-    <span id="status-page-name">-</span>
-    <span id="status-page-size">-</span>
-  `,
   components: `
     <span id="status-project">项目: -</span>
     <span id="status-pages">页面: 0</span>
@@ -563,7 +548,6 @@ const STATUS_BARS = {
 const MAIN_STYLES = {
   index: '',
   editor: '',
-  preview: 'background:#0f0f1a;',
   components: 'background:#0f0f1a;',
   settings: 'background:#0f0f1a;'
 };
@@ -573,7 +557,6 @@ async function loadPageModule(page) {
   const modules = {
     index: () => import('./home.js'),
     editor: () => import('./sgl_renderer.js').then(() => import('./editor.js')),
-    preview: () => import('./sgl_renderer.js').then(() => import('./preview.js')),
     components: () => import('./components.js'),
     settings: () => import('./settings.js')
   };
@@ -607,9 +590,13 @@ async function switchPage(page) {
   
   const mod = await loadPageModule(page);
   if (mod.init) {
-    const destructor = mod.init();
-    if (typeof destructor === 'function') {
-      _pageDestructors[page] = destructor;
+    try {
+      const destructor = await mod.init();
+      if (typeof destructor === 'function') {
+        _pageDestructors[page] = destructor;
+      }
+    } catch (e) {
+      console.error(`[${page}] init error:`, e);
     }
   }
 }

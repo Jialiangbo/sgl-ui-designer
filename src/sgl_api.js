@@ -24,6 +24,33 @@ function codegenLog(message, level = 'info') {
   fn(message);
 }
 
+// ============ 字体 Fallback 统一工具 ============
+// 设计器运行时上下文的项目字体资源（用于 generateSGLCode 内部函数共享）
+let _codegenContextFonts = [];
+
+export function setCodegenFontContext(fonts) {
+  _codegenContextFonts = (fonts && Array.isArray(fonts)) ? fonts : [];
+}
+
+// 按路径/文件名/字体名三种方式判断字体是否在项目字体资源列表中匹配
+function _isFontMatched(family, fonts) {
+  if (!family) return false;
+  const fileName = family.replace(/[/\\]/g, '/').split('/').pop();
+  return (fonts || []).some(f => f.path === family || f.name === fileName || f.name === family);
+}
+
+// 获取控件实际使用的字体族名/路径：
+//   1) 未设置 / default → fallback 到项目第一个字体
+//   2) 设置了但指向的字体已被从资源管理器删除（找不到匹配）→ 同样 fallback 到第一个字体
+// 调用方需要确保已经设置了上下文（collectFonts / validateProjectFonts 自行传入，generateSGLCode 通过 setCodegenFontContext）
+export function resolveEffectiveFontFamily(family, fonts) {
+  const f = fonts || _codegenContextFonts || [];
+  if (f.length === 0) return family;
+  if (!family || family === 'default') return f[0].path || f[0].name || '';
+  if (!_isFontMatched(family, f)) return f[0].path || f[0].name || '';
+  return family;
+}
+
 // ============ 对齐方式 ============
 export const SGL_ALIGN = {
   TOP_LEFT: 'TOP_LEFT',
@@ -183,7 +210,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><text x="4" y="17" font-size="14" font-weight="bold" fill="currentColor" stroke="none">Aa</text></svg>',
     category: 'text',
     defaultSize: [120, 24],
-    properties: ['text', 'textColor', 'bgColor', 'align', 'fontSize', 'fontFamily', 'fontBpp', 'alpha', 'textOffsetX', 'textOffsetY', 'textRotation', 'radius', 'longMode', 'longModeSpeed', 'textBuffer', 'textFmt', 'textFmtDynamic', 'locked']
+    properties: ['text', 'textColor', 'bgColor', 'align', 'fontSize', 'fontFamily', 'fontBpp', 'alpha', 'textOffsetX', 'radius', 'longMode', 'longModeSpeed', 'textBuffer', 'textFmt', 'textFmtDynamic', 'locked']
   },
   {
     type: 'textbox',
@@ -411,7 +438,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><polyline points="4,18 9,13 13,17 17,12 20,15"/></svg>',
     category: 'image',
     defaultSize: [100, 100],
-    properties: ['pixmap', 'pixmapFormat', 'alpha', 'locked']
+    properties: ['pixmap', 'pixmapFormat', 'readOps', 'alpha', 'locked']
   },
   {
     type: 'arc_label',
@@ -419,7 +446,15 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 18 0"/><text x="12" y="16" text-anchor="middle" font-size="10">A</text></svg>',
     category: 'text',
     defaultSize: [80, 30],
-    properties: ['text', 'textColor', 'bgFlag', 'bgColor', 'radius', 'align', 'fontSize', 'fontFamily', 'fontBpp', 'angle', 'offsetX', 'offsetY', 'alpha', 'locked']
+    properties: ['text', 'textColor', 'bgFlag', 'bgColor', 'radius', 'align', 'fontSize', 'fontFamily', 'fontBpp', 'angle', 'offsetX', 'offsetY', 'textBuffer', 'textFmt', 'textFmtDynamic', 'alpha', 'locked']
+  },
+  {
+    type: 'label_ext',
+    name: '扩展标签',
+    icon: '<svg viewBox="0 0 24 24"><text x="4" y="17" font-size="14" font-weight="bold" fill="currentColor" stroke="none" transform="rotate(-15 12 12)">Aa</text></svg>',
+    category: 'text',
+    defaultSize: [120, 24],
+    properties: ['text', 'textColor', 'bgColor', 'bgFlag', 'align', 'fontSize', 'fontFamily', 'fontBpp', 'alpha', 'textOffsetX', 'textOffsetY', 'textRotation', 'radius', 'textBuffer', 'textFmt', 'textFmtDynamic', 'locked']
   }
 ];
 
@@ -800,7 +835,7 @@ export function createWidgetDefaults(type) {
     case 'keyboard':
       return { ...base, cellColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, mainAlpha: 255, borderAlpha: 255, fontSize: 14, fontFamily: '', fontBpp: 4, btnColor: '#404040', textColor: '#000000', btnRadius: 0, btnAlpha: 255, btnMainAlpha: 255, btnBorderColor: '#000000', btnBorderWidth: 0, btnBorderAlpha: 255, btnPixmap: '', pixmap: '', textarea: '' };
     case 'label':
-      return { ...base, text: '标签文本', textColor: '#000000', bgColor: 'transparent', align: 'LEFT_MID', fontSize: 14, fontFamily: '', fontBpp: 4, textOffsetX: 0, textOffsetY: 0, textRotation: 0, radius: 0, textBuffer: '', textFmt: '', textFmtDynamic: '', longMode: false, longModeSpeed: 3000 };
+      return { ...base, text: '标签文本', textColor: '#000000', bgColor: 'transparent', align: 'LEFT_MID', fontSize: 14, fontFamily: '', fontBpp: 4, textOffsetX: 0, radius: 0, textBuffer: '', textFmt: '', textFmtDynamic: '', longMode: false, longModeSpeed: 3000 };
     case 'textbox':
       return { ...base, text: 'textbox', textColor: '#000000', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 10, fontSize: 14, fontFamily: '', fontBpp: 4, lineMargin: 1, pixmap: '', pixmapFormat: 'RGB565' };
     case 'textline':
@@ -808,7 +843,7 @@ export function createWidgetDefaults(type) {
     case 'textlist':
       return { ...base, options: '选项1\n选项2\n选项3', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, fontSize: 12, fontFamily: '', fontBpp: 4, textColor: '#000000', selectedColor: '#808080', pixmap: '' };
     case 'progress':
-      return { ...base, value: 50, fillColor: '#FFFFFF', trackColor: '#000000', borderColor: '#000000', borderWidth: 2, radius: 0, fillGap: 4, fillRadius: 0, fillWidth: 4, direct: 0 };
+      return { ...base, value: 50, fillColor: '#FFFFFF', trackColor: '#000000', borderColor: '#000000', borderWidth: 2, radius: 0, fillGap: 4, fillRadius: 0, fillWidth: 4 };
     case 'bar':
       return { ...base, value: 50, barColor: '#000000', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 2, radius: 0, barWidth: 20, barNum: 10, barMode: 0, barHatColor: '#808080', barHatHeight: 2, direct: 0 };
     case 'gauge':
@@ -856,9 +891,11 @@ export function createWidgetDefaults(type) {
     case 'ext_img':
       return { ...base, pixmap: '', pixmapFormat: 'RGB565', rotation: 0, scaleUniform: 0, pivotX: '', pivotY: '', readOps: '', alpha: 255 };
     case 'img':
-      return { ...base, pixmap: '', pixmapFormat: 'RGB565', alpha: 255 };
+      return { ...base, pixmap: '', pixmapFormat: 'RGB565', readOps: '', alpha: 255 };
     case 'arc_label':
-      return { ...base, text: '标签', textColor: '#000000', bgFlag: false, bgColor: '#FFFFFF', radius: 0, align: 'CENTER', fontSize: 14, fontFamily: '', fontBpp: 4, angle: 0, offsetX: 0, offsetY: 0, alpha: 255 };
+      return { ...base, text: '标签', textColor: '#000000', bgFlag: false, bgColor: '#FFFFFF', radius: 0, align: 'CENTER', fontSize: 14, fontFamily: '', fontBpp: 4, angle: 0, offsetX: 0, offsetY: 0, textBuffer: '', textFmt: '', textFmtDynamic: '', alpha: 255 };
+    case 'label_ext':
+      return { ...base, text: '标签文本', textColor: '#000000', bgColor: 'transparent', bgFlag: false, align: 'LEFT_MID', fontSize: 14, fontFamily: '', fontBpp: 4, textOffsetX: 0, textOffsetY: 0, textRotation: 0, radius: 0, textBuffer: '', textFmt: '', textFmtDynamic: '', alpha: 255 };
     default:
       return { ...base, color: '#8b5cf6', bgColor: '#313149', borderColor: '#3d3d5c', borderWidth: 1, radius: 4 };
   }
@@ -879,11 +916,11 @@ export const WIDGET_DEFAULTS = {
   slider: { value: 50, direct: 0, fillColor: '#000000', trackColor: '#808080', knobColor: '#000000', borderWidth: 2, radius: 4, thickness: 10, alpha: 255 },
   numberkbd: { cellColor: '#FFFFFF', borderColor: '#000000', borderWidth: 2, radius: 0, fontFamily: '', fontSize: 14, fontBpp: 4, btnColor: '#FFFFFF', textColor: '#000000', btnMargin: 5, btnBorderWidth: 1, btnBorderColor: '#000000', btnRadius: 0, btnPixmap: '', pixmap: '', pixmapFormat: 'RGB565', alpha: 255 },
   keyboard: { cellColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, mainAlpha: 255, borderAlpha: 255, fontFamily: '', fontSize: 14, fontBpp: 4, btnColor: '#404040', textColor: '#000000', btnRadius: 0, btnAlpha: 255, btnMainAlpha: 255, btnBorderColor: '#000000', btnBorderWidth: 0, btnBorderAlpha: 255, btnPixmap: '', pixmap: '', pixmapFormat: 'RGB565', textarea: '', alpha: 255 },
-  label: { text: '标签文本', textColor: '#000000', bgColor: 'transparent', align: 'CENTER', fontSize: 14, fontFamily: '', fontBpp: 4, textOffsetX: 0, textOffsetY: 0, textRotation: 0, radius: 0, textBuffer: '', textFmt: '', textFmtDynamic: '', alpha: 255 },
+  label: { text: '标签文本', textColor: '#000000', bgColor: 'transparent', align: 'CENTER', fontSize: 14, fontFamily: '', fontBpp: 4, textOffsetX: 0, radius: 0, textBuffer: '', textFmt: '', textFmtDynamic: '', alpha: 255 },
   textbox: { text: 'textbox', textColor: '#000000', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 10, fontSize: 14, fontFamily: '', fontBpp: 4, lineMargin: 1, pixmap: '', pixmapFormat: 'RGB565', alpha: 255 },
   textline: { text: 'textline', textColor: '#000000', bgColor: '#FFFFFF', bgTransparent: false, radius: 0, fontSize: 14, fontFamily: '', fontBpp: 4, edgeMargin: 0, lineMargin: 1, alpha: 255 },
   textlist: { options: '选项1\n选项2\n选项3', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, fontSize: 12, fontFamily: '', fontBpp: 4, textColor: '#000000', selectedColor: '#808080', pixmap: '', alpha: 255 },
-  progress: { value: 50, fillColor: '#FFFFFF', fillAlpha: 255, trackColor: '#000000', trackAlpha: 255, borderColor: '#000000', borderWidth: 2, radius: 0, fillGap: 4, fillRadius: 0, fillWidth: 4, direct: 0, pixmap: '', pixmapFormat: 'RGB565', alpha: 255 },
+  progress: { value: 50, fillColor: '#FFFFFF', fillAlpha: 255, trackColor: '#000000', trackAlpha: 255, borderColor: '#000000', borderWidth: 2, radius: 0, fillGap: 4, fillRadius: 0, fillWidth: 4, pixmap: '', pixmapFormat: 'RGB565', alpha: 255 },
   bar: { value: 50, barColor: '#000000', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 2, radius: 0, barWidth: 20, barNum: 10, barMode: 0, barHatColor: '#808080', barHatHeight: 2, direct: 0, pixmap: '', pixmapFormat: 'RGB565', alpha: 255 },
   gauge: { value: 0, arcColor: '#FFFFFF', scaleColor: '#FFFFFF', pointerColor: '#FF0000', hubColor: '#FFFFFF', bgColor: '#000000', startAngle: 30, endAngle: 330, arcWidth: 2, scaleWidth: 1, scaleLength: 0, pointerWidth: 2, hubRadius: 0, scaleStart: 0, scaleStep: 10, scaleAngle: 15, textInterval: 3, scaleWarning: 32767, fontSize: 12, fontFamily: '', fontBpp: 4, alpha: 255 },
   spectrum: { barColor: '#000000', barHatColor: '#808080', barNum: 12, barMode: 2, barHatHeight: 3, barValues: '', alpha: 255 },
@@ -907,8 +944,9 @@ export const WIDGET_DEFAULTS = {
   roller: { options: '选项1\n选项2\n选项3', optionDynamic: false, visibleRows: 3, infiniteMode: false, textColor: '#000000', selectedColor: '#808080', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, fontSize: 14, fontFamily: '', fontBpp: 4, alpha: 255 },
   analogclock: { hourPtrColor: '#ffffff', minPtrColor: '#FFFFFF', secPtrColor: '#FF0000', scaleColor: '#FFFFFF', textColor: '#FFFFFF', hubColor: '#FF0000', bgColor: '#000000', borderColor: '#FFFFFF', borderWidth: 0, hour: 0, minute: 0, second: 0, hourPtrWidth: 5, minPtrWidth: 5, secPtrWidth: 2, scaleWidth: 1, scaleLength: 8, hubRadius: 6, fontFamily: '', fontSize: 12, fontBpp: 4, alpha: 255 },
   ext_img: { pixmap: '', pixmapFormat: 'RGB565', rotation: 0, scaleUniform: 0, pivotX: '', pivotY: '', readOps: '', alpha: 255 },
-  img: { pixmap: '', pixmapFormat: 'RGB565', alpha: 255 },
-  arc_label: { text: '标签', textColor: '#000000', bgFlag: false, bgColor: '#FFFFFF', radius: 0, align: 'CENTER', fontSize: 14, fontFamily: '', fontBpp: 4, angle: 0, offsetX: 0, offsetY: 0, alpha: 255 },
+  img: { pixmap: '', pixmapFormat: 'RGB565', readOps: '', alpha: 255 },
+  arc_label: { text: '标签', textColor: '#000000', bgFlag: false, bgColor: '#FFFFFF', radius: 0, align: 'CENTER', fontSize: 14, fontFamily: '', fontBpp: 4, angle: 0, offsetX: 0, offsetY: 0, textBuffer: '', textFmt: '', textFmtDynamic: '', alpha: 255 },
+  label_ext: { text: '标签文本', textColor: '#000000', bgColor: 'transparent', bgFlag: false, align: 'CENTER', fontSize: 14, fontFamily: '', fontBpp: 4, textOffsetX: 0, textOffsetY: 0, textRotation: 0, radius: 0, textBuffer: '', textFmt: '', textFmtDynamic: '', alpha: 255 },
 };
 
 // 判断属性值是否需要生成代码（图片属性专用：只有非空才生成）
@@ -987,8 +1025,10 @@ function getWidgetTextForFont(w) {
 }
 
 function shouldGenerateFont(w, defaults) {
+  const effFamily = resolveEffectiveFontFamily(w.fontFamily);
   const textSource = getWidgetTextForFont(w);
-  return shouldGenerateValue(w.fontFamily, defaults, 'fontFamily') && w.fontFamily &&
+  const hasFamily = shouldGenerateValue(effFamily, defaults, 'fontFamily') && effFamily && effFamily !== 'default';
+  return hasFamily &&
          shouldGenerateValue(w.fontSize, defaults, 'fontSize') && w.fontSize != null &&
          (textSource === undefined || hasVisibleText(textSource));
 }
@@ -1008,6 +1048,12 @@ function emitAlphaGroup(setters, objId, prefix, alpha, mainAlpha, borderAlpha) {
 
 // ============ SGL 代码生成器 ============
 export function generateSGLCode(project) {
+  // 先设置字体 Fallback 上下文，供后续 shouldGenerateFont / getFontId 等内部函数使用
+  const projectFonts = (project && project.resources && project.resources.fonts) || [];
+  setCodegenFontContext(projectFonts);
+
+  try {
+
   // 检查 canvas 控件是否设置了 painterCb / privateData
   if (project.pages) {
     project.pages.forEach(page => {
@@ -1052,6 +1098,10 @@ export function generateSGLCode(project) {
   }
 
   code += `#include "sgl.h"\n`;
+
+  code += `\n/* USER CODE BEGIN includes */\n`;
+  code += `/* 用户可在此处添加额外的 #include、全局变量声明等，重新生成代码时本区域内容会被保留 */\n`;
+  code += `/* USER CODE END includes */\n`;
 
   if (fonts.length > 0) {
     code += `\n/* ============================================\n`;
@@ -1201,7 +1251,8 @@ export function generateSGLCode(project) {
       if (w.type === 'launcher') {
         // launcher 的 create 函数需要 attr、font、apps、app_num、cb 五个参数
         const attrName = `${objId}_attr`;
-        const fontId = (w.fontFamily && w.fontSize != null) ? getFontId(w.fontFamily, w.fontSize, w.fontBpp || 4) : 'sgl_font_default';
+        const launcherFont = resolveEffectiveFontFamily(w.fontFamily);
+        const fontId = (launcherFont && launcherFont !== 'default' && w.fontSize != null) ? getFontId(launcherFont, w.fontSize, w.fontBpp || 4) : 'sgl_font_default';
         code += `    sgl_launcher_attr_t ${attrName} = {\n`;
         code += `        .icon_size = ${w.iconSize || 48},\n`;
         code += `        .margin_left = ${w.marginLeft || 0},\n`;
@@ -1266,7 +1317,15 @@ export function generateSGLCode(project) {
   });
   code += `}\n`;
 
+  code += `\n/* USER CODE BEGIN functions */\n`;
+  code += `/* 用户可在此处添加自定义函数实现，重新生成代码时本区域内容会被保留 */\n`;
+  code += `/* USER CODE END functions */\n`;
+
   return code;
+
+  } finally {
+    setCodegenFontContext([]);
+  }
 }
 
 // ============ 字体收集工具 ============
@@ -1274,21 +1333,24 @@ export function collectFonts(project) {
   const fontMap = new Map();
   if (!project || !Array.isArray(project.pages)) return [];
 
+  const fonts = (project.resources && project.resources.fonts) || [];
+
   project.pages.forEach(page => {
     if (!Array.isArray(page.widgets)) return;
     page.widgets.forEach(w => {
-      if (w.fontFamily && w.fontSize != null) {
+      const effFamily = resolveEffectiveFontFamily(w.fontFamily, fonts);
+      if (effFamily && effFamily !== 'default' && w.fontSize != null) {
         // 有实际显示文本的控件，只有包含可显示字符时才使用字体
         const textSource = getWidgetTextForFont(w);
         if (textSource !== undefined && !hasVisibleText(textSource)) return;
         // 提取文件名
-        const familyName = w.fontFamily.replace(/[/\\]/g, '/').split('/').pop();
+        const familyName = effFamily.replace(/[/\\]/g, '/').split('/').pop();
         // 跳过 "default" 字体（不需要生成字模）
         if (familyName === 'default') return;
         const bpp = w.fontBpp || 4;
         const key = `${familyName}|${w.fontSize}|${bpp}`;
         if (!fontMap.has(key)) {
-          fontMap.set(key, { family: familyName, path: w.fontFamily, size: w.fontSize, bpp: bpp });
+          fontMap.set(key, { family: familyName, path: effFamily, size: w.fontSize, bpp: bpp });
         }
       }
     });
@@ -1304,8 +1366,9 @@ export function validateProjectFonts(project) {
   if (!project || !Array.isArray(project.pages)) return issues;
 
   const typeMap = new Map(SGL_WIDGET_TYPES.map(t => [t.type, t]));
-  const resourceFontPaths = new Set((project.resources?.fonts || []).map(f => f.path));
-  const resourceFontNames = new Set((project.resources?.fonts || []).map(f => f.name));
+  const fonts = (project.resources && project.resources.fonts) || [];
+  const resourceFontPaths = new Set(fonts.map(f => f.path));
+  const resourceFontNames = new Set(fonts.map(f => f.name));
 
   project.pages.forEach(page => {
     if (!Array.isArray(page.widgets)) return;
@@ -1316,22 +1379,28 @@ export function validateProjectFonts(project) {
       if (!typeDef.properties.includes('fontFamily')) return;
       // polygon 没有文本时不需要字体
       if (w.type === 'polygon' && !w.text) return;
+      // statusbar 没有槽位文本时不需要字体
+      if (w.type === 'statusbar' && !w.leftSlots && !w.rightSlots) return;
+      // 有 text/options/titleText 等文本属性的控件才需要字体
+      const textFields = ['text', 'options', 'titleText', 'msgText', 'leftBtnText', 'rightBtnText', 'leftSlots', 'rightSlots', 'textarea'];
+      const hasText = textFields.some(f => w[f] && String(w[f]).trim().length > 0);
+      if (!hasText) return;
 
-      const family = w.fontFamily;
+      const family = resolveEffectiveFontFamily(w.fontFamily, fonts);
       if (!family || family === 'default') {
         issues.push({
           page: page.name || '未命名页面',
           widget: `${typeDef.name || w.type} (${w.id})`,
           type: w.type,
           fontFamily: family || '',
-          reason: '未设置字体文件'
+          reason: fonts.length === 0 ? '项目资源中没有字体，请先在资源面板添加字体文件' : '未设置字体文件'
         });
         return;
       }
 
-      // 检查字体文件是否已添加到项目资源
+      // 检查字体文件是否已添加到项目资源（路径匹配 / 文件名匹配 / 字体名匹配）
       const fileName = family.replace(/[/\\]/g, '/').split('/').pop();
-      if (!resourceFontPaths.has(family) && !resourceFontNames.has(fileName)) {
+      if (!resourceFontPaths.has(family) && !resourceFontNames.has(fileName) && !resourceFontNames.has(family)) {
         issues.push({
           page: page.name || '未命名页面',
           widget: `${typeDef.name || w.type} (${w.id})`,
@@ -1548,7 +1617,7 @@ function getSglSetters(w) {
         }
       }
       if (shouldGenerateFont(w, defaults)) {
-        const fontId = getFontId(w.fontFamily, w.fontSize, w.fontBpp || 4);
+        const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
         setters.push(`sgl_polygon_set_font(${obj(w)}, &${fontId});`);
       }
       if (shouldGenerateValue(w.text, defaults, 'text')) {
@@ -1559,7 +1628,7 @@ function getSglSetters(w) {
 
     case 'button':
       if (shouldGenerateFont(w, defaults)) {
-        const fontId = getFontId(w.fontFamily, w.fontSize, w.fontBpp || 4);
+        const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
         setters.push(`sgl_button_set_font(${obj(w)}, &${fontId});`);
       }
       if (shouldGenerateValue(w.text, defaults, 'text')) setters.push(`sgl_button_set_text(${obj(w)}, "${escapeStr(w.text)}");`);
@@ -1575,7 +1644,7 @@ function getSglSetters(w) {
 
     case 'label':
       if (shouldGenerateFont(w, defaults)) {
-        const fontId = getFontId(w.fontFamily, w.fontSize, w.fontBpp || 4);
+        const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
         setters.push(`sgl_label_set_font(${obj(w)}, &${fontId});`);
       }
       if (shouldGenerateValue(w.text, defaults, 'text')) setters.push(`sgl_label_set_text(${obj(w)}, "${escapeStr(w.text)}");`);
@@ -1598,7 +1667,7 @@ function getSglSetters(w) {
 
     case 'label_ext':
       if (shouldGenerateFont(w, defaults)) {
-        const fontId = getFontId(w.fontFamily, w.fontSize, w.fontBpp || 4);
+        const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
         setters.push(`sgl_label_ext_set_font(${obj(w)}, &${fontId});`);
       }
       if (shouldGenerateValue(w.text, defaults, 'text')) setters.push(`sgl_label_ext_set_text(${obj(w)}, "${escapeStr(w.text)}");`);
@@ -1615,7 +1684,7 @@ function getSglSetters(w) {
 
     case 'textbox':
       if (shouldGenerateFont(w, defaults)) {
-        const fontId = getFontId(w.fontFamily, w.fontSize, w.fontBpp || 4);
+        const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
         setters.push(`sgl_textbox_set_text_font(${obj(w)}, &${fontId});`);
       }
       if (shouldGenerateValue(w.text, defaults, 'text')) setters.push(`sgl_textbox_set_text(${obj(w)}, "${escapeStr(w.text)}");`);
@@ -1644,7 +1713,7 @@ function getSglSetters(w) {
     case 'checkbox': {
       const cbTextColor = w.textColor || w.color || w.onColor;
       if (shouldGenerateFont(w, defaults)) {
-        const fontId = getFontId(w.fontFamily, w.fontSize, w.fontBpp || 4);
+        const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
         setters.push(`sgl_checkbox_set_font(${obj(w)}, &${fontId});`);
       }
       if (shouldGenerateValue(w.status, defaults, 'status')) setters.push(`sgl_checkbox_set_status(${obj(w)}, ${w.status ? 'true' : 'false'});`);
@@ -1698,7 +1767,7 @@ function getSglSetters(w) {
     case 'gauge':
       // 字体必须先设置：后续刻度数字绘制依赖 font 指针
       if (shouldGenerateFont(w, defaults)) {
-        const fontId = getFontId(w.fontFamily, w.fontSize, w.fontBpp || 4);
+        const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
         setters.push(`sgl_gauge_set_font(${obj(w)}, &${fontId});`);
       }
       if (shouldGenerateValue(w.value, defaults, 'value')) setters.push(`sgl_gauge_set_value(${obj(w)}, ${w.value != null ? w.value : 50});`);
@@ -1765,7 +1834,7 @@ function getSglSetters(w) {
       if (shouldGenerateValue(w.showPercentage, defaults, 'showPercentage')) setters.push(`sgl_battery_show_percentage(${obj(w)}, ${w.showPercentage ? 'true' : 'false'});`);
       if (shouldGenerateValue(w.textColor, defaults, 'textColor')) setters.push(`sgl_battery_set_text_color(${obj(w)}, ${hexToSglColor(w.textColor)});`);
       if (shouldGenerateFont(w, defaults)) {
-        const fontId = getFontId(w.fontFamily, w.fontSize, w.fontBpp || 4);
+        const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
         setters.push(`sgl_battery_set_font(${obj(w)}, &${fontId});`);
       }
       break;
@@ -1782,7 +1851,7 @@ function getSglSetters(w) {
     case 'msgbox':
       // 字体必须先设置：title/msg/btn 文本绘制均依赖 font 指针
       if (shouldGenerateFont(w, defaults)) {
-        const fontId = getFontId(w.fontFamily, w.fontSize, w.fontBpp || 4);
+        const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
         setters.push(`sgl_msgbox_set_font(${obj(w)}, &${fontId});`);
       }
       if (shouldGenerateValue(w.titleText, defaults, 'titleText')) setters.push(`sgl_msgbox_set_title_text(${obj(w)}, "${escapeStr(w.titleText)}");`);
@@ -1824,7 +1893,7 @@ function getSglSetters(w) {
       if (shouldGenerateValue(w.titleAlign, defaults, 'titleAlign')) setters.push(`sgl_win_set_title_text_align(${obj(w)}, SGL_ALIGN_${mapSglAlign(w.titleAlign)});`);
       if (shouldGeneratePixmap(w.pixmap)) setters.push(`sgl_win_set_pixmap(${obj(w)}, &${pixmapVarName(w.pixmap, w.pixmapFormat)});`);
       if (shouldGenerateFont(w, defaults)) {
-        const fontId = getFontId(w.fontFamily, w.fontSize, w.fontBpp || 4);
+        const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
         setters.push(`sgl_win_set_title_font(${obj(w)}, &${fontId});`);
       }
       // title_text 必须在 title_height 和 title_font 之后调用
@@ -1835,7 +1904,7 @@ function getSglSetters(w) {
 
     case 'dropdown':
       if (shouldGenerateFont(w, defaults)) {
-        const fontId = getFontId(w.fontFamily, w.fontSize, w.fontBpp || 4);
+        const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
         setters.push(`sgl_dropdown_set_text_font(${obj(w)}, &${fontId});`);
       }
       if (shouldGenerateValue(w.options, defaults, 'options')) {
@@ -1863,7 +1932,7 @@ function getSglSetters(w) {
       if (shouldGenerateValue(w.borderWidth, defaults, 'borderWidth')) setters.push(`sgl_numberkbd_set_border_width(${obj(w)}, ${w.borderWidth});`);
       if (shouldGenerateValue(w.borderColor, defaults, 'borderColor')) setters.push(`sgl_numberkbd_set_border_color(${obj(w)}, ${hexToSglColor(w.borderColor)});`);
       if (shouldGenerateFont(w, defaults)) {
-        const fontId = getFontId(w.fontFamily, w.fontSize, w.fontBpp || 4);
+        const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
         setters.push(`sgl_numberkbd_set_text_font(${obj(w)}, &${fontId});`);
       }
       if (shouldGenerateValue(w.textColor, defaults, 'textColor')) setters.push(`sgl_numberkbd_set_text_color(${obj(w)}, ${hexToSglColor(w.textColor)});`);
@@ -1878,7 +1947,7 @@ function getSglSetters(w) {
 
     case 'keyboard':
       if (shouldGenerateFont(w, defaults)) {
-        const fontId = getFontId(w.fontFamily, w.fontSize, w.fontBpp || 4);
+        const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
         setters.push(`sgl_keyboard_set_text_font(${obj(w)}, &${fontId});`);
       }
       if (shouldGenerateValue(w.cellColor, defaults, 'cellColor')) setters.push(`sgl_keyboard_set_color(${obj(w)}, ${hexToSglColor(w.cellColor)});`);
@@ -1904,7 +1973,7 @@ function getSglSetters(w) {
 
     case 'textline':
       if (shouldGenerateFont(w, defaults)) {
-        const fontId = getFontId(w.fontFamily, w.fontSize, w.fontBpp || 4);
+        const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
         setters.push(`sgl_textline_set_text_font(${obj(w)}, &${fontId});`);
       }
       if (shouldGenerateValue(w.text, defaults, 'text')) setters.push(`sgl_textline_set_text(${obj(w)}, "${escapeStr(w.text)}");`);
@@ -1919,7 +1988,7 @@ function getSglSetters(w) {
 
     case 'textlist':
       if (shouldGenerateFont(w, defaults)) {
-        const fontId = getFontId(w.fontFamily, w.fontSize, w.fontBpp || 4);
+        const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
         setters.push(`sgl_textlist_set_text_font(${obj(w)}, &${fontId});`);
       }
       if (shouldGenerateValue(w.options, defaults, 'options') && w.options) {
@@ -2029,7 +2098,7 @@ function getSglSetters(w) {
       if (shouldGenerateValue(w.showYLabels, defaults, 'showYLabels')) setters.push(`sgl_scope_show_y_labels(${obj(w)}, ${w.showYLabels ? 'true' : 'false'});`);
       if (shouldGenerateValue(w.yLabelColor, defaults, 'yLabelColor')) setters.push(`sgl_scope_set_y_label_color(${obj(w)}, ${hexToSglColor(w.yLabelColor)});`);
       if (shouldGenerateFont(w, defaults)) {
-        const fontId = getFontId(w.fontFamily, w.fontSize, w.fontBpp || 4);
+        const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
         setters.push(`sgl_scope_set_y_label_font(${obj(w)}, &${fontId});`);
       }
       if (shouldGenerateValue(w.lineWidth, defaults, 'lineWidth')) setters.push(`sgl_scope_set_line_width(${obj(w)}, ${w.lineWidth});`);
@@ -2063,7 +2132,7 @@ function getSglSetters(w) {
           if (shouldGenerateValue(w.legendPos, defaults, 'legendPos')) setters.push(`${prefix}_set_legend_pos(${obj(w)}, ${w.legendPos});`);
           if (shouldGenerateValue(w.legendDir, defaults, 'legendDir')) setters.push(`${prefix}_set_legend_dir(${obj(w)}, ${w.legendDir});`);
           if (shouldGenerateFont(w, defaults)) {
-            const fontId = getFontId(w.fontFamily, w.fontSize, w.fontBpp || 4);
+            const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
             setters.push(`${prefix}_set_legend_font(${obj(w)}, &${fontId});`);
           }
           if (shouldGenerateValue(w.legendTextColor, defaults, 'legendTextColor')) setters.push(`${prefix}_set_legend_text_color(${obj(w)}, ${hexToSglColor(w.legendTextColor)});`);
@@ -2125,7 +2194,7 @@ function getSglSetters(w) {
         }
         // 字体配置：同时配置X轴和Y轴
         if (shouldGenerateFont(w, defaults)) {
-          const fontId = getFontId(w.fontFamily, w.fontSize, w.fontBpp || 4);
+          const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
           setters.push(`    ${prefix}_set_axis_label_font(${obj(w)}, ${axisY}, &${fontId});`);
           setters.push(`    ${prefix}_set_axis_label_font(${obj(w)}, ${axisX}, &${fontId});`);
         }
@@ -2194,7 +2263,7 @@ function getSglSetters(w) {
 
     case 'roller':
       if (shouldGenerateFont(w, defaults)) {
-        const fontId = getFontId(w.fontFamily, w.fontSize, w.fontBpp || 4);
+        const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
         setters.push(`sgl_roller_set_text_font(${obj(w)}, &${fontId});`);
       }
       if (shouldGenerateValue(w.options, defaults, 'options') && w.options) {
@@ -2217,7 +2286,7 @@ function getSglSetters(w) {
 
     case 'analogclock':
       if (shouldGenerateFont(w, defaults)) {
-        const fontId = getFontId(w.fontFamily, w.fontSize, w.fontBpp || 4);
+        const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
         setters.push(`sgl_analogclock_set_font(${obj(w)}, &${fontId});`);
       }
       if (shouldGenerateValue(w.hour, defaults, 'hour') || shouldGenerateValue(w.minute, defaults, 'minute') || shouldGenerateValue(w.second, defaults, 'second')) setters.push(`sgl_analogclock_set_time(${obj(w)}, ${w.hour || 0}, ${w.minute || 0}, ${w.second || 0});`);
@@ -2253,7 +2322,7 @@ function getSglSetters(w) {
       }
       if (shouldGenerateValue(w.slotSpace, defaults, 'slotSpace')) setters.push(`sgl_statusbar_set_slot_space(${obj(w)}, ${w.slotSpace});`);
       if (shouldGenerateFont(w, defaults)) {
-        const fontId = getFontId(w.fontFamily, w.fontSize, w.fontBpp || 4);
+        const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
         setters.push(`sgl_statusbar_set_font(${obj(w)}, &${fontId});`);
       }
       // 左侧槽位（用 ; 拼接存储，最多 4 个）
@@ -2334,7 +2403,7 @@ function getSglSetters(w) {
       // SGL sgl_arc_label_set_text 内部会调用 sgl_arc_label_update_area，用 label->font 计算文本区域
       // 若先 set_text 再 set_font，update_area 会用 create 时默认的 system font（可能为 NULL 或不含中文字符）导致崩溃
       if (shouldGenerateFont(w, defaults)) {
-        const alFontId = getFontId(w.fontFamily, w.fontSize, w.fontBpp || 4);
+        const alFontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
         setters.push(`sgl_arc_label_set_font(${obj(w)}, &${alFontId});`);
       }
       if (shouldGenerateValue(w.text, defaults, 'text') && w.text) setters.push(`sgl_arc_label_set_text(${obj(w)}, "${escapeStr(w.text)}");`);

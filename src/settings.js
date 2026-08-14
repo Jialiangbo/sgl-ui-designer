@@ -1,6 +1,5 @@
-import { AppState, navigate, showToast } from './app.js';
+import { AppState, navigate, showToast, setupWindowControls, setupUpdateChecker, initNav } from './app.js';
 import { invoke } from '@tauri-apps/api/core';
-import { confirm } from '@tauri-apps/plugin-dialog';
 import { PROVIDER_PRESETS, DEFAULT_LLM_CONFIG } from './llm/llm_config.js';
 
 const _comboBoxDropLists = new Map();
@@ -352,6 +351,18 @@ async function initAiConfig() {
 }
 
 export async function init() {
+  await _init();
+}
+
+async function _init() {
+  try {
+    // 窗口控制 + 更新检查 + 导航绑定（MPA 模式下每个页面入口执行一次）
+    setupWindowControls();
+    setupUpdateChecker();
+    initNav('settings');
+  } catch (e) {
+    console.warn('settings: setupWindowControls/setupUpdateChecker/initNav warn:', e);
+  }
   AppState.init();
 
   document.querySelectorAll('.sgl-cfg').forEach(el => {
@@ -564,27 +575,29 @@ export async function init() {
     });
   }
 
-  initAiConfig();
+  try {
+    await initAiConfig();
+  } catch (e) {
+    console.warn('settings initAiConfig warn:', e);
+  }
 
   if (!AppState.projectPath) {
-    const ok = await confirm('当前项目尚未保存，是否保存项目以读取 SGL 配置文件？', {
-      title: '提示',
-      kind: 'info',
-      okLabel: '保存项目',
-      cancelLabel: '暂不保存'
-    });
-    if (ok) {
-      const result = await AppState.saveProject();
-      if (!result.ok) {
-        refresh();
-        return;
-      }
-      showToast('项目已保存', 'success');
-    } else {
-      refresh();
-      return;
-    }
+    // 不弹模态对话框（会阻塞主窗口导致导航/关闭按钮失效），改用非阻塞提示
+    showToast('当前项目尚未保存，将显示默认配置。保存项目后可读取 sgl_config.h', 'info');
+    try { refresh(); } catch (_) {}
+    return;
   }
-  await syncConfigFromFile();
-  refresh();
+  try {
+    await syncConfigFromFile();
+  } catch (e) {
+    console.warn('settings syncConfigFromFile warn:', e);
+  }
+  try {
+    refresh();
+  } catch (e) {
+    console.warn('settings refresh error:', e);
+  }
 }
+
+// 模块加载时自动执行初始化（settings.html 通过 <script type="module"> 加载本文件）
+_init().catch(e => console.error('settings init error:', e));

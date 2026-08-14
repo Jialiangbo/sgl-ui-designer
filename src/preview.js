@@ -11,24 +11,44 @@ import {
 } from './render_common.js';
 import qrcodeGenerator from 'qrcode-generator';
 
-initNav('preview');
-setupWindowControls();
-setupUpdateChecker();
-AppState.init();
-setFontLoadCallback(() => render());
+// DEBUG_MARKER_2026_0808_A
+let _previewInitialized = false;
+
+// 初始化预览（preview.html 自动调用，editor.js 预览模式时手动调用）
+export function initPreview() {
+  initNav('preview');
+  setupWindowControls();
+  setupUpdateChecker();
+  AppState.init();
+  setFontLoadCallback(() => render());
+  if (!_previewInitialized) {
+    _previewInitialized = true;
+    setupGlobalInteraction();
+  }
+  preloadProjectFonts(AppState.project.resources?.fonts).then(async () => {
+    await preloadSglFontData();
+    render();
+  });
+}
 
 // 递归收集控件及其子控件需要生成的字模字符
 function collectWidgetFontChars(w, fontTextMap) {
-  const fam = w.fontFamily;
+  const fam = resolveEffectiveFontFamily(w.fontFamily);
   if (fam && fam !== 'default') {
     const sz = w.fontSize || 14;
     const bpp = w.fontBpp || 4;
-    const key = `${fam}|${sz}|${bpp}`;
+    // 使用实际字体路径作为 key，确保与 getSglFontData/loadSglFontData 一致
+    const fontPath = resolveFontPath(fam);
+    const key = `${fontPath}|${sz}|${bpp}`;
     if (!fontTextMap.has(key)) fontTextMap.set(key, new Set());
     const chars = fontTextMap.get(key);
-    const texts = [w.text, w.titleText, w.options, w.leftSlots, w.rightSlots];
+    const texts = [w.text, w.titleText, w.options, w.leftSlots, w.rightSlots, w.xLabels];
     for (const t of texts) {
       if (t) for (const ch of String(t)) { if (ch.charCodeAt(0) >= 0x20) chars.add(ch); }
+    }
+    // chart 数值标签需要数字字符
+    if (w.type === 'chart') {
+      for (const ch of '0123456789.-') chars.add(ch);
     }
   }
   for (const child of (w.widgets || [])) {
@@ -62,13 +82,164 @@ async function preloadSglFontData() {
   }
 }
 
-// 项目加载后预加载字体资源，然后渲染
-preloadProjectFonts(AppState.project.resources?.fonts).then(async () => {
-  await preloadSglFontData();
-  render();
-});
+// 获取字体的实际路径（用于字模加载，确保缓存 key 与 editor.js 一致）
+function resolveFontPath(family) {
+  const fonts = (AppState.project.resources && AppState.project.resources.fonts) || [];
+  if (!family || family === 'default') return '';
+  // 已经是路径（包含分隔符）
+  if (family.includes('/') || family.includes('\\')) return family;
+  // 查找字体资源
+  const font = fonts.find(f => f.name === family);
+  if (font) return font.path;
+  return family;
+}
+
+// 获取控件实际使用的字体族名/路径：未设置或 default 时 fallback 到项目第一个字体
+function resolveEffectiveFontFamily(family) {
+  const fonts = (AppState.project.resources && AppState.project.resources.fonts) || [];
+  if ((!family || family === 'default') && fonts.length > 0) {
+    return fonts[0].name || fonts[0].path || '';
+  }
+  return family;
+}
 
 let currentIndex = 0;
+export function setPreviewPageIndex(i) { currentIndex = i; }
+
+// ============================================================
+// 交互运行时系统（预览页）
+// ============================================================
+
+// 控件运行时状态（不污染 AppState.project.widgets，编辑器属性不受影响）
+const runtimeState = new Map(); // key: widget.id, value: { value, status, pressed, scrollVal, scrollFrame, longModeOffset, ... }
+
+// 控件元素引用（用于事件分发）：id -> { el, widget, z, absX, absY, domW, domH }
+const widgetRefMap = new Map();
+
+// 全局拖拽上下文
+const dragCtx = {
+  active: false,
+  widgetId: null,
+  pointerId: null,
+  startX: 0,
+  startY: 0,
+  startVal: 0,
+};
+
+// 当前页面缩放因子（render 时更新，事件反算坐标用）
+let currentZ = 1;
+let currentFrameEl = null;
+
+// 初始化或重置某控件运行时状态：拷贝默认值（与渲染一致）
+function ensureWidgetState(w) {
+  if (runtimeState.has(w.id)) return runtimeState.get(w.id);
+  const s = {};
+  switch (w.type) {
+    case 'switch': case 'checkbox': case 'led':
+      s.status = w.status || false; break;
+    case 'slider': case 'progress': case 'bar':
+      s.value = w.value != null ? w.value : 0; break;
+    case 'label':
+      s.longModeOffset = 0;
+      s.longModeAnimId = null;
+      break;
+    case 'button': case 'imgbtn':
+      s.pressed = false; break;
+    case 'scroll':
+      s.scrollVal = 0; break;
+    case 'dropdown':
+      s.selectedIndex = Math.max(0, Math.min((w.options || '').split('\n').filter(o => o.length > 0).length - 1, w.selectedIndex != null ? w.selectedIndex : 0));
+      s.expanded = false;
+      break;
+    case 'roller':
+      s.selectedIndex = Math.max(0, Math.min((w.options || '').split('\n').filter(o => o.length > 0).length - 1, w.selectedIndex != null ? w.selectedIndex : 0));
+      s.scrollY = 0;
+      break;
+    case 'textlist':
+      s.selectedIndex = Math.max(-1, Math.min((w.options || '').split('\n').filter(o => o.length > 0).length - 1, w.selectedIndex != null ? w.selectedIndex : -1));
+      break;
+    case 'numberkbd': case 'keyboard':
+      s.value = w.value != null ? String(w.value) : '';
+      break;
+  }
+  runtimeState.set(w.id, s);
+  return s;
+}
+
+// 获取控件运行时状态（不存在则初始化）
+function getRuntimeState(w) {
+  return ensureWidgetState(w);
+}
+
+// 控件运行时值获取：运行时状态有值时取它，否则取 widget 原始属性
+function getRuntimeValue(w, prop, fallbackProp) {
+  const s = runtimeState.get(w.id);
+  if (s && s[prop] !== undefined && s[prop] !== null) return s[prop];
+  return w[fallbackProp || prop];
+}
+
+// 清空当前页面控件引用（页面切换/重渲前调用）
+function clearWidgetRefs() {
+  widgetRefMap.clear();
+  // 停止所有 label long_mode 动画
+  for (const s of runtimeState.values()) {
+    if (s.longModeAnimId) { cancelAnimationFrame(s.longModeAnimId); s.longModeAnimId = null; }
+  }
+}
+
+// 记录控件引用（render 时调用）
+function registerWidgetRef(widgetId, info) {
+  widgetRefMap.set(widgetId, info);
+}
+
+// 事件坐标反算：浏览器事件坐标 → 控件原始坐标（未缩放）
+function eventToWidgetLocal(evt, info) {
+  const rect = info.el.getBoundingClientRect();
+  const xRaw = (evt.clientX - rect.left) / currentZ;
+  const yRaw = (evt.clientY - rect.top) / currentZ;
+  return { x: Math.trunc(xRaw), y: Math.trunc(yRaw) };
+}
+
+// 命中检测（简单矩形命中；圆形/多边形控件可以覆盖 refineHit）
+function simpleHitTest(info, localX, localY) {
+  return localX >= 0 && localY >= 0 && localX < info.domW && localY < info.domH;
+}
+
+// 从事件对象找到命中的控件（最深层优先：children > parent，模拟 SGL 事件传播）
+function findTargetWidget(evt) {
+  const frameRect = currentFrameEl ? currentFrameEl.getBoundingClientRect() : null;
+  if (!frameRect) return null;
+  const fx = evt.clientX - frameRect.left;
+  const fy = evt.clientY - frameRect.top;
+  if (fx < 0 || fy < 0) return null;
+  // 按注册顺序倒序（后画的控件在上层），找第一个命中的
+  const refs = Array.from(widgetRefMap.values());
+  for (let i = refs.length - 1; i >= 0; i--) {
+    const info = refs[i];
+    const rect = info.el.getBoundingClientRect();
+    const lx = (evt.clientX - rect.left) / currentZ;
+    const ly = (evt.clientY - rect.top) / currentZ;
+    // dropdown 展开后选项列表在控件原始高度之外，需要扩展命中区域
+    if (info.type === 'dropdown') {
+      const s = runtimeState.get(info.id);
+      if (s && s.expanded) {
+        const w = info.widget;
+        const ddOptions = (w.options || '').split('\n').filter(o => o.length > 0);
+        const ddVisibleRows = Math.max(1, w.visibleRows != null ? w.visibleRows : 5);
+        const ddItemH = (w.fontSize || 14) + 6;
+        const listH = Math.min(ddOptions.length, ddVisibleRows) * ddItemH;
+        if (lx >= 0 && lx < info.domW && ly >= 0 && ly < info.domH + listH) {
+          return { info, localX: lx, localY: ly };
+        }
+        continue;
+      }
+    }
+    if (simpleHitTest(info, lx, ly)) {
+      return { info, localX: lx, localY: ly };
+    }
+  }
+  return null;
+}
 
 // ============================================================
 // SGLRenderer 像素级渲染辅助
@@ -123,15 +294,23 @@ function flushWidget(surf) {
 
 
 
-function render() {
+export function render() {
   const pages = AppState.project.pages;
   if (!pages || pages.length === 0) return;
   if (currentIndex >= pages.length) currentIndex = 0;
   if (currentIndex < 0) currentIndex = pages.length - 1;
 
+  // 同步当前项目颜色深度到 SGLRenderer
+  if (window.SGLRenderer && window.SGLRenderer.setColorDepth) {
+    window.SGLRenderer.setColorDepth(AppState.project.color_depth || '16bit');
+  }
+
   const page = pages[currentIndex];
   const frame = document.getElementById('preview-frame');
   const container = document.getElementById('preview-container');
+
+  // 清理旧控件引用与动画
+  clearWidgetRefs();
 
   // 计算自适应缩放比例，让页面完整显示在容器中
   const containerRect = container.getBoundingClientRect();
@@ -139,6 +318,8 @@ function render() {
   const availW = containerRect.width - padding;
   const availH = containerRect.height - padding;
   const z = Math.min(availW / page.width, availH / page.height, 1); // 不放大，只缩小
+  currentZ = z;
+  currentFrameEl = frame;
 
   // 手动缩放所有尺寸（不用transform:scale，避免边框亚像素渲染变粗）
   // SGL 闭区间坐标缩放：像素宽度 = round((dim-1)*z) + 1，与 createSurface 一致
@@ -169,11 +350,12 @@ function render() {
   frame.style.borderRadius = (AppState.project.screen_shape === 'circle') ? '50%' : '0';
   frame.innerHTML = '';
 
+  const pageWidgets = page.widgets || [];
   const widgetMap = new Map();
-  page.widgets.forEach(pw => widgetMap.set(pw.id, pw));
+  pageWidgets.forEach(pw => widgetMap.set(pw.id, pw));
 
   // 按层级组排序：根祖先及其子孙作为整体，组之间按 zOrder 排序
-  const sortedWidgets = sortWidgetsByHierarchy(page.widgets);
+  const sortedWidgets = sortWidgetsByHierarchy(pageWidgets);
 
   sortedWidgets.forEach(w => {
     const el = document.createElement('div');
@@ -245,14 +427,744 @@ function render() {
       }
     }
 
+    // 确保运行时状态存在（交互使用）
+    ensureWidgetState(w);
+
     renderPreviewWidget(el, w, z, { domW, domH }, page);
+
+    // 注册控件引用（事件分发使用）
+    registerWidgetRef(w.id, {
+      id: w.id,
+      type: w.type,
+      el,
+      widget: w,
+      z,
+      absX: absPos.x,
+      absY: absPos.y,
+      domW,
+      domH,
+    });
+
+    // 启用 pointer-events（原为 canvas/overlay 用 none，现在父容器接收事件）
+    el.style.pointerEvents = 'auto';
+    // 数据属性：便于调试 & 按 id 快速查找
+    el.dataset.widgetId = w.id;
+    el.dataset.widgetType = w.type;
+
+    // scroll 绑定目标：根据 scroll 的运行时 scrollVal 位移绑定对象下所有子控件（含后代）并裁剪
+    // 查找绑定目标 = 当前控件某个祖先（或直接等于某个 scroll.bindTarget）
+    if (w.parentId || true) {
+      // 找到页面上所有 scroll 控件，逐个判断是否是当前控件的绑定目标祖先
+      for (const sScroll of (page.widgets || [])) {
+        if (sScroll.type !== 'scroll' || !sScroll.bindTarget) continue;
+        const scrollTargetVar = sScroll.bindTarget;
+        // 通过 widgetVarName 找到目标控件
+        const targetWidget = page.widgets.find(t => getWidgetVarName(t) === scrollTargetVar);
+        if (!targetWidget) continue;
+        // 是否为目标控件的子孙（或目标控件自己）？
+        let ancestor = w.parentId ? widgetMap.get(w.parentId) : null;
+        let isDescendant = (targetWidget.id === w.id);
+        while (!isDescendant && ancestor) {
+          if (ancestor.id === targetWidget.id) { isDescendant = true; break; }
+          ancestor = ancestor.parentId ? widgetMap.get(ancestor.parentId) : null;
+        }
+        if (!isDescendant) continue;
+
+        // 计算 scrollVal → 位移量
+        const sSt = runtimeState.get(sScroll.id) || {};
+        const val = sSt.scrollVal != null ? Number(sSt.scrollVal) : (sScroll.value != null ? Number(sScroll.value) : 0);
+        const scDirect = sScroll.direct != null ? Number(sScroll.direct) : 1;
+        // 目标控件内可见区域尺寸
+        const tw = targetWidget.width;
+        const th = targetWidget.height;
+        // 估算子控件内容占的范围（实际 SGL 里 sgl_obj_get_size(scene)，这里简化取目标宽高的 2 倍上限）
+        // 找到目标控件所有子孙的 min/max 坐标，估算内容尺寸
+        let minX = 0, minY = 0, maxX = tw, maxY = th;
+        for (const ch of page.widgets) {
+          let ancCh = ch.parentId ? widgetMap.get(ch.parentId) : null;
+          let isChDesc = (targetWidget.id === ch.id);
+          while (!isChDesc && ancCh) {
+            if (ancCh.id === targetWidget.id) { isChDesc = true; break; }
+            ancCh = ancCh.parentId ? widgetMap.get(ancCh.parentId) : null;
+          }
+          if (!isChDesc) continue;
+          const chAbs = getWidgetAbsPos(ch, page);
+          const targetAbs = getWidgetAbsPos(targetWidget, page);
+          const rx = chAbs.x - targetAbs.x;
+          const ry = chAbs.y - targetAbs.y;
+          if (rx < minX) minX = rx;
+          if (ry < minY) minY = ry;
+          if (rx + ch.width > maxX) maxX = rx + ch.width;
+          if (ry + ch.height > maxY) maxY = ry + ch.height;
+        }
+        const contentW = Math.max(tw, maxX - minX);
+        const contentH = Math.max(th, maxY - minY);
+        const excessX = Math.max(0, contentW - tw);
+        const excessY = Math.max(0, contentH - th);
+        let offsetX = 0, offsetY = 0;
+        if (scDirect === 1) { // 垂直
+          offsetY = -excessY * Math.max(0, Math.min(100, val)) / 100;
+        } else { // 水平
+          offsetX = -excessX * Math.max(0, Math.min(100, val)) / 100;
+        }
+        // 给当前控件 el 应用位移
+        if (offsetX !== 0 || offsetY !== 0) {
+          el.style.transform = (el.style.transform ? el.style.transform + ' ' : '') + `translate(${offsetX * z}px, ${offsetY * z}px)`;
+        }
+        // 裁剪超出绑定目标边框的部分
+        const targetAbs = getWidgetAbsPos(targetWidget, page);
+        const curAbs = absPos;
+        const clipTop = Math.max(0, (targetAbs.y) - curAbs.y);
+        const clipLeft = Math.max(0, (targetAbs.x) - curAbs.x);
+        const clipBottom = Math.max(0, (curAbs.y + domW) - ((targetAbs.x) + 0)); // placeholder（不影响，只用左右顶）
+        // 用 clip-path：裁剪到 target 控件边框内的可见区域（在当前控件坐标空间）
+        const relTargetX1 = targetAbs.x - curAbs.x;
+        const relTargetY1 = targetAbs.y - curAbs.y;
+        const relTargetX2 = relTargetX1 + targetWidget.width;
+        const relTargetY2 = relTargetY1 + targetWidget.height;
+        const insetT = Math.max(0, -relTargetY1);
+        const insetL = Math.max(0, -relTargetX1);
+        const insetB = Math.max(0, relTargetY2 - domH);
+        const insetR = Math.max(0, relTargetX2 - domW);
+        if (insetT || insetL || insetB || insetR) {
+          const prev = el.style.clipPath;
+          const addClip = `inset(${insetT * z}px ${insetR * z}px ${insetB * z}px ${insetL * z}px)`;
+          el.style.clipPath = prev ? (prev + ' ' + addClip) : addClip;
+        }
+        // 内容超出还会用到上面的 offset，应用在 target 自己（目标控件有 clipPath）
+        break;
+      }
+    }
 
     frame.appendChild(el);
   });
 
-  $('status-current-page').textContent = '页面 ' + (currentIndex + 1) + ' / ' + pages.length;
-  $('status-page-name').textContent = page.name;
-  $('status-page-size').textContent = page.width + '×' + page.height;
+  const statusPage = $('status-current-page');
+  const statusName = $('status-page-name');
+  const statusSize = $('status-page-size');
+  if (statusPage) statusPage.textContent = '页面 ' + (currentIndex + 1) + ' / ' + pages.length;
+  if (statusName) statusName.textContent = page.name;
+  if (statusSize) statusSize.textContent = page.width + '×' + page.height;
+
+  // 页面控件渲染完毕后，启动各控件的交互后处理（如 label long_mode 动画）
+  initPostRenderInteractions();
+}
+
+// ============================================================
+// 交互处理：各类控件的 pressed/click/drag 行为
+// ============================================================
+
+// numberkbd 按键命中测试（与渲染几何一致）
+function getNumberKbdKeyAt(w, x, y) {
+  const COL = 4, ROW = 5;
+  const nkMargin = w.btnMargin != null ? w.btnMargin : 5;
+  const rawBoxW = Math.floor((w.width - (COL + 1) * nkMargin) / COL);
+  const rawBoxH = Math.floor((w.height - (ROW + 1) * nkMargin) / ROW);
+  const boxW = rawBoxW;
+  const boxH = rawBoxH;
+  if (x < nkMargin || y < nkMargin) return null;
+  const c = Math.floor((x - nkMargin) / (boxW + nkMargin));
+  const r = Math.floor((y - nkMargin) / (boxH + nkMargin));
+  if (c < 0 || c >= COL || r < 0 || r >= ROW) return null;
+  const bx = nkMargin + c * (boxW + nkMargin);
+  const by = nkMargin + r * (boxH + nkMargin);
+  if (x < bx || x > bx + boxW || y < by || y > by + boxH) return null;
+  if (r === 4 && c === 3) return null; // 合并到 enter
+  const kbdDigits = [
+    ['+', '-', '*', '/'],
+    ['7', '8', '9', '='],
+    ['4', '5', '6', '\b'],
+    ['1', '2', '3', '\r'],
+    ['.', '0', '%', '\r']
+  ];
+  return {
+    ch: kbdDigits[r][c],
+    r, c,
+    isBack: r === 2 && c === 3,
+    isOk: r === 3 && c === 3
+  };
+}
+
+// keyboard 按键命中测试（与渲染几何一致，默认 LOWER 模式）
+function getKeyboardKeyAt(w, x, y) {
+  const R = getR();
+  const bodyW = w.width, bodyH = w.height;
+  let kbKeyMargin = w.btnMargin != null ? w.btnMargin : 0;
+  if (kbKeyMargin === 0) kbKeyMargin = Math.max(Math.floor(bodyW / 128), 1);
+  const kbKeyMode = 1;
+  const kbLayoutMode = kbKeyMode >> 1;
+  const btnHeight = new Array(4);
+  R.splitLen(R.KEYBD_BTN_HEIGHT, 4, bodyH, kbKeyMargin, btnHeight);
+  let btnIndex = 0;
+  let btnY1 = 0;
+  for (let i = 0; i < 4; i++) {
+    const btnWidth = new Array(12);
+    const rowCount = R.KEYBOARD_BTN_COUNT[kbLayoutMode][i];
+    R.splitLen(R.KEYBD_BTN_WIDTH[kbLayoutMode][i], rowCount, bodyW, kbKeyMargin, btnWidth);
+    btnY1 += kbKeyMargin;
+    const btnY2 = btnY1 + btnHeight[i] - 1;
+    let btnX1 = 0;
+    for (let j = 0; j < rowCount; j++) {
+      btnX1 += kbKeyMargin;
+      const btnX2 = btnX1 + btnWidth[j] - 1;
+      if (x >= btnX1 && x <= btnX2 && y >= btnY1 && y <= btnY2) {
+        const iconName = R.keyindexIsIcon(kbKeyMode, btnIndex);
+        if (iconName) return { iconName };
+        return { text: R.KEYBD_BTN_MAP[kbKeyMode][btnIndex] };
+      }
+      btnX1 += btnWidth[j];
+      btnIndex++;
+    }
+    btnY1 = btnY2 + 1;
+  }
+  return null;
+}
+
+// dropdown 展开列表项命中测试
+function getDropdownItemAt(w, x, y) {
+  const s = getRuntimeState(w);
+  if (!s.expanded) return null;
+  const ddOptions = (w.options || '').split('\n').filter(o => o.length > 0);
+  if (ddOptions.length === 0) return null;
+  const ddFontSize = w.fontSize || 14;
+  const ddItemH = ddFontSize + 6;
+  const ddOptionH = w.height;
+  const ddVisibleRows = Math.max(1, w.visibleRows != null ? w.visibleRows : 5);
+  const listH = Math.min(ddOptions.length, ddVisibleRows) * ddItemH;
+  if (y < ddOptionH || y > ddOptionH + listH) return null;
+  const idx = Math.floor((y - ddOptionH) / ddItemH);
+  if (idx < 0 || idx >= ddOptions.length) return null;
+  return idx;
+}
+
+// roller 选项命中测试（基于渲染时的 item 位置）
+function getRollerItemAt(w, x, y) {
+  const rOptions = (w.options || '').split('\n').filter(o => o.length > 0);
+  if (rOptions.length === 0) return null;
+  const rFontSize = w.fontSize || 14;
+  const rItemH = rFontSize + 6;
+  const rBandY1 = Math.floor((w.height - rItemH) / 2);
+  const rState = getRuntimeState(w);
+  const rSelected = Math.max(0, Math.min(rOptions.length - 1, rState.selectedIndex || 0));
+  const rScrollY = (rState.scrollY != null ? rState.scrollY : 0) - rSelected * rItemH;
+  const idx = Math.round((y - rBandY1 - rScrollY - rItemH / 2) / rItemH);
+  if (idx < 0 || idx >= rOptions.length) return null;
+  return idx;
+}
+
+// textlist 选项命中测试
+function getTextlistItemAt(w, x, y) {
+  const tlOptions = (w.options || '').split('\n').filter(o => o.length > 0);
+  if (tlOptions.length === 0) return null;
+  const tlFontSize = w.fontSize || 12;
+  const tlItemHeight = tlFontSize + 6;
+  const idx = Math.floor(y / tlItemHeight);
+  if (idx < 0 || idx >= tlOptions.length) return null;
+  return idx;
+}
+
+// progress 点击值计算
+function getProgressValueAt(w, x) {
+  const prValue = getRuntimeValue(w, 'value', 'value') || 0;
+  const prRadius = w.radius != null ? w.radius : 0;
+  const prBorder = w.borderWidth != null ? w.borderWidth : 2;
+  const knobX1 = prRadius / 2 + prBorder;
+  const knobX2 = w.width * prValue / 100 - prRadius / 2 - 2 - (prBorder - 1);
+  if (x <= knobX1) return 0;
+  if (x >= knobX2) return 100;
+  return Math.max(0, Math.min(100, Math.round((x - knobX1) * 100 / Math.max(1, knobX2 - knobX1))));
+}
+
+// bar 点击值计算
+function getBarValueAt(w, x, y) {
+  const barDirect = w.direct || 0;
+  const barBorder = w.borderWidth != null ? w.borderWidth : 2;
+  if (barDirect === 0) {
+    const rel = Math.max(0, Math.min(w.width, x));
+    return Math.round(rel * 100 / Math.max(1, w.width));
+  } else {
+    const rel = Math.max(0, Math.min(w.height, y));
+    return Math.round((w.height - rel) * 100 / Math.max(1, w.height));
+  }
+}
+
+// 控件点击（非拖拽结束时）
+function onWidgetClick(info, evt) {
+  const w = info.widget;
+  const s = runtimeState.get(w.id);
+  if (!s) return;
+  const rect = info.el.getBoundingClientRect();
+  const ptX = (evt.clientX - rect.left) / currentZ;
+  const ptY = (evt.clientY - rect.top) / currentZ;
+  switch (info.type) {
+    case 'button':
+      // 已经在 pointerup 处理过 pressed 复位，这里不再重复
+      break;
+    case 'switch':
+      s.status = !s.status; render();
+      break;
+    case 'checkbox':
+      s.status = !s.status; render();
+      break;
+    case 'led':
+      s.status = !s.status; render();
+      break;
+    case 'label':
+      // 预留：点击可触发 long_mode 暂停/继续
+      break;
+    case 'imgbtn':
+      // 同 button
+      break;
+    case 'dropdown': {
+      const itemIdx = getDropdownItemAt(w, ptX, ptY);
+      if (itemIdx != null) {
+        s.selectedIndex = itemIdx;
+        s.expanded = false;
+      } else {
+        s.expanded = !s.expanded;
+      }
+      render();
+      break;
+    }
+    case 'textlist': {
+      const itemIdx = getTextlistItemAt(w, ptX, ptY);
+      if (itemIdx != null) { s.selectedIndex = itemIdx; render(); }
+      break;
+    }
+    case 'numberkbd': {
+      const key = getNumberKbdKeyAt(w, ptX, ptY);
+      if (!key) break;
+      if (key.isBack) {
+        s.value = String(s.value || '').slice(0, -1);
+      } else if (key.isOk) {
+        // enter：当前仅作为确认，可扩展
+      } else if (key.ch === '\r') {
+        // enter 键
+      } else {
+        s.value = String(s.value || '') + key.ch;
+      }
+      render();
+      break;
+    }
+    case 'keyboard': {
+      const key = getKeyboardKeyAt(w, ptX, ptY);
+      if (!key) break;
+      if (key.iconName === 'backspace') {
+        s.value = String(s.value || '').slice(0, -1);
+      } else if (key.iconName === 'enter' || key.iconName === 'newline') {
+        s.value = String(s.value || '') + '\n';
+      } else if (key.text) {
+        s.value = String(s.value || '') + key.text;
+      }
+      // 若设置了 textarea 绑定变量，同步更新目标控件的文本
+      if (w.textarea) {
+        const page = AppState.project.pages[currentIndex];
+        const target = (page && page.widgets || []).find(tw => getWidgetVarName(tw) === w.textarea);
+        if (target && target.text !== undefined) target.text = s.value;
+      }
+      render();
+      break;
+    }
+  }
+}
+
+// 按下（含拖拽起始）
+function onWidgetPointerDown(info, evt) {
+  const w = info.widget;
+  const s = runtimeState.get(w.id);
+  if (!s) return;
+  const rect = info.el.getBoundingClientRect();
+  const ptX = (evt.clientX - rect.left) / currentZ;
+  const ptY = (evt.clientY - rect.top) / currentZ;
+
+  switch (info.type) {
+    case 'button': case 'imgbtn':
+      s.pressed = true; render();
+      // 拖拽上下文：仅用于释放时判断点击还是拖拽
+      dragCtx.active = true;
+      dragCtx.widgetId = w.id;
+      dragCtx.startX = evt.clientX;
+      dragCtx.startY = evt.clientY;
+      break;
+
+    case 'slider': {
+      const isHoriz = w.direct !== 1;
+      const knobR = Math.max(1, (isHoriz ? w.height : w.width) / 2 - 1);
+      let v;
+      if (isHoriz) {
+        const barLeft = knobR;
+        const barWidth = Math.max(1, w.width - 2 * knobR);
+        const rel = Math.max(0, Math.min(barWidth, ptX - barLeft));
+        v = Math.round(rel * 100 / barWidth);
+      } else {
+        const barTop = knobR;
+        const barHeight = Math.max(1, w.height - 2 * knobR);
+        const rel = Math.max(0, Math.min(barHeight, ptY - barTop));
+        v = Math.round(rel * 100 / barHeight);
+      }
+      s.value = v;
+      dragCtx.active = true;
+      dragCtx.widgetId = w.id;
+      dragCtx.startVal = v;
+      render();
+      break;
+    }
+
+    case 'scroll': {
+      const scDirect = w.direct != null ? w.direct : 1;
+      // scroll 值：0-100，与 slider 一致简化处理
+      let v;
+      if (scDirect === 1) {
+        // 垂直
+        v = Math.max(0, Math.min(100, Math.round(ptY * 100 / Math.max(1, info.domH))));
+      } else {
+        v = Math.max(0, Math.min(100, Math.round(ptX * 100 / Math.max(1, info.domW))));
+      }
+      s.scrollVal = v;
+      dragCtx.active = true;
+      dragCtx.widgetId = w.id;
+      dragCtx.startVal = v;
+      render();
+      break;
+    }
+
+    case 'switch': case 'checkbox':
+      // switch/checkbox 点击切换：仅设置拖拽上下文（支持按下后移出区域取消）
+      dragCtx.active = true;
+      dragCtx.widgetId = w.id;
+      dragCtx.startX = evt.clientX;
+      dragCtx.startY = evt.clientY;
+      // 按下时标记 pressed（视觉反馈目前使用status变化）
+      s.pressed = true; render();
+      break;
+
+    case 'progress': {
+      s.value = getProgressValueAt(w, ptX);
+      dragCtx.active = true;
+      dragCtx.widgetId = w.id;
+      dragCtx.startVal = s.value;
+      render();
+      break;
+    }
+
+    case 'bar': {
+      s.value = getBarValueAt(w, ptX, ptY);
+      dragCtx.active = true;
+      dragCtx.widgetId = w.id;
+      dragCtx.startVal = s.value;
+      render();
+      break;
+    }
+
+    case 'roller': {
+      dragCtx.active = true;
+      dragCtx.widgetId = w.id;
+      dragCtx.startX = evt.clientX;
+      dragCtx.startY = evt.clientY;
+      dragCtx.startVal = s.selectedIndex || 0;
+      s.pressed = true;
+      break;
+    }
+
+    case 'dropdown': case 'textlist': case 'numberkbd': case 'keyboard': case 'led':
+      // 这些控件在 pointerup/click 中处理具体行为，pointerdown 仅记录上下文
+      dragCtx.active = true;
+      dragCtx.widgetId = w.id;
+      dragCtx.startX = evt.clientX;
+      dragCtx.startY = evt.clientY;
+      s.pressed = true;
+      break;
+  }
+}
+
+// 移动（拖拽进行中）
+function onWidgetPointerMove(evt) {
+  if (!dragCtx.active || !dragCtx.widgetId) return;
+  const info = widgetRefMap.get(dragCtx.widgetId);
+  if (!info) return;
+  const w = info.widget;
+  const s = runtimeState.get(w.id);
+  if (!s) return;
+  const rect = info.el.getBoundingClientRect();
+  const ptX = (evt.clientX - rect.left) / currentZ;
+  const ptY = (evt.clientY - rect.top) / currentZ;
+
+  switch (info.type) {
+    case 'slider': {
+      const isHoriz = w.direct !== 1;
+      const knobR = Math.max(1, (isHoriz ? w.height : w.width) / 2 - 1);
+      let v;
+      if (isHoriz) {
+        const barLeft = knobR;
+        const barWidth = Math.max(1, w.width - 2 * knobR);
+        const rel = Math.max(0, Math.min(barWidth, ptX - barLeft));
+        v = Math.round(rel * 100 / barWidth);
+      } else {
+        const barTop = knobR;
+        const barHeight = Math.max(1, w.height - 2 * knobR);
+        const rel = Math.max(0, Math.min(barHeight, ptY - barTop));
+        v = Math.round(rel * 100 / barHeight);
+      }
+      if (v !== s.value) { s.value = v; render(); }
+      break;
+    }
+
+    case 'scroll': {
+      const scDirect = w.direct != null ? w.direct : 1;
+      let v;
+      if (scDirect === 1) {
+        v = Math.max(0, Math.min(100, Math.round(ptY * 100 / Math.max(1, info.domH))));
+      } else {
+        v = Math.max(0, Math.min(100, Math.round(ptX * 100 / Math.max(1, info.domW))));
+      }
+      if (v !== s.scrollVal) { s.scrollVal = v; render(); }
+      break;
+    }
+
+    case 'progress': {
+      const v = getProgressValueAt(w, ptX);
+      if (v !== s.value) { s.value = v; render(); }
+      break;
+    }
+
+    case 'bar': {
+      const v = getBarValueAt(w, ptX, ptY);
+      if (v !== s.value) { s.value = v; render(); }
+      break;
+    }
+
+    case 'roller': {
+      const rFontSize = w.fontSize || 14;
+      const rItemH = rFontSize + 6;
+      const dy = evt.clientY - dragCtx.startY;
+      const idxDelta = Math.round(dy / Math.max(1, rItemH * currentZ));
+      const rOptions = (w.options || '').split('\n').filter(o => o.length > 0);
+      let newIdx = (dragCtx.startVal || 0) + idxDelta;
+      newIdx = Math.max(0, Math.min(rOptions.length - 1, newIdx));
+      if (newIdx !== s.selectedIndex) {
+        s.selectedIndex = newIdx;
+        s.scrollY = 0;
+        render();
+      }
+      break;
+    }
+
+    case 'button': case 'imgbtn': case 'switch': case 'checkbox':
+    case 'textlist': case 'numberkbd': case 'keyboard': case 'led': {
+      // 按钮/开关/复选框/其他点击控件：按下后拖动离开区域→取消pressed（释放就不会触发click切换）
+      const info2 = widgetRefMap.get(dragCtx.widgetId);
+      if (!info2) return;
+      const stillHit = ptX >= 0 && ptY >= 0 && ptX < info2.domW && ptY < info2.domH;
+      const s2 = runtimeState.get(dragCtx.widgetId);
+      if (s2 && s2.pressed !== stillHit) {
+        s2.pressed = stillHit; render();
+      }
+      break;
+    }
+    case 'dropdown': {
+      // dropdown 展开后选项列表在原始控件区域外，移动过程中保持 pressed，避免反复 re-render 重建 DOM
+      break;
+    }
+  }
+}
+
+// 释放（结束）
+function onWidgetPointerUp(evt) {
+  if (!dragCtx.active || !dragCtx.widgetId) { dragCtx.active = false; return; }
+  const info = widgetRefMap.get(dragCtx.widgetId);
+  const id = dragCtx.widgetId;
+  dragCtx.active = false;
+  dragCtx.widgetId = null;
+  if (!info) return;
+  const w = info.widget;
+  const s = runtimeState.get(id);
+  if (!s) return;
+
+  // 判断是否点击（位移很小）
+  const dx = Math.abs(evt.clientX - dragCtx.startX);
+  const dy = Math.abs(evt.clientY - dragCtx.startY);
+  const isClick = dx < 5 && dy < 5;
+  if (isClick) dx_dy_small_cache = true;
+
+  switch (info.type) {
+    case 'button': case 'imgbtn':
+      if (s.pressed) { s.pressed = false; render(); }
+      if (isClick) onWidgetClick(info, evt);
+      break;
+    case 'switch': case 'checkbox':
+      if (s.pressed) {
+        // 在控件区域内释放：切换状态
+        s.status = !s.status;
+        s.pressed = false;
+        render();
+      } else {
+        // 已移出区域：不切换，仅复位
+        s.pressed = false;
+      }
+      break;
+    case 'slider': case 'scroll': case 'progress': case 'bar':
+      // 拖拽结束
+      break;
+    case 'roller':
+      s.pressed = false;
+      render();
+      break;
+    case 'dropdown': case 'textlist': case 'numberkbd': case 'keyboard': case 'led':
+      // 先处理点击（需用到旧的 info.el 计算坐标），再 render 重建 DOM
+      if (isClick) onWidgetClick(info, evt);
+      if (s.pressed) {
+        s.pressed = false;
+        render();
+      }
+      break;
+    default:
+      if (isClick) onWidgetClick(info, evt);
+      break;
+  }
+}
+
+// 折叠所有已展开的下拉框（点击外部时调用）
+function collapseExpandedDropdowns(exceptId) {
+  let changed = false;
+  for (const [wid, s] of runtimeState.entries()) {
+    const info = widgetRefMap.get(wid);
+    if (info && info.type === 'dropdown' && wid !== exceptId && s.expanded) {
+      s.expanded = false;
+      changed = true;
+    }
+  }
+  if (changed) render();
+}
+
+// ============================================================
+// 全局事件绑定（在 preview-frame 上统一捕获）
+// ============================================================
+
+let _interactionBound = false;
+export function setupGlobalInteraction() {
+  if (_interactionBound) return;
+  _interactionBound = true;
+  const frame = document.getElementById('preview-container') || document.body;
+
+  frame.addEventListener('pointerdown', (evt) => {
+    const hit = findTargetWidget(evt);
+    // 点击下拉框外部时，折叠其他已展开的下拉框
+    collapseExpandedDropdowns(hit ? hit.info.id : null);
+    if (!hit) return;
+    evt.preventDefault();
+    // dropdown 展开列表是临时 DOM 子元素，re-render 时会被重建，在其上 capture 会丢失 pointerup，
+    // 因此仅在稳定元素（canvas）上 capture；dropdown 走全局 click / pointerup 兜底。
+    const shouldCapture = hit.info.type !== 'dropdown';
+    try { if (shouldCapture && evt.target && evt.target.setPointerCapture) evt.target.setPointerCapture(evt.pointerId); } catch (_) {}
+    dragCtx.pointerId = evt.pointerId;
+    onWidgetPointerDown(hit.info, evt);
+  });
+
+  frame.addEventListener('pointermove', (evt) => {
+    onWidgetPointerMove(evt);
+  });
+
+  window.addEventListener('pointerup', (evt) => {
+    if (dragCtx.active && dragCtx.pointerId != null) {
+      try { (evt.target && evt.target.releasePointerCapture) && evt.target.releasePointerCapture(dragCtx.pointerId); } catch (_) {}
+    }
+    onWidgetPointerUp(evt);
+    dragCtx.pointerId = null;
+  });
+
+  // click 事件：用于没按下就点的情况（不太可能，但兜底）
+  frame.addEventListener('click', (evt) => {
+    // 已经在 pointerup 处理过点击的跳过
+    if (dx_dy_small_cache) { dx_dy_small_cache = false; return; }
+    const hit = findTargetWidget(evt);
+    if (!hit) return;
+    // 简单点击控件直接触发
+    if (['switch', 'checkbox', 'led', 'dropdown', 'textlist', 'numberkbd', 'keyboard'].includes(hit.info.type)) onWidgetClick(hit.info, evt);
+  });
+}
+let dx_dy_small_cache = false;
+
+// 自动初始化：仅 preview.html 页面（body.page-preview）自动调用
+// editor.html 通过 import { initPreview } 手动调用，避免模块加载时副作用污染编辑器
+if (typeof window !== 'undefined' && document.body && document.body.classList.contains('page-preview')) {
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initPreview);
+  } else {
+    initPreview();
+  }
+}
+
+// 渲染后处理：label long_mode 滚动动画
+function initPostRenderInteractions() {
+  for (const [wid, info] of widgetRefMap.entries()) {
+    const w = info.widget;
+    const s = runtimeState.get(wid);
+    if (!s) continue;
+    if (w.type === 'label' && w.longMode) {
+      // 只在首次创建时启动动画，复用 longModeAnimId 判断
+      if (!s.longModeAnimId) {
+        startLabelLongModeAnim(wid, info, w, s);
+      }
+    }
+  }
+}
+
+function startLabelLongModeAnim(wid, info, w, s) {
+  const speed = w.longModeSpeed || 3000; // 毫秒：文本宽度滚动一周的时间
+  let lastTs = performance.now();
+  // 估算文本像素宽度（近似值，不需要精确到像素级；用控件 fontSize 近似）
+  const fontSize = w.fontSize || 14;
+  const text = w.text || '';
+  const estTextW = text.length * fontSize * 0.6;
+  const contentW = info.domW || w.width || 0;
+
+  function step(ts) {
+    const stateNow = runtimeState.get(wid);
+    if (!stateNow) return; // 控件已被清理
+    const dt = ts - lastTs;
+    lastTs = ts;
+    // 每毫秒移动的像素（原始坐标空间）
+    const pxPerMs = Math.max(1, estTextW + contentW) / Math.max(10, speed);
+    stateNow.longModeOffset = (stateNow.longModeOffset || 0) + (pxPerMs * dt);
+    const cycle = estTextW + contentW + 40; // 空白间隔
+    if (stateNow.longModeOffset > cycle) stateNow.longModeOffset -= cycle;
+    // 更新 text 位移：通过直接改 DOM text 位置更高效；简化处理：只在 offset 跨 1 像素时才 render（节流）
+    if (!stateNow._lastRenderedOffset
+        || Math.abs(stateNow.longModeOffset - stateNow._lastRenderedOffset) >= 1) {
+      stateNow._lastRenderedOffset = stateNow.longModeOffset;
+      // 只重绘该 label：先局部改文本位置，性能优先
+      const wref = widgetRefMap.get(wid);
+      if (wref) updateLabelLongModeText(wref, stateNow.longModeOffset, estTextW, contentW);
+    }
+    stateNow.longModeAnimId = requestAnimationFrame(step);
+  }
+  s.longModeAnimId = requestAnimationFrame(step);
+}
+
+// 直接通过 DOM 移动 label 内 overlay 文本节点（避免频繁 render 全量 canvas）
+function updateLabelLongModeText(info, offsetPx, estTextW, contentW) {
+  const wrap = info.el.querySelector('div[style*="position:absolute"] > div, div[style*="position:absolute"] > span');
+  // 找最外层叠加文本的容器（第一个 position:absolute 子元素的子 span）
+  const first = info.el.firstElementChild;
+  if (!first) return;
+  // text overlay 是在 renderPreviewWidget 的 overlayText/overlayTextAt 函数里 append 的子元素
+  // 结构：info.el > wrap(div,position:absolute) > span
+  const children = info.el.children;
+  let textWrap = null;
+  for (let i = 0; i < children.length; i++) {
+    const c = children[i];
+    if (c.tagName === 'DIV' && c.style.position === 'absolute'
+        && c.querySelector('span')) { textWrap = c; break; }
+  }
+  if (!textWrap) return;
+  const span = textWrap.querySelector('span') || textWrap.querySelector('div');
+  if (!span) return;
+  // 水平滚动：向左位移（负值），取模
+  const mod = estTextW + contentW + 40;
+  let off = (offsetPx % mod);
+  if (off < 0) off += mod;
+  span.style.transform = `translateX(${-off}px)`;
+  span.style.willChange = 'transform';
 }
 
 function renderPreviewWidget(el, w, z, renderSize, page) {
@@ -262,10 +1174,10 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
   function widgetHasFont(widget) {
     const fonts = (AppState.project.resources && AppState.project.resources.fonts) || [];
     if (fonts.length === 0) return false;
-    const family = widget.fontFamily;
+    const family = resolveEffectiveFontFamily(widget.fontFamily);
     if (!family || family === 'default') return false;
     const fileName = family.replace(/[/\\]/g, '/').split('/').pop();
-    return fonts.some(f => f.path === family || f.name === fileName);
+    return fonts.some(f => f.path === family || f.name === fileName || f.name === family);
   }
 
   // 通用 DOM 文本叠加：在 el 上叠加一个 span 显示文本
@@ -665,6 +1577,31 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
     }
 
     case 'button': {
+      const st = runtimeState.get(w.id);
+      const pressed = !!(st && st.pressed);
+      // hex 字符串按 pressed 变暗（factor 0.63：63% 原颜色 + 37% 黑）
+      const darkenCssHex = (hexOrRgb, def) => {
+        let src = hexOrRgb || def;
+        if (!pressed) return src;
+        let col = hexToRgba(src);
+        if (!col) col = hexToRgba(def);
+        if (!col) return src;
+        const mm = col.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+        if (!mm) return src;
+        const f = 0.63;
+        const r = Math.round(parseInt(mm[1]) * f);
+        const g = Math.round(parseInt(mm[2]) * f);
+        const b = Math.round(parseInt(mm[3]) * f);
+        return `rgb(${r},${g},${b})`;
+      };
+      // 将 hex → rgb color obj 并按 pressed 变暗；R 对象必须已存在
+      const darkenRgbObj = (R, hexOrNull, def) => {
+        const col = R.hexToColor(hexOrNull || def);
+        if (!pressed) return col;
+        const f = 0.63;
+        return { r: Math.round(col.r * f), g: Math.round(col.g * f), b: Math.round(col.b * f) };
+      };
+
       if (w.pixmap) {
         const pixmapFormat = w.pixmapFormat || 'RGB565';
         const hasAlpha = pixmapFormatHasAlpha(pixmapFormat);
@@ -674,17 +1611,20 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
           // 图片已缓存：SGLRenderer 像素级渲染
           const { surf, R } = createWidgetCanvas(el, w, z);
           el.style.opacity = 1;
-          const bgColor = hasAlpha ? R.hexToColor(w.bgColor || w.color || '#8b5cf6') : R.hexToColor('#000000');
-          R.drawFillRect(surf, 0, 0, w.width - 1, w.height - 1, w.radius != null ? w.radius : 8, bgColor, 255);
+          const bgColDefault = hasAlpha ? (w.bgColor || w.color || '#8b5cf6') : '#000000';
+          const bgColFinal = darkenRgbObj(R, hasAlpha ? (w.bgColor || w.color || '#8b5cf6') : '#000000', bgColDefault);
+          R.drawFillRect(surf, 0, 0, w.width - 1, w.height - 1, w.radius != null ? w.radius : 8, bgColFinal, 255);
           R.drawPixmap(surf, 0, 0, w.width, w.height, imgData, pixmapFormat, alpha);
-          R.drawFillRectBorder(surf, 0, 0, w.width - 1, w.height - 1, w.radius != null ? w.radius : 8, R.hexToColor(w.borderColor || '#7c3aed'), w.borderWidth != null ? w.borderWidth : 1, alpha);
+          const bColFinal = darkenRgbObj(R, w.borderColor || '#7c3aed', '#7c3aed');
+          R.drawFillRectBorder(surf, 0, 0, w.width - 1, w.height - 1, w.radius != null ? w.radius : 8, bColFinal, w.borderWidth != null ? w.borderWidth : 1, alpha);
           flushWidget(surf);
         } else {
           // 图片未缓存：CSS 占位 + 异步加载
-          el.style.backgroundColor = hasAlpha ? (w.bgColor || w.color || '#8b5cf6') : '#000000';
+          const bgCssDef = hasAlpha ? (w.bgColor || w.color || '#8b5cf6') : '#000000';
+          el.style.backgroundColor = darkenCssHex(hasAlpha ? (w.bgColor || w.color || '#8b5cf6') : '#000000', bgCssDef);
           el.style.backgroundSize = '100% 100%';
           el.style.backgroundImage = `url('${toAssetUrl(w.pixmap)}')`;
-          el.style.border = `${(w.borderWidth || 1) * z}px solid ${w.borderColor || '#7c3aed'}`;
+          el.style.border = `${(w.borderWidth || 1) * z}px solid ${darkenCssHex(w.borderColor || '#7c3aed', '#7c3aed')}`;
           el.style.borderRadius = ((w.radius || 8) * z) + 'px';
           preloadPixmapImage(w.pixmap, () => render());
         }
@@ -694,7 +1634,7 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
         el.style.padding = (4 * z) + 'px ' + (8 * z) + 'px';
         const text = document.createElement('span');
         text.textContent = w.text || '按钮';
-        text.style.color = w.textColor || '#ffffff';
+        text.style.color = darkenCssHex(w.textColor || '#ffffff', '#ffffff');
         text.style.fontSize = ((w.fontSize || 14) * z) + 'px';
         text.style.overflow = 'hidden';
         text.style.textOverflow = 'ellipsis';
@@ -706,11 +1646,9 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
         const { surf, R } = createWidgetCanvas(el, w, z);
         el.style.opacity = 1;
         const alpha = w.alpha != null ? w.alpha : 255;
-        const bgCol = R.hexToColor(w.bgColor || w.color || '#8b5cf6');
-        const borderCol = R.hexToColor(w.borderColor || '#7c3aed');
-        const textCol = R.hexToColor(w.textColor || '#ffffff');
+        const bgColFinal = darkenRgbObj(R, w.bgColor || w.color || '#8b5cf6', '#8b5cf6');
+        const borderColFinal = darkenRgbObj(R, w.borderColor || '#7c3aed', '#7c3aed');
         const fontSize = w.fontSize || 14;
-        const fontBpp = w.fontBpp || 4;
         const fontFamily = getCssFontStack(w.fontFamily || 'simhei.ttf');
         // 背景
         R.drawRect(surf, 0, 0, w.width - 1, w.height - 1, {
@@ -718,17 +1656,16 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
           border: w.borderWidth != null ? w.borderWidth : 1,
           border_alpha: alpha,
           border_mask: 0,
-          color: bgCol,
-          border_color: borderCol,
+          color: bgColFinal,
+          border_color: borderColFinal,
           radius: w.radius != null ? w.radius : 8
         });
         flushWidget(surf);
-        // 文本实时渲染（fillText 直接画到 canvas + bpp 量化后处理）
+        const txtColFinalCss = darkenCssHex(w.textColor || '#ffffff', '#ffffff');
         const txt = w.text || '按钮';
         const coords = { x1: 0, y1: 0, x2: w.width - 1, y2: w.height - 1 };
         const align = alignStrToNum(w.align || 'CENTER');
-        const pos = R.getTextPosRealtime(coords, txt, fontSize, fontFamily, 4, align);
-        overlayText({ text: txt, color: (w.textColor || '#ffffff'), fontSize, fontFamily: (w.fontFamily || 'simhei.ttf'), align: (w.align || 'CENTER'), x: 0, y: 0, w: w.width, h: w.height });
+        overlayText({ text: txt, color: txtColFinalCss, fontSize, fontFamily: (w.fontFamily || 'simhei.ttf'), align: (w.align || 'CENTER'), x: 0, y: 0, w: w.width, h: w.height });
       }
       break;
     }
@@ -741,8 +1678,9 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
       const lblBg = w.bgColor;
       const fontSize = w.fontSize || 14;
       const fontBpp = w.fontBpp || 4;
-      const fontFamily = w.fontFamily || '';
-      const cssFamily = getCssFontStack(fontFamily);
+      const effFontFamily = resolveEffectiveFontFamily(w.fontFamily);
+      const fontPath = resolveFontPath(effFontFamily);
+      const cssFamily = getCssFontStack(effFontFamily);
       // bg
       if (lblBg && lblBg !== 'transparent') {
         R.drawFillRect(surf, 0, 0, w.width - 1, w.height - 1,
@@ -756,7 +1694,7 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
         // SGL drawString to buf32 (before flushWidget)
         const coords = { x1: 0, y1: 0, x2: w.width - 1, y2: w.height - 1 };
         const align = alignStrToNum(w.align || 'CENTER');
-        const lblSglFont = getSglFontData(fontFamily, fontSize, fontBpp);
+        const lblSglFont = getSglFontData(fontPath, fontSize, fontBpp);
         if (lblSglFont) {
           // 有字模：像素级渲染（与 SGL 运行时一致）
           const pos = R.getTextPosSGL(coords, txt, lblSglFont, 0, align);
@@ -770,7 +1708,7 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
       flushWidget(surf);
       if (!hasFont) {
         // no font: DOM span (system default)
-        overlayText({ text: txt, color: (w.textColor || w.color || '#000000'), fontSize, fontFamily: fontFamily, align: (w.align || 'CENTER'), x: 0, y: 0, w: w.width, h: w.height });
+        overlayText({ text: txt, color: (w.textColor || w.color || '#000000'), fontSize, fontFamily: effFontFamily, align: (w.align || 'CENTER'), x: 0, y: 0, w: w.width, h: w.height });
       }
       break;
     }
@@ -812,7 +1750,7 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
 
     case 'switch': {
       // SGL switch: margin = knob_margin + border
-      const swOn = w.status || false;
+      const swOn = !!getRuntimeValue(w, 'status', 'status');
       const swPixmap = w.pixmap || '';
       if (swPixmap) {
         const pixmapFormat = w.pixmapFormat || 'RGB565';
@@ -946,7 +1884,7 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
       const { surf, R } = createWidgetCanvas(el, w, z);
       el.style.opacity = 1;
       const alpha = w.alpha != null ? w.alpha : 255;
-      const cbStatus = w.status || false;
+      const cbStatus = !!getRuntimeValue(w, 'status', 'status');
       const cbText = w.text || '';
       const cbFontSize = w.fontSize || 14;
       // 三色：text_color / box_color / check_color
@@ -1010,7 +1948,8 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
       el.style.opacity = 1;
       const alpha = w.alpha != null ? w.alpha : 255;
       const isHoriz = w.direct !== 1;
-      const slValue = w.value || 0;
+      const slValueRaw = getRuntimeValue(w, 'value', 'value');
+      const slValue = (slValueRaw == null) ? 0 : Number(slValueRaw);
       const border = w.borderWidth != null ? w.borderWidth : 2;
       const knobR = Math.max(1, (isHoriz ? w.height : w.width) / 2 - 1);
       // SGL: thickness = min(slider->thickness, knob_r)，默认 255 被 knob_r 钳制
@@ -1069,7 +2008,7 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
       const { surf, R } = createWidgetCanvas(el, w, z);
       el.style.opacity = 1;
       const alpha = w.alpha != null ? w.alpha : 255;
-      const prValue = w.value || 0;
+      const prValue = getRuntimeValue(w, 'value', 'value') || 0;
       const prFillCol = R.hexToColor(w.fillColor || '#FFFFFF');
       const prGap = w.fillGap != null ? w.fillGap : 4;
       const prFillRadius = w.fillRadius != null ? w.fillRadius : 0;
@@ -1118,7 +2057,7 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
       el.style.opacity = 1;
       const alpha = w.alpha != null ? w.alpha : 255;
       const barDirect = w.direct || 0;
-      const barValue = w.value || 50;
+      const barValue = getRuntimeValue(w, 'value', 'value') || 0;
       const barBorder = w.borderWidth != null ? w.borderWidth : 2;
       const barRadius = w.radius != null ? w.radius : 0;
       const barFillCol = R.hexToColor(w.barColor || '#000000');
@@ -1188,8 +2127,9 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
       const fontBpp = w.fontBpp != null ? w.fontBpp : 4;
 
       // 获取 SGL 字模数据
-      const gFontFamily = w.fontFamily || '';
-      const sglFont = getSglFontData(gFontFamily, fontSize, fontBpp);
+      const gEffFamily = resolveEffectiveFontFamily(w.fontFamily);
+      const gFontPath = resolveFontPath(gEffFamily);
+      const sglFont = getSglFontData(gFontPath, fontSize, fontBpp);
       const sglFontH = sglFont ? R.fontGetHeight(sglFont) : fontSize;
       const sglStrWidth = (text) => {
         if (sglFont) return R.fontGetStringWidth(text, sglFont);
@@ -1276,7 +2216,7 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
       const { surf, R } = createWidgetCanvas(el, w, z);
       el.style.opacity = 1;
       const alpha = w.alpha != null ? w.alpha : 255;
-      const isOn = !!w.status;
+      const isOn = !!getRuntimeValue(w, 'status', 'status');
       const bgCol = R.hexToColor(w.bgColor || '#000000');
       const ledCol = R.hexToColor(isOn ? (w.onColor || w.color || '#FFFFFF') : (w.offColor || '#000000'));
       // SGL 整数除法语义: cx=(x1+x2)/2=(width-1)/2, radius=width/2
@@ -1463,9 +2403,13 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
 
     case 'dropdown': {
       // SGLRenderer 像素级渲染：头部矩形 + 4bpp 箭头位图 + 选中项文本
+      // 展开状态：在头部下方叠加选项列表（DOM 层级），点击选项切换选中
       const { surf, R } = createWidgetCanvas(el, w, z);
       el.style.opacity = 1;
+      // 下拉框展开列表会超出控件原始高度，必须允许溢出，否则会被容器裁剪且无法命中
+      el.style.overflow = 'visible';
       const alpha = w.alpha != null ? w.alpha : 255;
+      const ddState = getRuntimeState(w);
       const ddOptions = (w.options || '').split('\n').filter(o => o.length > 0);
       const ddFontSize = w.fontSize || 14;
       const ddFontHeight = ddFontSize;
@@ -1476,6 +2420,7 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
       const ddItemH = ddFontHeight + 6;
       const ddItemPad = Math.max(ddRadius, ddBorderW + 3);
       const ddOptionH = w.height; // 关闭状态头部高度
+      const ddSelected = Math.max(0, Math.min(ddOptions.length - 1, ddState.selectedIndex || 0));
       // 1. 头部矩形（背景+边框，圆角）
       R.drawRect(surf, 0, 0, w.width - 1, ddOptionH - 1, {
         alpha: alpha, border: ddBorderW, border_alpha: alpha, border_mask: 0,
@@ -1486,15 +2431,32 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
       // 2. 下拉箭头位图（18×10, 4bpp）- 必须在 flushWidget 之前
       const ddIconW = 18, ddIconH = 10;
       const ddIconX = w.width - ddIconW - ddRadius;
-      const ddIconY = (ddItemH - ddIconH + 1) / 2;
+      const ddIconY = (ddOptionH - ddIconH + 1) / 2;
       R.drawIcon(surf, ddIconX, ddIconY, ddTextCol, alpha, R.DROPDOWN_ICON);
       flushWidget(surf);
-      // 3. 选中项文本（flush 之后，用 fillText 直接画到 canvas）
+      // 3. 选中项文本（flush 之后，用 DOM 叠加）
       const ddTextX = ddItemPad;
-      const ddTextY = Math.round((ddOptionH - ddFontHeight + 1) / 2);
-      const ddText = ddOptions.length > 0 ? ddOptions[0] : '';
-      if (ddText) {
-        overlayText({ text: ddText, color: (w.textColor || '#000000'), fontSize: ddFontSize, fontFamily: (w.fontFamily || ''), align: 'LEFT_MID', x: ddTextX, y: 0, w: w.width - ddTextX - ddIconW - ddRadius, h: ddOptionH });
+      const ddSelText = ddOptions.length > 0 ? ddOptions[ddSelected] : '';
+      if (ddSelText) {
+        overlayText({ text: ddSelText, color: (w.textColor || '#000000'), fontSize: ddFontSize, fontFamily: (w.fontFamily || ''), align: 'LEFT_MID', x: ddTextX, y: 0, w: w.width - ddTextX - ddIconW - ddRadius, h: ddOptionH });
+      }
+      // 4. 展开列表：在头部下方用 DOM 叠加绘制
+      if (ddState.expanded && ddOptions.length > 0) {
+        const ddVisibleRows = Math.max(1, w.visibleRows != null ? w.visibleRows : 5);
+        const listH = Math.min(ddOptions.length, ddVisibleRows) * ddItemH;
+        const listWrap = document.createElement('div');
+        listWrap.style.cssText = `position:absolute;left:0;top:${ddOptionH * z}px;width:${w.width * z}px;height:${listH * z}px;pointer-events:auto;box-sizing:border-box;overflow:hidden;z-index:100;background:${w.bgColor || '#FFFFFF'};border:${ddBorderW * z}px solid ${w.borderColor || '#000000'};border-top:none;border-radius:0 0 ${ddRadius * z}px ${ddRadius * z}px;`;
+        for (let i = 0; i < ddOptions.length; i++) {
+          const itemY = i * ddItemH;
+          if (itemY + ddItemH > listH) break;
+          const itemEl = document.createElement('div');
+          const isSel = i === ddSelected;
+          itemEl.style.cssText = `position:absolute;left:0;top:${itemY * z}px;width:${w.width * z}px;height:${ddItemH * z}px;box-sizing:border-box;display:flex;align-items:center;padding-left:${ddItemPad * z}px;padding-right:${ddItemPad * z}px;background:${isSel ? (w.selectedColor || '#808080') : 'transparent'};color:${w.textColor || '#000000'};font-size:${ddFontSize * z}px;font-family:${ddFontFamily};white-space:nowrap;overflow:hidden;`;
+          itemEl.textContent = ddOptions[i];
+          itemEl.dataset.ddIndex = String(i);
+          listWrap.appendChild(itemEl);
+        }
+        el.appendChild(listWrap);
       }
       break;
     }
@@ -1510,6 +2472,7 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
       const { surf, R } = createWidgetCanvas(el, w, z);
       el.style.opacity = 1;
       const alpha = w.alpha != null ? w.alpha : 255;
+      const rState = getRuntimeState(w);
       const rOptions = (w.options || '').split('\n').filter(o => o.length > 0);
       const rFontSize = w.fontSize || 14;
       // sgl_font_get_height: 字体文件中 font_height 通常等于 fontSize
@@ -1534,8 +2497,9 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
       const rTextX = rBorderW + rRadius + 2;
       // text_y_off = (item_h - font_h) / 2
       const rTextYOff = Math.floor((rItemH - rFontHeight) / 2);
-      // selected = 0, scroll_y = 0
-      const rScrollY = 0;
+      // 运行时 selectedIndex 决定滚动位置，使选中项居中于选中带
+      const rSelected = Math.max(0, Math.min(rOptions.length - 1, rState.selectedIndex || 0));
+      const rScrollY = (rState.scrollY != null ? rState.scrollY : 0) - rSelected * rItemH;
       // 1. 背景
       R.drawRect(surf, 0, 0, w.width - 1, w.height - 1, {
         alpha: alpha, border: rBorderW, border_alpha: alpha, border_mask: 0,
@@ -1615,6 +2579,7 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
       const { surf, R } = createWidgetCanvas(el, w, z);
       el.style.opacity = 1;
       const alpha = w.alpha != null ? w.alpha : 255;
+      const tlState = getRuntimeState(w);
       const tlFontSize = w.fontSize || 12;
       const ITEM_SPACE = 3;
       const ITEM_PAD = 3;
@@ -1642,7 +2607,7 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
 
       let tlVisibleCount = 0;
       if (tlOptions.length > 0) {
-        const tlSelected = -1; // SGL 默认 item_selected = -1，未选中任何项
+        const tlSelected = tlState.selectedIndex != null ? tlState.selectedIndex : -1; // SGL 默认 item_selected = -1，未选中任何项
         const tlInnerH = w.height - 2 * tlBorder;
         tlVisibleCount = Math.min(tlOptions.length, Math.max(1, Math.floor(tlInnerH / tlItemHeight)));
 
@@ -1746,7 +2711,8 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
       const alpha = w.alpha != null ? w.alpha : 255;
       const winFontSize = w.fontSize != null ? w.fontSize : 14;
       const winFontBppVal = w.fontBpp || 4;
-      const winFontFamilyVal = w.fontFamily || '';
+      const winEffFamily = resolveEffectiveFontFamily(w.fontFamily);
+      const winFontPath = resolveFontPath(winEffFamily);
       const winBorder = w.borderWidth != null ? w.borderWidth : 0;
       const winRadius = w.radius || 0;
       const winW = w.width;
@@ -1755,7 +2721,7 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
       const winBorderCol = R.hexToColor(w.borderColor || '#000000');
       // SGL: title_h = sgl_max3(obj->radius, win->title_h, sgl_font_get_height(win->title_font))
       // 必须优先使用已加载的真实字模 font_height，否则设计器与仿真 title_h 不一致会导致文本错位
-      const winSglFontForMetrics = getSglFontData(winFontFamilyVal, winFontSize, winFontBppVal);
+      const winSglFontForMetrics = getSglFontData(winFontPath, winFontSize, winFontBppVal);
       const winFontHeight = winSglFontForMetrics ? winSglFontForMetrics.font_height : winFontSize;
       const winTitleH = Math.max(winRadius, w.titleHeight || 0, winFontHeight);
       const winTitleTextCol = R.hexToColor(w.titleTextColor || '#000000');
@@ -1802,7 +2768,7 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
       const winTitleAlign = w.titleAlign || 'LEFT_MID';
       const titleStr = w.titleText || '窗口标题';
       const winHasFont = widgetHasFont(w);
-      const winCssFamily = getCssFontStack(winFontFamilyVal);
+      const winCssFamily = getCssFontStack(winEffFamily);
 
       if (winHasFont && titleStr) {
         // 有字体：使用 SGL 字模数据像素级渲染（真正 WYSIWYG）
@@ -1813,7 +2779,7 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
         };
         const titleAlignId = alignStrToNum(winTitleAlign);
         // 复用前面计算 title_h 时获取的字模数据
-        const winSglFont = winSglFontForMetrics || getSglFontData(winFontFamilyVal, winFontSize, winFontBppVal);
+        const winSglFont = winSglFontForMetrics || getSglFontData(winFontPath, winFontSize, winFontBppVal);
         let titleDrawX, titleDrawY;
         if (winSglFont) {
           // 使用真实字模宽高计算位置 + 字模数据渲染
@@ -1839,7 +2805,7 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
       if (!winHasFont) {
         // 无字体：DOM 叠加（系统默认字体）
         const winTitlePad = winTitleAlign === 'LEFT_MID' ? winRadius : 0;
-        overlayText({ text: titleStr, color: (w.titleTextColor || '#000000'), fontSize: winFontSize, fontFamily: winFontFamilyVal, align: winTitleAlign, x: winBorder + winTitlePad, y: winBorder, w: winW - 1 - winBorder - winTitleH - (winBorder + winTitlePad), h: winTitleH });
+        overlayText({ text: titleStr, color: (w.titleTextColor || '#000000'), fontSize: winFontSize, fontFamily: winEffFamily, align: winTitleAlign, x: winBorder + winTitlePad, y: winBorder, w: winW - 1 - winBorder - winTitleH - (winBorder + winTitlePad), h: winTitleH });
       }
       break;
     }
@@ -1969,7 +2935,9 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
       el.style.opacity = 1;
       const alpha = w.alpha != null ? w.alpha : 255;
       const scDirect = w.direct != null ? w.direct : 1; // 默认垂直
-      const scValue = w.value != null ? w.value : 0;
+      // scroll 使用独立的 scrollVal（预览页通过拖拽产生），若未设置则回退到 value 属性
+      const scrollValRt = getRuntimeValue(w, 'scrollVal', null);
+      const scValue = (scrollValRt != null) ? Number(scrollValRt) : (w.value != null ? Number(w.value) : 0);
       const scWidth = w.width != null ? w.width : 10; // SGL_SCROLL_DEFAULT_WIDTH（滚动条宽度属性）
       const scColor = R.hexToColor(w.color || '#FFFFFF'); // SGL_THEME_COLOR
       const scBorderColor = R.hexToColor(w.borderColor || '#000000'); // SGL_THEME_BORDER_COLOR
@@ -2112,7 +3080,9 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
       const nkBtnBorderCol = R.hexToColor(w.btnBorderColor || '#000000');
       const nkBtnRadius = w.btnRadius || 0;
       const nkFontSize = w.fontSize || 14;
-      const nkFontFamily = getCssFontStack(w.fontFamily || '');
+      const nkEffFamily = resolveEffectiveFontFamily(w.fontFamily);
+      const nkFontPath = resolveFontPath(nkEffFamily);
+      const nkFontFamily = getCssFontStack(nkEffFamily);
       // SGL 按键字符表 kbd_digits[5][4]，OK 用 ASCII 13
       const kbdDigits = [
         ['+', '-', '*', '/'],
@@ -2172,7 +3142,7 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
       //    无字模时 fallback: Canvas fillText 近似 / DOM span 叠加（系统默认字体）
       const nkHasFont = widgetHasFont(w);
       const nkFontBpp = w.fontBpp != null ? w.fontBpp : 4;
-      const nkSglFont = nkHasFont ? getSglFontData(w.fontFamily || '', nkFontSize, nkFontBpp) : null;
+      const nkSglFont = nkHasFont ? getSglFontData(nkFontPath, nkFontSize, nkFontBpp) : null;
       const zeroWidth = nkSglFont ? R.fontGetStringWidth('0', nkSglFont) : R.measureTextWidth('0', nkFontSize, nkFontFamily);
       const fontHeight = nkSglFont ? R.fontGetHeight(nkSglFont) : nkFontSize;
       const textOffsetX = Math.floor((boxW - zeroWidth) / 2);
@@ -2229,7 +3199,9 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
       const kbTextCol = R.hexToColor(w.textColor || '#000000');
       const kbFontSize = w.fontSize || 14;
       const kbFontBpp = w.fontBpp != null ? w.fontBpp : 4;
-      const kbFontFamily = getCssFontStack(w.fontFamily || '');
+      const kbEffFamily = resolveEffectiveFontFamily(w.fontFamily);
+      const kbFontPath = resolveFontPath(kbEffFamily);
+      const kbFontFamily = getCssFontStack(kbEffFamily);
       const bodyW = w.width, bodyH = w.height;
       // SGL DRAW_INIT: key_margin = max(body_w/128, 1) if 0; btn_radius = max(key_margin, 2) if 0
       let kbKeyMargin = w.btnMargin != null ? w.btnMargin : 0;
@@ -2296,7 +3268,7 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
       }
 
       // 有字模: drawStringSGL 像素级渲染到 buf32（flush 前），与 SGL 运行时一致
-      const kbSglFont = kbHasFont ? getSglFontData(w.fontFamily || '', kbFontSize, kbFontBpp) : null;
+      const kbSglFont = kbHasFont ? getSglFontData(kbFontPath, kbFontSize, kbFontBpp) : null;
       if (kbSglFont) {
         const kbFontHeight = R.fontGetHeight(kbSglFont);
         for (const btn of textBtns) {
@@ -2999,14 +3971,15 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
       const alRadius = w.radius != null ? w.radius : 0;
       const alAlign = w.align || 'CENTER';
       const alFontSize = w.fontSize || 14;
-      const alFontFamily = w.fontFamily || '';
+      const alEffFamily = resolveEffectiveFontFamily(w.fontFamily);
+      const alFontPath = resolveFontPath(alEffFamily);
       const alFontBpp = w.fontBpp || 4;
       const alAngle = w.angle || 0;
       const alOffsetX = w.offsetX || 0;
       const alOffsetY = w.offsetY || 0;
       const alAlpha = w.alpha != null ? w.alpha : 255;
       const alHasFont = widgetHasFont(w);
-      const alCssFamily = getCssFontStack(alFontFamily);
+      const alCssFamily = getCssFontStack(alEffFamily);
 
       if (alAngle && alAngle !== 0) {
         // SGL arc_label 旋转模式渲染（与 editor.js 一致）
@@ -3044,7 +4017,7 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
           const alTbCanvas = document.createElement('canvas');
           const alTbSurf = R.createSurface(alTbCanvas, alBufW, alBufH, z);
           alTbCanvas.style.cssText = `position:absolute;left:0;top:0;width:${alTbSurf.w}px;height:${alTbSurf.h}px;pointer-events:none;`;
-          const alTbSglFont = getSglFontData(alFontFamily, alFontSize, alFontBpp);
+          const alTbSglFont = getSglFontData(alFontPath, alFontSize, alFontBpp);
           if (alTbSglFont) {
             // 有字模：像素级渲染（与 SGL 运行时一致）
             R.drawStringSGL(alTbSurf, alMargin, alMargin, alText, R.hexToColor(alTextColor), alAlpha, alTbSglFont);
@@ -3073,7 +4046,7 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
         if (alHasFont) {
           // 有字模：SGL drawStringSGL 像素级渲染（与 SGL 运行时一致）
           const coords = { x1: 0, y1: 0, x2: w.width - 1, y2: w.height - 1 };
-          const alSglFont = getSglFontData(alFontFamily, alFontSize, alFontBpp);
+          const alSglFont = getSglFontData(alFontPath, alFontSize, alFontBpp);
           if (alSglFont) {
             const pos = R.getTextPosSGL(coords, alText, alSglFont, 0, alignStrToNum(alAlign));
             R.drawStringSGL(surf, pos.x + alOffsetX, pos.y + alOffsetY, alText, R.hexToColor(alTextColor), alAlpha, alSglFont);
@@ -3089,7 +4062,7 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
             text: alText,
             color: alTextColor,
             fontSize: alFontSize,
-            fontFamily: alFontFamily,
+            fontFamily: alEffFamily,
             align: alAlign,
             x: 0, y: 0, w: w.width, h: w.height,
             offX: alOffsetX,
@@ -3097,6 +4070,102 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
           });
         }
       }
+      break;
+    }
+
+    case 'statusbar': {
+      // SGL statusbar: 半透明背景 + 左右槽位文本，用 SGLRenderer 像素级渲染
+      const { surf, R } = createWidgetCanvas(el, w, z);
+      el.style.opacity = 1;
+      const alpha = w.alpha != null ? w.alpha : 255;
+      const sbFontSize = w.fontSize || 14;
+      const sbFontHeightVal = sbFontSize + 8;
+      const sbBg = R.hexToColor(w.bgColor || '#141414');
+      const sbBgAlpha = w.bgAlpha != null ? w.bgAlpha : 128;
+      const sbRadius = w.radius || 0;
+      const sbLeftMargin = w.leftMargin != null ? w.leftMargin : 5;
+      const sbRightMargin = w.rightMargin != null ? w.rightMargin : 5;
+      const sbSlotSpace = w.slotSpace != null ? w.slotSpace : 4;
+      const sbSlotColor = w.slotColor || '#ffffff';
+      const sbSlotAlpha = w.slotAlpha != null ? w.slotAlpha : 255;
+      const sbFontFamily = getCssFontStack(w.fontFamily || '');
+      const parseSlotsStr = (s) => (typeof s === 'string' ? s.split(';').map(x => x.trim()).filter(x => x.length > 0) : []);
+      const sbLeftSlots = parseSlotsStr(w.leftSlots || '');
+      const sbRightSlots = parseSlotsStr(w.rightSlots || '');
+      // 半透明背景
+      R.drawFillRect(surf, 0, 0, w.width - 1, w.height - 1, sbRadius, sbBg, Math.round(sbBgAlpha * alpha / 255));
+      flushWidget(surf);
+      // 垂直居中
+      const sbPosY = Math.round((w.height - sbFontHeightVal) / 2);
+      const slotAlphaEff = Math.round(sbSlotAlpha * alpha / 255);
+      // 左侧槽位（从左到右）
+      let leftX = sbLeftMargin;
+      for (let i = 0; i < sbLeftSlots.length && i < 4; i++) {
+        const slotText = sbLeftSlots[i];
+        if (!slotText) continue;
+        overlayTextAt({ text: slotText, color: sbSlotColor, fontSize: sbFontSize, fontFamily: (w.fontFamily || ''), x: leftX, y: sbPosY, align: 'LEFT' });
+        leftX += R.stringWidth(slotText, sbFontSize) + sbSlotSpace;
+      }
+      // 右侧槽位（从右到左）
+      let rightX = w.width - sbRightMargin;
+      for (let i = 0; i < sbRightSlots.length && i < 8; i++) {
+        const slotText = sbRightSlots[i];
+        if (!slotText) continue;
+        const tw = R.stringWidth(slotText, sbFontSize);
+        rightX -= tw;
+        overlayTextAt({ text: slotText, color: sbSlotColor, fontSize: sbFontSize, fontFamily: (w.fontFamily || ''), x: rightX, y: sbPosY, align: 'LEFT' });
+        rightX -= sbSlotSpace;
+      }
+      break;
+    }
+
+    case 'launcher': {
+      // SGL launcher: 预览模式简化为网格应用启动器
+      // 属性：iconSize, gridCol, gridRow, marginLeft/Top/Right/Bottom, labelColor, navigbarColor, currentPage, fontFamily, fontSize
+      const { surf, R } = createWidgetCanvas(el, w, z);
+      el.style.opacity = 1;
+      const alpha = w.alpha != null ? w.alpha : 255;
+      const lnBg = R.hexToColor(w.bgColor || '#1e1e2e');
+      const lnNavCol = w.navigbarColor || '#3d3d5c';
+      const lnLabelCol = w.labelColor || '#ffffff';
+      const lnIconSize = w.iconSize != null ? w.iconSize : 48;
+      const lnGridCol = Math.max(1, w.gridCol != null ? w.gridCol : 3);
+      const lnGridRow = Math.max(1, w.gridRow != null ? w.gridRow : 4);
+      const lnMarginL = w.marginLeft != null ? w.marginLeft : 10;
+      const lnMarginR = w.marginRight != null ? w.marginRight : 10;
+      const lnMarginT = w.marginTop != null ? w.marginTop : 10;
+      const lnMarginB = w.marginBottom != null ? w.marginBottom : 10;
+      const lnNavH = 24;
+      const lnFontSize = w.fontSize || 12;
+      const lnFontFamily = getCssFontStack(w.fontFamily || '');
+      const lnRadius = w.radius || 8;
+      // 背景
+      R.drawFillRect(surf, 0, 0, w.width - 1, w.height - 1, lnRadius, lnBg, alpha);
+      flushWidget(surf);
+      // 内容区（扣除导航栏）
+      const contentH = w.height - lnNavH - lnMarginB;
+      const contentW = w.width - lnMarginL - lnMarginR;
+      const cellW = Math.floor(contentW / lnGridCol);
+      const cellH = Math.floor((contentH - lnMarginT) / lnGridRow);
+      const iconCount = lnGridCol * lnGridRow;
+      for (let i = 0; i < iconCount; i++) {
+        const c = i % lnGridCol;
+        const r = Math.floor(i / lnGridCol);
+        const cx = lnMarginL + c * cellW + Math.floor(cellW / 2);
+        const cy = lnMarginT + r * cellH + Math.floor(cellH / 2) - Math.floor(lnFontSize / 2);
+        const ix = cx - Math.floor(lnIconSize / 2);
+        const iy = cy - Math.floor(lnIconSize / 2);
+        // 图标占位（圆角矩形）
+        R.drawFillRect(surf, ix, iy, ix + lnIconSize - 1, iy + lnIconSize - 1, 8, R.hexToColor('#8b5cf6'), alpha);
+        // 标签
+        overlayTextAt({ text: 'App ' + (i + 1), color: lnLabelCol, fontSize: lnFontSize, fontFamily: (w.fontFamily || ''), x: lnMarginL + c * cellW, y: iy + lnIconSize + 2, w: cellW, h: lnFontSize + 2, align: 'CENTER' });
+      }
+      // 底部导航栏
+      R.drawFillRect(surf, 0, w.height - lnNavH, w.width - 1, w.height - 1, 0, R.hexToColor(lnNavCol), alpha);
+      flushWidget(surf);
+      const lnPage = Math.max(0, w.currentPage != null ? w.currentPage : 0);
+      const dots = '●'.repeat(Math.max(1, lnPage + 1));
+      overlayText({ text: dots, color: lnLabelCol, fontSize: lnFontSize, fontFamily: (w.fontFamily || ''), align: 'CENTER', x: 0, y: w.height - lnNavH, w: w.width, h: lnNavH });
       break;
     }
 
@@ -3129,6 +4198,8 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
 
 function $(id) { return document.getElementById(id); }
 
+// 预览页专有事件绑定（仅 preview.html 执行，避免编辑器中元素不存在导致 TypeError）
+if (typeof document !== 'undefined' && document.body && document.body.classList.contains('page-preview')) {
 document.getElementById('btn-prev-page').addEventListener('click', () => { currentIndex--; render(); });
 document.getElementById('btn-next-page').addEventListener('click', () => { currentIndex++; render(); });
 
@@ -3325,3 +4396,4 @@ document.addEventListener('keydown', e => {
 });
 
 render();
+} // end if page-preview

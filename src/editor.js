@@ -1,3 +1,4 @@
+import './sgl_renderer.js';
 import { AppState, navigate, showToast, initNav, downloadFile, escapeHtml, escapeAttr, setupUpdateChecker, setupWindowControls } from './app.js';
 import { SGL_WIDGET_TYPES, WIDGET_CATEGORIES, PROP_META, WIDGET_EVENTS, WIDGET_DEFAULTS, validateProjectFonts, validateSpritePixmaps, getWidgetVarName, setCodegenLogCallback } from './sgl_api.js';
 import { getCheckboxIconDataUrl } from './checkbox_icon.js';
@@ -8,10 +9,13 @@ import {
   setFontLoadCallback, preloadProjectFonts, getCssFontStack, getFontBppCss, applyBppFilter,
   hexToRgba, mixColors, getWidgetAbsPos, sortWidgetsByHierarchy, flexAlign, textAlignCss,
   toAssetUrl, pixmapFormatHasAlpha, getOpaqueImageUrl, registerFontFile,
-  getPixmapImageData, getCachedPixmapImageData, preloadPixmapImage, getSglFontData, loadSglFontData, getFontError, hasLocalFontCache, restoreFontCacheSync
+  getPixmapImageData, getCachedPixmapImageData, preloadPixmapImage,
+  getSglFontData, loadSglFontData, getFontError, hasLocalFontCache, restoreFontCache, restoreFontCacheFast,
+  validateFontData, removeSglFontData
 } from './render_common.js';
 import { setLogger as setUpdaterLogger } from './updater.js';
 import { initAIPanel } from './ai_panel.js';
+import { setupGlobalInteraction, render as previewRender, setPreviewPageIndex } from './preview.js';
 import qrcodeGenerator from 'qrcode-generator';
 
 initNav('editor');
@@ -42,6 +46,48 @@ function resolveFontPath(family) {
   const font = fonts.find(f => f.name === family);
   if (font) return font.path;
   return family;
+}
+
+// 检查一个字体族名/路径是否在项目字体资源中存在（按路径/文件名/字体名三种匹配）
+function isFontMatchedInProject(family, fonts) {
+  if (!family) return false;
+  const fileName = family.replace(/[/\\]/g, '/').split('/').pop();
+  return (fonts || []).some(f => f.path === family || f.name === fileName || f.name === family);
+}
+
+// 获取控件实际使用的字体族名/路径：
+//   1) 未设置 / default → fallback 到项目第一个字体
+//   2) 设置了但指向的字体已被从资源管理器删除 → 同样 fallback 到项目第一个字体（用户典型流程：删旧字体→添加新字体，此时仍希望"能用新字体"）
+function resolveEffectiveFontFamily(family) {
+  const fonts = (AppState.project.resources && AppState.project.resources.fonts) || [];
+  if (fonts.length === 0) return family;
+  // 空 / default → 直接 fallback
+  if (!family || family === 'default') return fonts[0].path || fonts[0].name || '';
+  // 非空但在资源里找不到匹配 → 也 fallback（典型：用户把原来的字体删了）
+  if (!isFontMatchedInProject(family, fonts)) return fonts[0].path || fonts[0].name || '';
+  return family;
+}
+
+// 检查控件是否选择了有效字体（经过 resolveEffectiveFontFamily 处理后，在项目资源里能匹配到就算有）
+function widgetHasFont(widget) {
+  const fonts = (AppState.project.resources && AppState.project.resources.fonts) || [];
+  if (fonts.length === 0) return false;
+  const family = resolveEffectiveFontFamily(widget.fontFamily);
+  if (!family || family === 'default') return false;
+  return isFontMatchedInProject(family, fonts);
+}
+
+// 判断控件类型是否需要字体（有 fontFamily 属性且有文本内容）
+function widgetNeedsFont(widget) {
+  const typeDef = SGL_WIDGET_TYPES.find(t => t.type === widget.type);
+  if (!typeDef || !Array.isArray(typeDef.properties) || !typeDef.properties.includes('fontFamily')) return false;
+  // polygon 没有文本时不需要字体
+  if (widget.type === 'polygon' && !widget.text) return false;
+  // statusbar 没有槽位文本时不需要字体
+  if (widget.type === 'statusbar' && !widget.leftSlots && !widget.rightSlots) return false;
+  // 有 text/options/titleText 等文本属性的控件
+  const textFields = ['text', 'options', 'titleText', 'msgText', 'leftBtnText', 'rightBtnText', 'leftSlots', 'rightSlots', 'textarea'];
+  return textFields.some(f => widget[f] && String(widget[f]).trim().length > 0);
 }
 
 // 递归收集控件及其子控件需要生成的字模字符
@@ -194,13 +240,26 @@ async function preloadSglFontData() {
       return;
     }
     
-    // 判断加载需求：检查内存缓存和 localStorage 缓存
+    // 判断加载需求：检查内存缓存（含一致性校验）和 localStorage 缓存
     let needsBackendGen = false;
     let allInMemory = true;
     for (const [key, charSet] of fontTextMap) {
       const cachedFont = window.SGLRenderer.getFontData(key);
       if (cachedFont) {
-        // 内存有缓存，检查是否包含所需字符
+        // 1. 内存字模一致性校验（bitmap_index 范围），无效则视为没有缓存
+        const isDataValid = validateFontData(cachedFont);
+        if (!isDataValid) {
+          console.log(`[preloadSglFontData] 内存字模一致性校验失败 key=${key}，移除并重新加载`);
+          window.SGLRenderer.removeFontData(key);
+          allInMemory = false;
+          const [fam, sz, bpp] = key.split('|');
+          const symbols = Array.from(charSet).join('');
+          if (!hasLocalFontCache(fam, parseInt(sz), parseInt(bpp), symbols)) {
+            needsBackendGen = true;
+          }
+          continue;
+        }
+        // 2. 检查是否包含所需字符
         let memMissingChars = false;
         for (const ch of charSet) {
           const unicode = ch.charCodeAt(0);
@@ -230,7 +289,7 @@ async function preloadSglFontData() {
     }
 
     if (allInMemory) {
-      logMessage('所有字模已在内存中，跳过预加载', 'info');
+      logMessage('所有字模已在内存中且校验通过，跳过预加载', 'info');
       return;
     }
 
@@ -264,18 +323,22 @@ async function preloadSglFontData() {
           })
         );
       } else {
-        let needsReload = false;
-        for (const ch of charSet) {
-          const unicode = ch.charCodeAt(0);
-          if (!fontContainsChar(cachedFont, unicode)) {
-            needsReload = true;
-            break;
+        // 检查内存缓存一致性（bitmap index 范围 + 字符覆盖），任意不满足则重新加载
+        let needsReload = !validateFontData(cachedFont);
+        if (!needsReload) {
+          for (const ch of charSet) {
+            const unicode = ch.charCodeAt(0);
+            if (!fontContainsChar(cachedFont, unicode)) {
+              needsReload = true;
+              break;
+            }
           }
         }
         if (needsReload) {
           const [fam, sz, bpp] = key.split('|');
           const symbols = Array.from(charSet).join('');
           const fontName = fam.split(/[/\\]/).pop() || fam;
+          console.log(`[preloadSglFontData] 内存缓存无效，重新加载 key=${key}`);
           window.SGLRenderer.removeFontData(key);
           promises.push(
             loadSglFontData(fam, parseInt(sz), parseInt(bpp), symbols).then(result => {
@@ -291,7 +354,7 @@ async function preloadSglFontData() {
             })
           );
         } else {
-          // 已缓存的字体也计入总数
+          // 已缓存且有效，计入总数
           loadedCount++;
         }
       }
@@ -315,6 +378,8 @@ async function preloadSglFontData() {
 // 项目加载后预加载所有字体资源（FontFace + SGL 字模数据）
 // 延迟到项目初始化完成后执行，避免与 openProject 中的预加载重复
 let _initialFontPreloadDone = false;
+// 记录已提示过"缺少字体"的控件 id，避免每次 renderCanvas 都重复刷警告
+const _reportedMissingFontWidget = new Set();
 setTimeout(() => {
   if (!_initialFontPreloadDone && AppState.project && AppState.project.resources && AppState.project.resources.fonts && AppState.project.resources.fonts.length > 0) {
     _initialFontPreloadDone = true;
@@ -782,6 +847,11 @@ function renderCanvas() {
   const page = AppState.getCurrentPage();
   if (!page) return;
 
+  // 同步当前项目颜色深度到 SGLRenderer
+  if (window.SGLRenderer && window.SGLRenderer.setColorDepth) {
+    window.SGLRenderer.setColorDepth(AppState.project.color_depth || '16bit');
+  }
+
   // 取消之前的分批渲染
   if (_renderCanvasPending) {
     _renderCanvasPending = false;
@@ -1138,6 +1208,7 @@ function getChildWidgets(wId, page) {
 }
 
 function drawWidget(w, parentEl) {
+  try {
   const page = AppState.getCurrentPage();
   if (!page) return;
 
@@ -1221,9 +1292,12 @@ function drawWidget(w, parentEl) {
     el.style.height = (domH * z) + 'px';
   }
 
-  // 选中状态：子控件和父控件的选中样式不同
+  // 预览模式：不显示任何编辑器装饰（选中框/手柄/锁定图标/子控件虚线/指示器）
+  const inPreview = typeof _previewMode !== 'undefined' && _previewMode;
+
+  // 选中状态：子控件和父控件的选中样式不同（预览模式下跳过）
   const isLocked = w.locked;
-  if (AppState.selectedWidgetIds.has(w.id)) {
+  if (!inPreview && AppState.selectedWidgetIds.has(w.id)) {
     if (w.parentId) {
       // 子控件选中：用绿色虚线区别于父控件
       el.classList.add('child-selected');
@@ -1234,7 +1308,7 @@ function drawWidget(w, parentEl) {
       el.classList.add('selected');
     }
   }
-  if (isLocked) {
+  if (!inPreview && isLocked) {
     el.classList.add('locked-widget');
     // 锁定图标覆盖
     const lockIcon = document.createElement('div');
@@ -1244,9 +1318,9 @@ function drawWidget(w, parentEl) {
   }
 
   // 如果有父对象且未被选中，添加子控件视觉标识（用outline避免影响border渲染），并裁剪超出父区域的部分
-  // 选中的子控件优先显示选中框，不显示子控件虚线
+  // 选中的子控件优先显示选中框，不显示子控件虚线（预览模式下全部跳过）
   if (w.parentId) {
-    if (!AppState.selectedWidgetIds.has(w.id)) {
+    if (!inPreview && !AppState.selectedWidgetIds.has(w.id)) {
       el.style.outline = '1px dashed rgba(139, 92, 246, 0.5)';
       el.style.outlineOffset = '0px';
     }
@@ -1260,9 +1334,8 @@ function drawWidget(w, parentEl) {
       if (clipTop > 0 || clipLeft > 0 || clipRight > 0 || clipBottom > 0) {
         el.style.clipPath = `inset(${clipTop * z}px ${clipRight * z}px ${clipBottom * z}px ${clipLeft * z}px)`;
       }
-      // 如果子控件完全在父控件可视区域外，在父控件边缘显示指示器
-      // 拖动/调整大小过程中不创建指示器，避免频繁重建导致残留；mouseup 后的渲染会创建
-      const completelyOutside = (w.x + w.width <= 0 || w.y + w.height <= 0 || w.x >= parent.width || w.y >= parent.height);
+      // 如果子控件完全在父控件可视区域外，在父控件边缘显示指示器（预览模式跳过）
+      const completelyOutside = !inPreview && (w.x + w.width <= 0 || w.y + w.height <= 0 || w.x >= parent.width || w.y >= parent.height);
       if (completelyOutside && !isDragging && !isResizing) {
         const parentEl = canvas.querySelector(`[data-id="${w.parentId}"]`);
         if (parentEl) {
@@ -1348,22 +1421,31 @@ function drawWidget(w, parentEl) {
   // WYSIWYG 渲染（scroll 绑定时传入重算的 DOM 尺寸）
   renderWidgetVisual(el, w, { domW, domH });
 
+  // 需要字体的控件缺少字体：仅控制台 + 日志面板 warn（每个控件只报一次），运行/导出时会正式报错
+  if (!inPreview && widgetNeedsFont(w) && !widgetHasFont(w)) {
+    if (!_reportedMissingFontWidget.has(w.id)) {
+      _reportedMissingFontWidget.add(w.id);
+      const msg = `控件 ${w.name || ('(id=' + w.id + ')')} (${w.type}) 缺少字体资源，请在资源管理器添加字体后设置控件的 fontFamily。导出代码 / 运行时会报错。`;
+      console.warn('[缺少字体]', msg);
+      logMessage(msg, 'warn');
+    }
+  }
+
   canvas.appendChild(el);
 
-  // 为主选中控件添加拖拽缩放手柄（放在 renderWidgetVisual 之后，避免被清空）
-  // 锁定控件也显示手柄以表明被选中，但在 handle 的 mousedown 中阻止实际操作
-  if (AppState.selectedWidgetId === w.id) {
-    // 使用 el 的实际渲染尺寸来放置手柄，确保手柄紧贴控件边框
+  // 为主选中控件添加拖拽缩放手柄（预览模式跳过）
+  if (!inPreview && AppState.selectedWidgetId === w.id) {
     const actualW = el.offsetWidth / z;
     const actualH = el.offsetHeight / z;
     addResizeHandles(el, absPos.x, absPos.y, actualW, actualH, z, isLocked);
-    // polygon 控件：额外添加顶点拖拽手柄（append 到 canvas 上，避免 el 定位偏移）
     if (w.type === 'polygon') {
       addPolygonVertexHandles(canvas, w, absPos, z, isLocked);
     }
   }
 
   el.addEventListener('mousedown', (e) => {
+    // 预览模式：所有 editor 的 mousedown 逻辑交给预览交互系统处理（pointer 监听）
+    if (typeof _previewMode !== 'undefined' && _previewMode) return;
     if (e.target.classList.contains('resize-handle') || e.target.classList.contains('vertex-handle')) return;
     // 右键(button===2)交给 contextmenu 事件处理选中, 这里不干预
     if (e.button === 2) return;
@@ -1398,6 +1480,19 @@ function drawWidget(w, parentEl) {
       }
     });
   });
+  } catch (e) {
+    console.error('绘制控件失败:', w?.type, w?.name || w?.id, e);
+    // 失败至少创建一个占位，避免整页渲染中断
+    try {
+      const el = document.createElement('div');
+      el.className = 'widget widget-error';
+      const z = AppState.zoom;
+      let absPos = getWidgetAbsPos(w, AppState.getCurrentPage?.()) || { x: w.x || 0, y: w.y || 0 };
+      el.style.cssText = `position:absolute;left:${absPos.x * z}px;top:${absPos.y * z}px;width:${(w.width || 100) * z}px;height:${(w.height || 50) * z}px;background:rgba(239,68,68,0.1);border:1px solid #ef4444;color:#ef4444;font-size:12px;padding:4px;box-sizing:border-box;pointer-events:auto;z-index:10;`;
+      el.textContent = `绘制失败: ${w?.type || ''} ${w?.name || '(id=' + (w?.id || '') + ')'} - ${e?.message || e}`;
+      canvas.appendChild(el);
+    } catch (_) {}
+  }
 }
 
 function renderWidgetVisual(el, w, renderSize) {
@@ -1461,16 +1556,6 @@ function renderWidgetVisual(el, w, renderSize) {
       offset_x += chWidth;
     }
     return Math.max(1, lines);
-  }
-
-  // 检查控件是否选择了有效字体（项目已添加该字体且控件 fontFamily 非空非 default）
-  function widgetHasFont(widget) {
-    const fonts = (AppState.project.resources && AppState.project.resources.fonts) || [];
-    if (fonts.length === 0) return false;
-    const family = widget.fontFamily;
-    if (!family || family === 'default') return false;
-    const fileName = family.replace(/[/\\]/g, '/').split('/').pop();
-    return fonts.some(f => f.path === family || f.name === fileName);
   }
 
   // 通用 DOM 文本叠加：在 el 上叠加一个 span 显示文本
@@ -1843,48 +1928,64 @@ function renderWidgetVisual(el, w, renderSize) {
 
     case 'button': {
       const btnPixmap = p('pixmap', '');
+      const btnFontSize = p('fontSize', 14);
+      const btnFontBpp = p('fontBpp', 4);
+      const btnEffFamily = resolveEffectiveFontFamily(p('fontFamily', ''));
+      const btnFontPath = resolveFontPath(btnEffFamily);
+      const btnAlign = p('align', 'CENTER');
+      const btnText = p('text', '按钮');
+      const btnTextColor = p('textColor', '#ffffff');
+      const btnHasFont = widgetHasFont(w);
+      const btnOffX = p('textOffsetX', 0);
+      const btnOffY = p('textOffsetY', 0);
       if (btnPixmap) {
         const pixmapFormat = p('pixmapFormat', 'RGB565');
         const hasAlpha = pixmapFormatHasAlpha(pixmapFormat);
         const btnBg = p('bgColor', p('color', '#8b5cf6'));
         const imgData = getCachedPixmapImageData(btnPixmap);
+        const surf = sglSurface(w.width, w.height);
         if (imgData) {
           // 图片已缓存：SGLRenderer 像素级渲染
-          const surf = sglSurface(w.width, w.height);
           const bgColor = hasAlpha ? SGLR.hexToColor(btnBg) : SGLR.hexToColor('#000000');
           SGLR.drawFillRect(surf, 0, 0, w.width - 1, w.height - 1, p('radius', 8), bgColor, 255);
           SGLR.drawPixmap(surf, 0, 0, w.width, w.height, imgData, pixmapFormat, alpha);
           SGLR.drawFillRectBorder(surf, 0, 0, w.width - 1, w.height - 1, p('radius', 8), SGLR.hexToColor(p('borderColor', '#7c3aed')), p('borderWidth', 1), alpha);
-          SGLR.flushSurface(surf);
         } else {
-          // 图片未缓存：CSS 占位 + 异步加载
-          el.style.background = '';
-          el.style.backgroundSize = '100% 100%';
-          el.style.backgroundColor = hasAlpha ? btnBg : '#000000';
-          el.style.backgroundImage = `url('${toAssetUrl(btnPixmap)}')`;
-          el.style.border = `${p('borderWidth', 1) * z}px solid ${p('borderColor', '#7c3aed')}`;
-          el.style.borderRadius = (p('radius', 8) * z) + 'px';
-          el.style.opacity = alphaCss;
+          // 图片未缓存：临时 CSS 占位，SGL 先画纯色背景 + 边框
+          const bgColor = hasAlpha ? SGLR.hexToColor(btnBg) : SGLR.hexToColor('#000000');
+          SGLR.drawFillRect(surf, 0, 0, w.width - 1, w.height - 1, p('radius', 8), bgColor, 255);
+          SGLR.drawFillRectBorder(surf, 0, 0, w.width - 1, w.height - 1, p('radius', 8), SGLR.hexToColor(p('borderColor', '#7c3aed')), p('borderWidth', 1), alpha);
           preloadPixmapImage(btnPixmap, () => renderCanvas());
         }
-        // 文本叠加（无论图片是否缓存都需要）
-        const btnInner = document.createElement('div');
-        btnInner.style.cssText = 'width:100%;height:100%;display:flex;align-items:center;justify-content:center;padding:4px 8px;pointer-events:none;';
-        Object.assign(btnInner.style, flexAlign(p('align', 'CENTER')));
-        const textSpan = document.createElement('span');
-        textSpan.textContent = p('text', '按钮');
-        textSpan.style.color = p('textColor', '#ffffff');
-        textSpan.style.fontSize = (p('fontSize', 14) * z) + 'px';
-        textSpan.style.fontFamily = getCssFontStack(p('fontFamily', 'simhei.ttf'));
-        textSpan.style.textAlign = textAlignCss(p('align', 'CENTER'));
-        textSpan.style.overflow = 'hidden';
-        textSpan.style.textOverflow = 'ellipsis';
-        textSpan.style.whiteSpace = 'nowrap';
-        textSpan.style.filter = 'var(--sgl-bpp-filter,none)';
-        btnInner.appendChild(textSpan);
-        el.appendChild(btnInner);
+        // 文本：有字模用 SGL 像素级渲染（与 SGL 运行时一致）
+        if (btnHasFont) {
+          const coords = { x1: 0, y1: 0, x2: w.width - 1, y2: w.height - 1 };
+          const sglFont = getSglFontData(btnFontPath, btnFontSize, btnFontBpp);
+          const txtCol = SGLR.hexToColor(btnTextColor);
+          if (sglFont) {
+            const pos = SGLR.getTextPosSGL(coords, btnText, sglFont, 0, sglAlign(btnAlign));
+            SGLR.drawStringSGL(surf, pos.x + btnOffX, pos.y + btnOffY, btnText, txtCol, alpha, sglFont);
+          } else {
+            const cssFamily = getCssFontStack(btnEffFamily);
+            const pos = SGLR.getTextPosRealtime(coords, btnText, btnFontSize, cssFamily, btnFontBpp, sglAlign(btnAlign));
+            SGLR.drawString(surf, pos.x + btnOffX, pos.y + btnOffY, btnText, txtCol, alpha, btnFontSize, cssFamily, btnFontBpp);
+          }
+        }
+        SGLR.flushSurface(surf);
+        if (!btnHasFont) {
+          // 无字体：DOM span 叠加（系统默认字体）
+          overlayText({
+            text: btnText,
+            color: btnTextColor,
+            fontSize: btnFontSize,
+            fontFamily: btnEffFamily,
+            align: btnAlign,
+            x: 0, y: 0, w: w.width, h: w.height,
+            offX: btnOffX, offY: btnOffY
+          });
+        }
       } else {
-        // 纯色按钮：SGL 背景渲染 + overlayText 文本叠加（overlayText 内部处理有无字体）
+        // 纯色按钮：SGL 背景渲染 + 有字模时 SGL 文本像素级渲染
         const surf = sglSurface(w.width, w.height);
         const btnBg = p('bgColor', p('color', '#8b5cf6'));
         const borderCol = p('borderColor', '#7c3aed');
@@ -1897,15 +1998,33 @@ function renderWidgetVisual(el, w, renderSize) {
           border_color: SGLR.hexToColor(borderCol),
           radius: p('radius', 8),
         });
+        // 文本：有字模用 SGL 像素级渲染
+        if (btnHasFont) {
+          const coords = { x1: 0, y1: 0, x2: w.width - 1, y2: w.height - 1 };
+          const sglFont = getSglFontData(btnFontPath, btnFontSize, btnFontBpp);
+          const txtCol = SGLR.hexToColor(btnTextColor);
+          if (sglFont) {
+            const pos = SGLR.getTextPosSGL(coords, btnText, sglFont, 0, sglAlign(btnAlign));
+            SGLR.drawStringSGL(surf, pos.x + btnOffX, pos.y + btnOffY, btnText, txtCol, alpha, sglFont);
+          } else {
+            const cssFamily = getCssFontStack(btnEffFamily);
+            const pos = SGLR.getTextPosRealtime(coords, btnText, btnFontSize, cssFamily, btnFontBpp, sglAlign(btnAlign));
+            SGLR.drawString(surf, pos.x + btnOffX, pos.y + btnOffY, btnText, txtCol, alpha, btnFontSize, cssFamily, btnFontBpp);
+          }
+        }
         SGLR.flushSurface(surf);
-        overlayText({
-          text: p('text', '按钮'),
-          color: p('textColor', '#ffffff'),
-          fontSize: p('fontSize', 14),
-          fontFamily: p('fontFamily', 'simhei.ttf'),
-          align: p('align', 'CENTER'),
-          x: 0, y: 0, w: w.width, h: w.height
-        });
+        if (!btnHasFont) {
+          // 无字体：DOM span 叠加
+          overlayText({
+            text: btnText,
+            color: btnTextColor,
+            fontSize: btnFontSize,
+            fontFamily: btnEffFamily,
+            align: btnAlign,
+            x: 0, y: 0, w: w.width, h: w.height,
+            offX: btnOffX, offY: btnOffY
+          });
+        }
       }
       break;
     }
@@ -1991,14 +2110,19 @@ function renderWidgetVisual(el, w, renderSize) {
       // SGL textbox: bg 圆角矩形 + 多行文本
       // 严格移植自 sgl_textbox.c: focus=1 时 border_mask=1 不画边框，scroll_enable=0 默认不画滚动条
       const tbFontSize = p('fontSize', 14);
+      const tbFontBpp = p('fontBpp', 4);
+      const tbEffFamily = resolveEffectiveFontFamily(p('fontFamily', ''));
+      const tbFontPath = resolveFontPath(tbEffFamily);
       const tbRadius = p('radius', 10);
       const tbBg = p('bgColor', '#FFFFFF');
       const tbBorderCol = p('borderColor', '#000000');
       const tbLineMargin = p('lineMargin', 1);
       const tbBorder = p('borderWidth', 1);
       const tbText = p('text', 'textbox');
+      const tbTextColor = p('textColor', '#000000');
+      const tbHasFont = widgetHasFont(w);
+      const pad = tbRadius;
 
-      // SGLRenderer 背景渲染 + overlayText 多行文本叠加（overlayText 内部处理有无字体）
       const surf = sglSurface(w.width, w.height);
       SGLR.drawRect(surf, 0, 0, w.width - 1, w.height - 1, {
         alpha: alpha,
@@ -2012,19 +2136,87 @@ function renderWidgetVisual(el, w, renderSize) {
       // SGL 核心：textbox 默认 focus=1，渲染完控件后额外画绿色焦点 wireframe
       // SGL_FOCUSED_COLOR = sgl_rgb(0x00, 0xFF, 0x00)，SGL_FOCUSED_WIDTH = 1
       SGLR.drawWireframe(surf, 0, 0, w.width - 1, w.height - 1, tbRadius, 1, SGLR.hexToColor('#00FF00'), 255);
+
+      // 有字模：SGL drawStringSGL 像素级逐行渲染（与 SGL 运行时一致）
+      if (tbHasFont && tbText) {
+        const sglFont = getSglFontData(tbFontPath, tbFontSize, tbFontBpp);
+        const availW = Math.max(1, w.width - 2 * pad);
+        const txtCol = SGLR.hexToColor(tbTextColor);
+        // 手动拆分文本为多行（按换行符 + 宽度换行）
+        const lines = [];
+        const rawLines = String(tbText).split('\n');
+        if (sglFont) {
+          // 使用真实字模宽度拆分
+          for (const rawLine of rawLines) {
+            if (rawLine === '') { lines.push(''); continue; }
+            let curLine = '';
+            let curW = 0;
+            for (const ch of rawLine) {
+              const chW = SGLR.fontGetStringWidth(ch, sglFont);
+              if (curW + chW > availW && curLine !== '') {
+                lines.push(curLine);
+                curLine = ch;
+                curW = chW;
+              } else {
+                curLine += ch;
+                curW += chW;
+              }
+            }
+            if (curLine !== '') lines.push(curLine);
+          }
+          const lineH = SGLR.fontGetHeight(sglFont) + tbLineMargin;
+          let drawY = pad;
+          const maxH = w.height - 2 * pad;
+          for (let i = 0; i < lines.length; i++) {
+            if (drawY + lineH > maxH + pad) break;
+            SGLR.drawStringSGL(surf, pad, drawY, lines[i], txtCol, alpha, sglFont);
+            drawY += lineH;
+          }
+        } else {
+          // fallback: 字模未加载时用 Canvas fillText 近似
+          const cssFamily = getCssFontStack(tbEffFamily);
+          for (const rawLine of rawLines) {
+            if (rawLine === '') { lines.push(''); continue; }
+            let curLine = '';
+            let curW = 0;
+            for (const ch of rawLine) {
+              const chW = SGLR.measureTextWidth ? SGLR.measureTextWidth(ch, tbFontSize, cssFamily) : tbFontSize * 0.6;
+              if (curW + chW > availW && curLine !== '') {
+                lines.push(curLine);
+                curLine = ch;
+                curW = chW;
+              } else {
+                curLine += ch;
+                curW += chW;
+              }
+            }
+            if (curLine !== '') lines.push(curLine);
+          }
+          const lineH = tbFontSize + tbLineMargin;
+          let drawY = pad;
+          const maxH = w.height - 2 * pad;
+          for (let i = 0; i < lines.length; i++) {
+            if (drawY + lineH > maxH + pad) break;
+            SGLR.drawString(surf, pad, drawY, lines[i], txtCol, alpha, tbFontSize, cssFamily, tbFontBpp);
+            drawY += lineH;
+          }
+        }
+      }
       SGLR.flushSurface(surf);
-      const pad = tbRadius;
-      overlayText({
-        text: tbText,
-        color: p('textColor', '#000000'),
-        fontSize: tbFontSize,
-        fontFamily: p('fontFamily', ''),
-        align: 'TOP_LEFT',
-        x: pad, y: pad, w: w.width - 2 * pad, h: w.height - 2 * pad,
-        lineMargin: tbLineMargin,
-        multiline: true,
-        maxWidth: w.width - 2 * pad
-      });
+      if (!tbHasFont) {
+        // 无字体：DOM 叠加多行文本（系统默认字体）
+        overlayText({
+          text: tbText,
+          color: tbTextColor,
+          fontSize: tbFontSize,
+          fontFamily: tbEffFamily,
+          align: 'TOP_LEFT',
+          x: pad, y: pad, w: w.width - 2 * pad, h: w.height - 2 * pad,
+          lineMargin: tbLineMargin,
+          multiline: true,
+          maxWidth: w.width - 2 * pad
+        });
+      }
       break;
     }
 
@@ -2107,7 +2299,10 @@ function renderWidgetVisual(el, w, renderSize) {
       const cbStatus = p('status', false);
       const cbText = p('text', ' ');
       const cbFontSize = p('fontSize', 14);
-      const cbFontFamily = getCssFontStack(p('fontFamily', ''));
+      const cbFontBpp = p('fontBpp', 4);
+      const cbEffFamily = resolveEffectiveFontFamily(p('fontFamily', ''));
+      const cbFontPath = resolveFontPath(cbEffFamily);
+      const cbHasFont = widgetHasFont(w);
       // 三色：text_color / box_color / check_color
       const cbTextColor = p('textColor', p('color', '#000000'));
       const cbBoxColor = p('boxColor', '#2196F3');
@@ -2155,18 +2350,31 @@ function renderWidgetVisual(el, w, renderSize) {
         SGLR.drawFillRectBorder(surf, iconX1, iconY1, iconX2, iconY2, boxRadius, SGLR.hexToColor(cbBoxColor), 2, alpha);
       }
 
-      SGLR.flushSurface(surf);
-      // 文字（DOM 叠加）
-      // SGL: sgl_draw_string 从 (align_pos.x + box_w + 2, align_pos.y) 左对齐画
+      // 文字：有字模用 SGL drawStringSGL 像素级渲染（与 SGL 运行时一致）
       const textX = boxW + 2;
-      overlayText({
-        text: cbText,
-        color: cbTextColor,
-        fontSize: cbFontSize,
-        fontFamily: p('fontFamily', ''),
-        align: 'LEFT_MID',
-        x: textX, y: 0, w: w.width - textX, h: w.height
-      });
+      if (cbHasFont && cbText && cbText.trim() !== '') {
+        const sglFont = getSglFontData(cbFontPath, cbFontSize, cbFontBpp);
+        const txtCol = SGLR.hexToColor(cbTextColor);
+        // LEFT_MID 对齐: x=textX, y=alignY
+        if (sglFont) {
+          SGLR.drawStringSGL(surf, textX, alignY, cbText, txtCol, alpha, sglFont);
+        } else {
+          const cssFamily = getCssFontStack(cbEffFamily);
+          SGLR.drawString(surf, textX, alignY, cbText, txtCol, alpha, cbFontSize, cssFamily, cbFontBpp);
+        }
+      }
+      SGLR.flushSurface(surf);
+      if (!cbHasFont) {
+        // 无字体：DOM 叠加（系统默认字体）
+        overlayText({
+          text: cbText,
+          color: cbTextColor,
+          fontSize: cbFontSize,
+          fontFamily: cbEffFamily,
+          align: 'LEFT_MID',
+          x: textX, y: 0, w: w.width - textX, h: w.height
+        });
+      }
       break;
     }
 
@@ -2992,9 +3200,12 @@ function renderWidgetVisual(el, w, renderSize) {
       // 关闭状态：整个控件高度 = option_h（头部高度）
       const ddOptions = (p('options', '') || '').split('\n').filter(o => o.length > 0);
       const ddFontSize = p('fontSize', 14);
+      const ddFontBpp = p('fontBpp', 4);
+      const ddEffFamily = resolveEffectiveFontFamily(p('fontFamily', ''));
+      const ddFontPath = resolveFontPath(ddEffFamily);
+      const ddHasFont = widgetHasFont(w);
       const ddFontHeight = ddFontSize; // font_height 近似为 fontSize
       const ddTextColor = SGLR.hexToColor(p('textColor', '#000000'));
-      const ddFontFamily = getCssFontStack(p('fontFamily', ''));
       const ddRadius = p('radius', 0);
       const ddBorderW = p('borderWidth', 1);
       const ddBgColor = SGLR.hexToColor(p('bgColor', '#FFFFFF'));
@@ -3027,17 +3238,27 @@ function renderWidgetVisual(el, w, renderSize) {
       const ddIconY = (ddItemH - ddIconH + 1) / 2;
       SGLR.drawIcon(surf, ddIconX, ddIconY, ddTextColor, alpha, SGLR.DROPDOWN_ICON);
 
-      SGLR.flushSurface(surf);
-
-      // 3. 选中项文本（DOM 叠加，左中）
-      // x = x1 + item_pad, y = y1 + (option_h - font_height + 1) / 2
+      // 3. 选中项文本：有字模用 SGL drawStringSGL 像素级渲染
       const ddText = ddOptions.length > 0 ? ddOptions[0] : '';
-      if (ddText) {
+      if (ddHasFont && ddText) {
+        const sglFont = getSglFontData(ddFontPath, ddFontSize, ddFontBpp);
+        // LEFT_MID 对齐: x=item_pad, y=(option_h - font_h + 1) / 2
+        const textY = Math.floor((ddOptionH - ddFontHeight + 1) / 2);
+        if (sglFont) {
+          SGLR.drawStringSGL(surf, ddItemPad, textY, ddText, ddTextColor, alpha, sglFont);
+        } else {
+          const cssFamily = getCssFontStack(ddEffFamily);
+          SGLR.drawString(surf, ddItemPad, textY, ddText, ddTextColor, alpha, ddFontSize, cssFamily, ddFontBpp);
+        }
+      }
+      SGLR.flushSurface(surf);
+      if (!ddHasFont && ddText) {
+        // 无字体：DOM 叠加（系统默认字体）
         overlayText({
           text: ddText,
           color: p('textColor', '#000000'),
           fontSize: ddFontSize,
-          fontFamily: p('fontFamily', ''),
+          fontFamily: ddEffFamily,
           align: 'LEFT_MID',
           x: ddItemPad, y: 0, w: w.width - ddItemPad - ddIconW - ddRadius, h: ddOptionH
         });
@@ -4381,6 +4602,9 @@ function renderWidgetVisual(el, w, renderSize) {
     case 'statusbar': {
       // SGL statusbar: 半透明背景 + 左右槽位文本，用 SGLRenderer 像素级渲染
       const sbFontSize = p('fontSize', 14);
+      const sbFontBpp = p('fontBpp', 4);
+      const sbEffFamily = resolveEffectiveFontFamily(p('fontFamily', ''));
+      const sbFontPath = resolveFontPath(sbEffFamily);
       const sbFontHeightVal = sbFontSize + 8;
       const sbBg = SGLR.hexToColor(p('bgColor', '#141414'));
       const sbBgAlpha = p('bgAlpha', 128);
@@ -4390,49 +4614,94 @@ function renderWidgetVisual(el, w, renderSize) {
       const sbSlotSpace = p('slotSpace', 4);
       const sbSlotColor = SGLR.hexToColor(p('slotColor', '#ffffff'));
       const sbSlotAlpha = p('slotAlpha', 255);
-      const sbFontFamily = p('fontFamily', '');
 
       // 解析槽位字符串（用 ; 拼接）
       const parseSlotsStr = (s) => (typeof s === 'string' ? s.split(';').map(x => x.trim()).filter(x => x.length > 0) : []);
       const sbLeftSlots = parseSlotsStr(p('leftSlots', ''));
       const sbRightSlots = parseSlotsStr(p('rightSlots', ''));
+      const sbHasFont = widgetHasFont(w);
 
       const surf = sglSurface(w.width, w.height);
       // 半透明背景
       SGLR.drawFillRect(surf, 0, 0, w.width - 1, w.height - 1, sbRadius, sbBg, Math.round(sbBgAlpha * alpha / 255));
-      SGLR.flushSurface(surf);
 
       // 垂直居中
       const sbPosY = Math.round((w.height - sbFontHeightVal) / 2);
       const slotAlphaEff = Math.round(sbSlotAlpha * alpha / 255);
-      const sbHasFont = widgetHasFont(w);
-      const sbCssFamily = sbHasFont ? getCssFontStack(sbFontFamily) : 'system-ui, -apple-system, "Segoe UI", sans-serif';
-      const sbSlotColorCss = p('slotColor', '#ffffff');
-      const sbSlotOpacity = slotAlphaEff / 255;
 
-      // 左侧槽位（从左到右，DOM 叠加）
-      let leftX = sbLeftMargin;
-      for (let i = 0; i < sbLeftSlots.length && i < 4; i++) {
-        const slotText = sbLeftSlots[i];
-        if (!slotText) continue;
-        const span = document.createElement('span');
-        span.style.cssText = `position:absolute;left:${leftX * z}px;top:${sbPosY * z}px;color:${sbSlotColorCss};font-size:${sbFontSize * z}px;font-family:${sbCssFamily};pointer-events:none;white-space:nowrap;opacity:${sbSlotOpacity};filter:var(--sgl-bpp-filter,none);`;
-        span.textContent = slotText;
-        el.appendChild(span);
-        leftX += SGLR.stringWidth(slotText, sbFontSize) + sbSlotSpace;
+      if (sbHasFont) {
+        // 有字模：SGL drawStringSGL 像素级渲染槽位文本
+        const sglFont = getSglFontData(sbFontPath, sbFontSize, sbFontBpp);
+        const cssFamily = getCssFontStack(sbEffFamily);
+
+        // 左侧槽位（从左到右）
+        let leftX = sbLeftMargin;
+        for (let i = 0; i < sbLeftSlots.length && i < 4; i++) {
+          const slotText = sbLeftSlots[i];
+          if (!slotText) continue;
+          if (sglFont) {
+            SGLR.drawStringSGL(surf, leftX, sbPosY, slotText, sbSlotColor, slotAlphaEff, sglFont);
+            leftX += SGLR.fontGetStringWidth(slotText, sglFont) + sbSlotSpace;
+          } else {
+            SGLR.drawString(surf, leftX, sbPosY, slotText, sbSlotColor, slotAlphaEff, sbFontSize, cssFamily, sbFontBpp);
+            leftX += (SGLR.stringWidth ? SGLR.stringWidth(slotText, sbFontSize) : sbFontSize * slotText.length) + sbSlotSpace;
+          }
+        }
+        // 右侧槽位（从右到左）
+        let rightX = w.width - sbRightMargin;
+        for (let i = 0; i < sbRightSlots.length && i < 8; i++) {
+          const slotText = sbRightSlots[i];
+          if (!slotText) continue;
+          let tw;
+          if (sglFont) {
+            tw = SGLR.fontGetStringWidth(slotText, sglFont);
+          } else if (SGLR.stringWidth) {
+            tw = SGLR.stringWidth(slotText, sbFontSize);
+          } else {
+            tw = sbFontSize * slotText.length;
+          }
+          rightX -= tw;
+          if (sglFont) {
+            SGLR.drawStringSGL(surf, rightX, sbPosY, slotText, sbSlotColor, slotAlphaEff, sglFont);
+          } else {
+            const cssFamily = getCssFontStack(sbEffFamily);
+            SGLR.drawString(surf, rightX, sbPosY, slotText, sbSlotColor, slotAlphaEff, sbFontSize, cssFamily, sbFontBpp);
+          }
+          rightX -= sbSlotSpace;
+        }
       }
-      // 右侧槽位（从右到左，DOM 叠加）
-      let rightX = w.width - sbRightMargin;
-      for (let i = 0; i < sbRightSlots.length && i < 8; i++) {
-        const slotText = sbRightSlots[i];
-        if (!slotText) continue;
-        const tw = SGLR.stringWidth(slotText, sbFontSize);
-        rightX -= tw;
-        const span = document.createElement('span');
-        span.style.cssText = `position:absolute;left:${rightX * z}px;top:${sbPosY * z}px;color:${sbSlotColorCss};font-size:${sbFontSize * z}px;font-family:${sbCssFamily};pointer-events:none;white-space:nowrap;opacity:${sbSlotOpacity};filter:var(--sgl-bpp-filter,none);`;
-        span.textContent = slotText;
-        el.appendChild(span);
-        rightX -= sbSlotSpace;
+      SGLR.flushSurface(surf);
+
+      if (!sbHasFont) {
+        // 无字体：DOM 叠加（系统默认字体）
+        const sbCssFamily = 'system-ui, -apple-system, "Segoe UI", sans-serif';
+        const sbSlotColorCss = p('slotColor', '#ffffff');
+        const sbSlotOpacity = slotAlphaEff / 255;
+
+        // 左侧槽位（从左到右，DOM 叠加）
+        let leftX = sbLeftMargin;
+        for (let i = 0; i < sbLeftSlots.length && i < 4; i++) {
+          const slotText = sbLeftSlots[i];
+          if (!slotText) continue;
+          const span = document.createElement('span');
+          span.style.cssText = `position:absolute;left:${leftX * z}px;top:${sbPosY * z}px;color:${sbSlotColorCss};font-size:${sbFontSize * z}px;font-family:${sbCssFamily};pointer-events:none;white-space:nowrap;opacity:${sbSlotOpacity};filter:var(--sgl-bpp-filter,none);`;
+          span.textContent = slotText;
+          el.appendChild(span);
+          leftX += SGLR.stringWidth(slotText, sbFontSize) + sbSlotSpace;
+        }
+        // 右侧槽位（从右到左，DOM 叠加）
+        let rightX = w.width - sbRightMargin;
+        for (let i = 0; i < sbRightSlots.length && i < 8; i++) {
+          const slotText = sbRightSlots[i];
+          if (!slotText) continue;
+          const tw = SGLR.stringWidth(slotText, sbFontSize);
+          rightX -= tw;
+          const span = document.createElement('span');
+          span.style.cssText = `position:absolute;left:${rightX * z}px;top:${sbPosY * z}px;color:${sbSlotColorCss};font-size:${sbFontSize * z}px;font-family:${sbCssFamily};pointer-events:none;white-space:nowrap;opacity:${sbSlotOpacity};filter:var(--sgl-bpp-filter,none);`;
+          span.textContent = slotText;
+          el.appendChild(span);
+          rightX -= sbSlotSpace;
+        }
       }
       break;
     }
@@ -6531,10 +6800,38 @@ document.getElementById('btn-add-font').addEventListener('click', async () => {
       }
     });
     AppState.notify();
+    // 字体资源变化：清空"缺少字体"的警告记录，确保重新渲染时会对现在仍缺字体的控件 warn
+    _reportedMissingFontWidget.clear();
     // 注册新字体到浏览器并刷新画布
     await Promise.all(paths.map(p => registerFontFile(p)));
-    renderCanvas();
+    // 添加字体后：自动给 fontFamily 为空 / default / 指向已删除字体的控件补上第一个字体的 path
+    // 这样属性面板字体下拉也能正确显示，所见即所得（不再依赖渲染层 fallback）
+    {
+      const fonts = AppState.project.resources.fonts || [];
+      if (fonts.length > 0) {
+        const firstPath = fonts[0].path || fonts[0].name || '';
+        if (firstPath) {
+          let patched = 0;
+          (AppState.project.pages || []).forEach(page => {
+            (page.widgets || []).forEach(w => {
+              if (!w.hasOwnProperty('fontFamily')) return;
+              const cur = w.fontFamily;
+              if (!cur || cur === 'default' || !isFontMatchedInProject(cur, fonts)) {
+                w.fontFamily = firstPath;
+                patched++;
+              }
+            });
+          });
+          if (patched > 0) {
+            logMessage(`已自动为 ${patched} 个控件设置默认字体: ${fonts[0].name}`, 'info');
+          }
+        }
+      }
+    }
+    renderWidgetProps();
     logMessage(`已添加 ${paths.length} 个字体资源`, 'success');
+    // 像新打开工程一样加载新字体的字模数据，完成后会自动 scheduleRenderCanvas 重新渲染
+    await preloadSglFontData();
   } catch (err) {
     logMessage('添加字体失败: ' + err, 'error');
   }
@@ -6574,6 +6871,10 @@ document.getElementById('font-list').addEventListener('click', (e) => {
     const name = resources.fonts[idx].name;
     resources.fonts.splice(idx, 1);
     AppState.notify();
+    // 字体资源变化：清空"缺少字体"的警告记录，保证渲染时能重新识别仍缺字体的控件
+    _reportedMissingFontWidget.clear();
+    renderCanvas();
+    renderWidgetProps();
     logMessage(`已删除字体: ${name}`, 'info');
   }
 });
@@ -6877,6 +7178,7 @@ document.getElementById('btn-open').addEventListener('click', async () => {
     panOffset = { x: 0, y: 0 };
     centerCanvas();
     renderPageTabs();
+    _reportedMissingFontWidget.clear(); // 新项目：清空"缺少字体"的警告记录
     renderCanvas();
     renderWidgetProps();
     renderLayerList();
@@ -7214,9 +7516,6 @@ document.addEventListener('keydown', (e) => {
     AppState.save();
   }
 });
-
-// 导航
-document.querySelectorAll('[data-nav]').forEach(tab => tab.addEventListener('click', () => navigate(tab.dataset.nav)));
 
 // ============ 右键菜单 ============
 const contextMenu = document.getElementById('context-menu');
@@ -7839,6 +8138,13 @@ function requestFontUpdate() {
   if (_fontUpdateTimer) clearTimeout(_fontUpdateTimer);
   _fontUpdateTimer = setTimeout(() => {
     _fontUpdateTimer = null;
+    _fontUpdateNeeded = false;
+    // 防抖结束后直接触发字模加载 + 重绘，不依赖 renderAll 被再次调用
+    preloadSglFontData().then(() => {
+      renderCanvas();
+    }).catch(err => {
+      console.warn('[font] requestFontUpdate 字模加载失败:', err);
+    });
   }, 500);
 }
 
@@ -7868,8 +8174,8 @@ function renderAll() {
 }
 
 // 初始化
-// 同步从 localStorage 恢复字体缓存到内存，避免首次渲染后因字体缺失而重新渲染
-(function restoreFontCacheBeforeRender() {
+// 先同步快速恢复已命中过的指纹缓存（不阻塞），再异步走完整指纹校验恢复
+(async function restoreFontCacheBeforeRender() {
   const project = AppState.project;
   if (!project || !project.pages) return;
   const fontTextMap = new Map();
@@ -7887,17 +8193,31 @@ function renderAll() {
       fontKeys.push({ fontPath, size: parseInt(sz), bpp: parseInt(bpp), symbols: Array.from(charSet).join('') });
     }
   }
-  const restored = restoreFontCacheSync(fontKeys);
-  // 只有所有字体都成功恢复时才跳过异步预加载
+  // 同步快速路径（无阻塞）
+  const fastRestored = restoreFontCacheFast(fontKeys);
+  // 异步完整指纹校验恢复（替换/删除字体后能自动失效缓存）
+  let restored = fastRestored;
+  try {
+    restored = await restoreFontCache(fontKeys);
+  } catch (e) {
+    console.warn('[font] 异步恢复字体缓存异常:', e);
+  }
   if (restored === fontKeys.length && restored > 0) {
     _initialFontPreloadDone = true;
     logMessage(`字模加载完成（从本地缓存恢复 ${restored} 个字体）`, 'success');
-    console.log(`[font] 同步恢复全部 ${restored} 个字体缓存，跳过异步预加载`);
+    console.log(`[font] 恢复全部 ${restored} 个字体缓存，跳过异步预加载`);
+    // 异步恢复的字模数据可能在 renderAll 之后才就绪，需要触发重绘以切换到 drawStringSGL
+    if (restored > fastRestored) {
+      scheduleRenderCanvas();
+    }
   } else if (restored > 0) {
     logMessage(`已从本地缓存恢复 ${restored}/${fontKeys.length} 个字模，正在加载剩余...`, 'info');
-    console.log(`[font] 同步恢复 ${restored}/${fontKeys.length} 个字体缓存，仍需异步加载剩余`);
+    console.log(`[font] 恢复 ${restored}/${fontKeys.length} 个字体缓存，仍需异步加载剩余`);
+    if (restored > fastRestored) {
+      scheduleRenderCanvas();
+    }
   } else if (fontKeys.length > 0) {
-    logMessage(`本地缓存中未找到字模，正在加载 ${fontKeys.length} 个字体...`, 'info');
+    logMessage(`正在生成 ${fontKeys.length} 个字模...`, 'info');
   }
 })();
 
@@ -7920,3 +8240,163 @@ window.addEventListener('resize', () => {
   centerCanvas();
   renderCanvas();
 });
+
+// ============================================================
+// 预览模式（复用 preview.js 的渲染和交互）
+// ============================================================
+let _previewMode = false;
+
+function _previewToggleUI(on) {
+  const setHide = (el, hide) => { if (el) el.style.display = hide ? 'none' : ''; };
+  // 保持整个编辑器布局不变，只切换「预览/编辑」按钮和画布区域显示
+  // 编辑状态：只显示预览按钮；预览状态：显示编辑按钮 + 截图按钮
+  setHide(document.getElementById('btn-enter-preview'), on);
+  const exitBtn = document.getElementById('btn-exit-preview');
+  if (exitBtn) exitBtn.style.display = on ? '' : 'none';
+  const shotBtn = document.getElementById('btn-screenshot');
+  if (shotBtn) shotBtn.style.display = on ? '' : 'none';
+  // 切换 canvas / preview-container：在原 canvas-viewport 区域直接显示可交互预览
+  const canvasEl = document.getElementById('canvas');
+  const previewContainer = document.getElementById('preview-container');
+  if (canvasEl) canvasEl.style.display = on ? 'none' : '';
+  if (previewContainer) previewContainer.style.display = on ? 'flex' : 'none';
+}
+
+async function enterPreviewMode() {
+  console.log('[preview] enterPreviewMode called, _previewMode=', _previewMode);
+  if (_previewMode) return;
+
+  // 预览前检查：有文本控件缺少字体时弹出警告
+  const fontOk = await checkAndWarnFonts('预览', false);
+  if (!fontOk) {
+    showToast('存在缺少字体的控件，预览效果可能与实际运行不一致', 'warn');
+  }
+
+  _previewMode = true;
+  AppState.clearSelection && AppState.clearSelection();
+  // 同步 preview.js 的页面索引为编辑器当前页面
+  const curIdx = AppState.project.pages.indexOf(AppState.getCurrentPage());
+  if (curIdx >= 0) setPreviewPageIndex(curIdx);
+  _previewToggleUI(true);
+  // 预览模式下字体加载完成后渲染到 preview-frame，而非编辑器 canvas
+  setFontLoadCallback(() => previewRender());
+  // 只绑定交互事件 + 渲染，不调用 initPreview（避免 initNav/setFontLoadCallback 污染编辑器）
+  setupGlobalInteraction();
+  previewRender();
+  showToast('已进入预览模式，点击"编辑"或按 Esc 退出', 'info');
+}
+
+function exitPreviewMode() {
+  if (!_previewMode) return;
+  _previewMode = false;
+  _previewToggleUI(false);
+  // 恢复编辑器的字体回调
+  setFontLoadCallback(() => scheduleRenderCanvas());
+  if (typeof renderAll === 'function') renderAll();
+  showToast('已退出预览', 'info');
+}
+
+// ========= 截图：从 preview-frame 截取 PNG =========
+async function takeScreenshot() {
+  const page = AppState.getCurrentPage();
+  if (!page) { showToast('没有页面可截图', 'error'); return; }
+  // 如果不在预览模式，先临时进入预览渲染
+  const wasPreview = _previewMode;
+  if (!wasPreview) {
+    enterPreviewMode();
+    await new Promise(r => setTimeout(r, 600));
+  }
+  const pw = page.width, ph = page.height;
+  const off = document.createElement('canvas');
+  off.width = pw; off.height = ph;
+  const octx = off.getContext('2d');
+  // 背景
+  octx.fillStyle = page.bg_color || '#1e1e2e';
+  octx.fillRect(0, 0, pw, ph);
+  if (page.pixmap) {
+    try {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = toAssetUrl(page.pixmap); });
+      octx.drawImage(img, 0, 0, pw, ph);
+    } catch(_) {}
+  }
+  // 从 preview-frame 截取所有 canvas 元素
+  const frame = document.getElementById('preview-frame');
+  if (frame) {
+    const frameRect = frame.getBoundingClientRect();
+    const z = Math.min(frameRect.width / pw, frameRect.height / ph) || 1;
+    frame.querySelectorAll('canvas').forEach(subCanvas => {
+      const r = subCanvas.getBoundingClientRect();
+      const dx = (r.left - frameRect.left) / z;
+      const dy = (r.top - frameRect.top) / z;
+      const dw = r.width / z;
+      const dh = r.height / z;
+      try { octx.drawImage(subCanvas, dx, dy, dw, dh); } catch(e) {}
+    });
+  }
+  // 圆形屏裁剪
+  if (AppState.project.screen_shape === 'circle') {
+    const rad = Math.min(pw, ph) / 2;
+    const cx = pw / 2, cy = ph / 2;
+    const tmp = document.createElement('canvas');
+    tmp.width = pw; tmp.height = ph;
+    const tctx = tmp.getContext('2d');
+    tctx.fillStyle = '#000';
+    tctx.beginPath(); tctx.arc(cx, cy, rad, 0, Math.PI * 2); tctx.fill();
+    tctx.globalCompositeOperation = 'source-in';
+    tctx.drawImage(off, 0, 0);
+    octx.globalCompositeOperation = 'source-over';
+    octx.clearRect(0, 0, pw, ph);
+    octx.drawImage(tmp, 0, 0);
+  }
+  // 如果是临时进入预览的，退出
+  if (!wasPreview) exitPreviewMode();
+  // 导出 PNG
+  try {
+    const blob = await new Promise((res, rej) => off.toBlob(b => b ? res(b) : rej(new Error('blob fail')), 'image/png'));
+    const fname = `${AppState.project.name || 'sgl-ui'}_${page.name || 'page'}_${Date.now()}.png`;
+    try {
+      const ab = await blob.arrayBuffer();
+      const u8 = new Uint8Array(ab);
+      const savedPath = await invoke('save_png_to_desktop_or_dir', { filename: fname, bytes: Array.from(u8) });
+      const finalPath = savedPath || fname;
+      console.log('[截图] 已保存到:', finalPath);
+      logMessage(`截图已保存到: ${finalPath}`, 'success');
+      showToast(`截图已保存: ${finalPath}`, 'success');
+    } catch (e) {
+      console.warn('后端保存失败，走浏览器下载:', e);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = fname;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+      showToast('截图已下载', 'success');
+    }
+  } catch (e) {
+    console.error('截图导出失败:', e);
+    showToast('截图导出失败: ' + (e && e.message ? e.message : e), 'error');
+  }
+}
+
+// ========= 按钮绑定 =========
+(function bindPreviewButtons() {
+  const btnEnter = document.getElementById('btn-enter-preview');
+  const btnExit = document.getElementById('btn-exit-preview');
+  const btnShot = document.getElementById('btn-screenshot');
+  if (btnEnter) btnEnter.addEventListener('click', () => {
+    showToast('预览按钮被点击', 'info');
+    enterPreviewMode();
+  });
+  if (btnExit) btnExit.addEventListener('click', () => {
+    showToast('编辑按钮被点击', 'info');
+    exitPreviewMode();
+  });
+  if (btnShot) btnShot.addEventListener('click', () => { takeScreenshot().catch(e => console.error(e)); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'F5') { e.preventDefault(); enterPreviewMode(); }
+    if (_previewMode && e.key === 'Escape') exitPreviewMode();
+  });
+  // DEBUG: expose AppState for browser automation testing
+  window.__appState = AppState;
+})();

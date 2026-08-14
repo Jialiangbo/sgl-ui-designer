@@ -492,6 +492,8 @@ body {
   padding: 0 16px;
   gap: 12px;
   flex-shrink: 0;
+  position: relative;
+  z-index: 1100;
 }
 
 .toolbar-divider {
@@ -585,6 +587,8 @@ body {
 }
 
 .canvas-viewport {
+  grid-column: 2;
+  grid-row: 2;
   overflow: hidden;
   position: relative;
   min-height: 0;
@@ -1141,6 +1145,14 @@ body {
   align-items: center;
   justify-content: center;
   padding: 24px;
+}
+
+/* 编辑器内嵌预览：绝对定位填满 canvas-viewport */
+#canvas-viewport > .preview-container {
+  position: absolute;
+  inset: 0;
+  flex: none;
+  z-index: 1200;
 }
 
 .preview-frame {

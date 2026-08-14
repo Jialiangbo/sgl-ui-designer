@@ -240,6 +240,18 @@ struct Widget {
     arc_label_offset_y: Option<i32>,
     #[serde(default, rename = "bgFlag")]
     arc_label_bg_flag: Option<bool>,
+    // label/label_ext/arc_label 共用：文本缓冲与格式化
+    #[serde(default, rename = "textBuffer")]
+    text_buffer: Option<String>,
+    #[serde(default, rename = "textFmt")]
+    text_fmt: Option<String>,
+    #[serde(default, rename = "textFmtDynamic")]
+    text_fmt_dynamic: Option<String>,
+    // label long_mode（长文本滚动模式）
+    #[serde(default, rename = "longMode")]
+    long_mode: Option<bool>,
+    #[serde(default, rename = "longModeSpeed")]
+    long_mode_speed: Option<u32>,
     // numberkbd 控件属性
     #[serde(default, rename = "btnMargin")]
     btn_margin: Option<i32>,
@@ -1524,6 +1536,9 @@ fn get_create_fn(t: &str) -> &'static str {
         "numberkbd" => "sgl_numberkbd_create",
         "keyboard" => "sgl_keyboard_create",
         "label" => "sgl_label_create",
+        "label_ext" => "sgl_label_ext_create",
+        "arc_label" => "sgl_arc_label_create",
+        "img" => "sgl_img_create",
         "textbox" => "sgl_textbox_create",
         "textline" => "sgl_textline_create",
         "textlist" => "sgl_textlist_create",
@@ -1725,9 +1740,41 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
                 let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
                 code.push_str(&format!("    sgl_label_set_font({}, &{});\n", obj, fid));
             }
-            cstr!("sgl_label_set_text", w.text);
+            // 文本缓冲区优先：设置 text_buffer 后用动态缓冲，否则用静态 text
+            let has_buffer = w.text_buffer.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
+            if has_buffer {
+                if let Some(buf) = &w.text_buffer {
+                    // 格式: "变量名,大小" 或纯变量名
+                    let parts: Vec<&str> = buf.split(',').map(|s| s.trim()).collect();
+                    if parts.len() == 2 {
+                        if let Ok(sz) = parts[1].parse::<u16>() {
+                            code.push_str(&format!("    sgl_label_set_text_buffer({}, {}, {});\n", obj, parts[0], sz));
+                        }
+                    } else {
+                        code.push_str(&format!("    sgl_label_set_text_buffer({}, {}, 64);\n", obj, parts[0]));
+                    }
+                }
+                if let Some(fmt) = &w.text_fmt {
+                    if !fmt.is_empty() {
+                        let escaped = fmt.replace('\\', "\\\\").replace('"', "\\\"");
+                        code.push_str(&format!("    sgl_label_set_text_fmt({}, \"{}\");\n", obj, escaped));
+                    }
+                } else if let Some(fmt) = &w.text_fmt_dynamic {
+                    if !fmt.is_empty() {
+                        let escaped = fmt.replace('\\', "\\\\").replace('"', "\\\"");
+                        code.push_str(&format!("    sgl_label_set_text_fmt_dynamic({}, \"{}\");\n", obj, escaped));
+                    }
+                }
+            } else {
+                cstr!("sgl_label_set_text", w.text);
+            }
             cclr!("sgl_label_set_text_color", w.text_color);
-            cclr!("sgl_label_set_bg_color", w.bg_color);
+            // bgColor 为 transparent 时不生成 set_bg_color（避免误设 bg_flag）
+            if let Some(bg) = &w.bg_color {
+                if !bg.is_empty() && bg != "transparent" {
+                    code.push_str(&format!("    sgl_label_set_bg_color({}, {});\n", obj, sgl_color(bg)));
+                }
+            }
             c!( "sgl_label_set_alpha", w.alpha.map(|v| v as u8));
             if let Some(a) = &w.align {
                 let align_macro = match a.as_str() {
@@ -1749,9 +1796,153 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
                 code.push_str(&format!("    sgl_label_set_text_align({}, {});\n", obj, align_macro));
             }
             c!( "sgl_label_set_radius", w.radius.map(|v| v as u8));
-            c!( "sgl_label_set_text_offset", w.text_offset_x.zip(w.text_offset_y).map(|(x, y)| format!("{}, {}", x as i8, y as i8)));
+            // SGL label 的 set_text_offset 只接受 offset_x 一个参数
+            c!( "sgl_label_set_text_offset", w.text_offset_x.map(|x| x as i8));
+            // long_mode（长文本滚动模式，需 CONFIG_SGL_ANIMATION）
+            if let Some(true) = w.long_mode {
+                let speed = w.long_mode_speed.unwrap_or(3000);
+                code.push_str(&format!("    sgl_label_set_long_mode({}, {}, true);\n", obj, speed));
+            }
+        }
+        "label_ext" => {
+            if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
+                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
+                code.push_str(&format!("    sgl_label_ext_set_font({}, &{});\n", obj, fid));
+            }
+            let has_buffer = w.text_buffer.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
+            if has_buffer {
+                if let Some(buf) = &w.text_buffer {
+                    let parts: Vec<&str> = buf.split(',').map(|s| s.trim()).collect();
+                    if parts.len() == 2 {
+                        if let Ok(sz) = parts[1].parse::<u16>() {
+                            code.push_str(&format!("    sgl_label_ext_set_text_buffer({}, {}, {});\n", obj, parts[0], sz));
+                        }
+                    } else {
+                        code.push_str(&format!("    sgl_label_ext_set_text_buffer({}, {}, 64);\n", obj, parts[0]));
+                    }
+                }
+                if let Some(fmt) = &w.text_fmt {
+                    if !fmt.is_empty() {
+                        let escaped = fmt.replace('\\', "\\\\").replace('"', "\\\"");
+                        code.push_str(&format!("    sgl_label_ext_set_text_fmt({}, \"{}\");\n", obj, escaped));
+                    }
+                } else if let Some(fmt) = &w.text_fmt_dynamic {
+                    if !fmt.is_empty() {
+                        let escaped = fmt.replace('\\', "\\\\").replace('"', "\\\"");
+                        code.push_str(&format!("    sgl_label_ext_set_text_fmt_dynamic({}, \"{}\");\n", obj, escaped));
+                    }
+                }
+            } else {
+                cstr!("sgl_label_ext_set_text", w.text);
+            }
+            cclr!("sgl_label_ext_set_text_color", w.text_color);
+            // label_ext 的 set_bg_color 会自动置位 bg_flag
+            if let Some(bg) = &w.bg_color {
+                if !bg.is_empty() && bg != "transparent" {
+                    code.push_str(&format!("    sgl_label_ext_set_bg_color({}, {});\n", obj, sgl_color(bg)));
+                }
+            }
+            c!( "sgl_label_ext_set_alpha", w.alpha.map(|v| v as u8));
+            if let Some(a) = &w.align {
+                let align_macro = match a.as_str() {
+                    "TOP_LEFT" => "SGL_ALIGN_TOP_LEFT",
+                    "TOP_MID" => "SGL_ALIGN_TOP_MID",
+                    "TOP_RIGHT" => "SGL_ALIGN_TOP_RIGHT",
+                    "LEFT_MID" => "SGL_ALIGN_LEFT_MID",
+                    "CENTER" => "SGL_ALIGN_CENTER",
+                    "RIGHT_MID" => "SGL_ALIGN_RIGHT_MID",
+                    "BOT_LEFT" => "SGL_ALIGN_BOT_LEFT",
+                    "BOT_MID" => "SGL_ALIGN_BOT_MID",
+                    "BOT_RIGHT" => "SGL_ALIGN_BOT_RIGHT",
+                    "LEFT" => "SGL_ALIGN_LEFT_MID",
+                    "RIGHT" => "SGL_ALIGN_RIGHT_MID",
+                    "TOP" => "SGL_ALIGN_TOP_MID",
+                    "BOTTOM" | "DOWN" => "SGL_ALIGN_BOT_MID",
+                    _ => "SGL_ALIGN_CENTER",
+                };
+                code.push_str(&format!("    sgl_label_ext_set_text_align({}, {});\n", obj, align_macro));
+            }
+            c!( "sgl_label_ext_set_radius", w.radius.map(|v| v as u8));
+            // label_ext 的 set_text_offset 接受 offset_x 和 offset_y
+            c!( "sgl_label_ext_set_text_offset", w.text_offset_x.zip(w.text_offset_y).map(|(x, y)| format!("{}, {}", x as i8, y as i8)));
             if let Some(r) = w.text_rotation {
-                code.push_str(&format!("    sgl_label_set_text_rotation({}, {});\n", obj, r));
+                code.push_str(&format!("    sgl_label_ext_set_text_rotation({}, {});\n", obj, r));
+            }
+        }
+        "arc_label" => {
+            if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
+                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
+                code.push_str(&format!("    sgl_arc_label_set_font({}, &{});\n", obj, fid));
+            }
+            let has_buffer = w.text_buffer.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
+            if has_buffer {
+                if let Some(buf) = &w.text_buffer {
+                    let parts: Vec<&str> = buf.split(',').map(|s| s.trim()).collect();
+                    if parts.len() == 2 {
+                        if let Ok(sz) = parts[1].parse::<u16>() {
+                            code.push_str(&format!("    sgl_arc_label_set_text_buffer({}, {}, {});\n", obj, parts[0], sz));
+                        }
+                    } else {
+                        code.push_str(&format!("    sgl_arc_label_set_text_buffer({}, {}, 64);\n", obj, parts[0]));
+                    }
+                }
+                if let Some(fmt) = &w.text_fmt {
+                    if !fmt.is_empty() {
+                        let escaped = fmt.replace('\\', "\\\\").replace('"', "\\\"");
+                        code.push_str(&format!("    sgl_arc_label_set_text_fmt({}, \"{}\");\n", obj, escaped));
+                    }
+                } else if let Some(fmt) = &w.text_fmt_dynamic {
+                    if !fmt.is_empty() {
+                        let escaped = fmt.replace('\\', "\\\\").replace('"', "\\\"");
+                        code.push_str(&format!("    sgl_arc_label_set_text_fmt_dynamic({}, \"{}\");\n", obj, escaped));
+                    }
+                }
+            } else {
+                cstr!("sgl_arc_label_set_text", w.text);
+            }
+            cclr!("sgl_arc_label_set_text_color", w.text_color);
+            // arc_label 的 set_bg_color 会自动置位 bg_flag
+            if let Some(bg) = &w.bg_color {
+                if !bg.is_empty() && bg != "transparent" && w.arc_label_bg_flag.unwrap_or(false) {
+                    code.push_str(&format!("    sgl_arc_label_set_bg_color({}, {});\n", obj, sgl_color(bg)));
+                }
+            }
+            c!( "sgl_arc_label_set_alpha", w.alpha.map(|v| v as u8));
+            if let Some(a) = &w.align {
+                let align_macro = match a.as_str() {
+                    "TOP_LEFT" => "SGL_ALIGN_TOP_LEFT",
+                    "TOP_MID" => "SGL_ALIGN_TOP_MID",
+                    "TOP_RIGHT" => "SGL_ALIGN_TOP_RIGHT",
+                    "LEFT_MID" => "SGL_ALIGN_LEFT_MID",
+                    "CENTER" => "SGL_ALIGN_CENTER",
+                    "RIGHT_MID" => "SGL_ALIGN_RIGHT_MID",
+                    "BOT_LEFT" => "SGL_ALIGN_BOT_LEFT",
+                    "BOT_MID" => "SGL_ALIGN_BOT_MID",
+                    "BOT_RIGHT" => "SGL_ALIGN_BOT_RIGHT",
+                    "LEFT" => "SGL_ALIGN_LEFT_MID",
+                    "RIGHT" => "SGL_ALIGN_RIGHT_MID",
+                    "TOP" => "SGL_ALIGN_TOP_MID",
+                    "BOTTOM" | "DOWN" => "SGL_ALIGN_BOT_MID",
+                    _ => "SGL_ALIGN_CENTER",
+                };
+                code.push_str(&format!("    sgl_arc_label_set_text_align({}, {});\n", obj, align_macro));
+            }
+            c!( "sgl_arc_label_set_radius", w.radius.map(|v| v as u8));
+            c!( "sgl_arc_label_set_angle", w.angle.map(|v| v as i16));
+            c!( "sgl_arc_label_set_text_offset", w.arc_label_offset_x.zip(w.arc_label_offset_y).map(|(x, y)| format!("{}, {}", x as i8, y as i8)));
+        }
+        "img" => {
+            if let Some(pix) = &w.pixmap {
+                if !pix.is_empty() {
+                    let fmt = w.pixmap_format.as_deref().unwrap_or("RGB565");
+                    code.push_str(&format!("    sgl_img_set_pixmap({}, &{});\n", obj, pixmap_var_name(pix, fmt)));
+                }
+            }
+            c!( "sgl_img_set_alpha", w.alpha.map(|v| v as u8));
+            if let Some(read_ops) = &w.read_ops {
+                if !read_ops.is_empty() {
+                    code.push_str(&format!("    sgl_img_set_read_ops({}, {});\n", obj, read_ops.trim()));
+                }
             }
         }
         "textbox" => {
@@ -3261,7 +3452,14 @@ fn export_code_to_project(mut project: Project, project_path: String, code: Stri
 
     // 写入 code/ui.c
     let ui_c = code_dir.join("ui.c");
-    std::fs::write(&ui_c, &code).map_err(|e| format!("写入 ui.c 失败: {}", e))?;
+    // 若 ui.c 已存在，保留 USER CODE BEGIN/END 区域内的用户代码
+    let final_code = if ui_c.exists() {
+        let old_code = std::fs::read_to_string(&ui_c).unwrap_or_default();
+        merge_user_code(&code, &old_code)
+    } else {
+        code
+    };
+    std::fs::write(&ui_c, &final_code).map_err(|e| format!("写入 ui.c 失败: {}", e))?;
 
     // 生成 sgl_config.h 到 code 目录
     let pixel_depth = match project.color_depth.as_str() {
@@ -3862,6 +4060,92 @@ fn generate_sgl_config_h(config: &SglConfig, path: &std::path::Path) -> Result<(
     std::fs::write(path, content).map_err(|e| format!("写入 sgl_config.h 失败: {}", e))
 }
 
+/// 合并用户代码：从旧 ui.c 中提取 USER CODE BEGIN/END 区域内的内容，写入新生成的代码对应位置
+/// 区域标记格式：/* USER CODE BEGIN <name> */ ... /* USER CODE END <name> */
+/// 重新生成代码时，旧文件中所有标记区域内的用户代码会被保留并合并到新代码中
+fn merge_user_code(new_code: &str, old_code: &str) -> String {
+    // 从旧代码中提取所有 USER CODE 区域：name -> 内容
+    use std::collections::HashMap;
+    let mut user_blocks: HashMap<String, String> = HashMap::new();
+
+    let begin_prefix = "/* USER CODE BEGIN ";
+    let end_prefix = "/* USER CODE END ";
+    let mut lines = old_code.lines().peekable();
+    while let Some(line) = lines.next() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix(begin_prefix) {
+            // 提取区域名：USER CODE BEGIN name */
+            if let Some(end_idx) = rest.find("*/") {
+                let name = rest[..end_idx].trim().to_string();
+                if !name.is_empty() {
+                    // 收集区域内容，直到遇到 USER CODE END name
+                    let end_marker = format!("{}{} */", end_prefix, name);
+                    let mut content_lines: Vec<String> = Vec::new();
+                    for inner_line in lines.by_ref() {
+                        if inner_line.trim() == end_marker.trim() {
+                            break;
+                        }
+                        content_lines.push(inner_line.to_string());
+                    }
+                    // 去除尾部空行
+                    while content_lines.last().map(|s| s.trim().is_empty()).unwrap_or(false) {
+                        content_lines.pop();
+                    }
+                    let content = content_lines.join("\n");
+                    user_blocks.insert(name, content);
+                }
+            }
+        }
+    }
+
+    // 若无用户代码，直接返回新代码
+    if user_blocks.is_empty() {
+        return new_code.to_string();
+    }
+
+    // 将用户代码合并到新代码对应位置
+    let mut result_lines: Vec<String> = Vec::new();
+    let mut in_user_block = false;
+    let mut current_block_name: String = String::new();
+
+    for line in new_code.lines() {
+        let trimmed = line.trim();
+        // 检测 USER CODE BEGIN name */
+        if let Some(rest) = trimmed.strip_prefix(begin_prefix) {
+            if let Some(end_idx) = rest.find("*/") {
+                let name = rest[..end_idx].trim().to_string();
+                if !name.is_empty() {
+                    in_user_block = true;
+                    current_block_name = name.clone();
+                    result_lines.push(line.to_string());
+                    // 插入用户代码
+                    if let Some(content) = user_blocks.get(&name) {
+                        if !content.is_empty() {
+                            result_lines.push(content.clone());
+                        }
+                    }
+                    continue;
+                }
+            }
+        }
+        // 检测 USER CODE END name */
+        if in_user_block && trimmed.strip_prefix(end_prefix).is_some() {
+            in_user_block = false;
+            current_block_name.clear();
+            result_lines.push(line.to_string());
+            continue;
+        }
+        // 区域内原有的占位注释行跳过（避免重复）
+        if in_user_block && (trimmed.starts_with("/* ") || trimmed.starts_with("//")) {
+            // 跳过新代码中区域内的占位说明行
+            continue;
+        }
+        result_lines.push(line.to_string());
+    }
+
+    result_lines.join("\n") + "\n"
+}
+
 /// 复制导出的代码到 sgl-port 项目并编译
 #[tauri::command]
 fn build_project(
@@ -4149,7 +4433,14 @@ fn build_project(
 
     std::fs::create_dir_all(&code_dir).map_err(|e| format!("创建 code 目录失败: {}", e))?;
     let ui_c = code_dir.join("ui.c");
-    std::fs::write(&ui_c, &code).map_err(|e| format!("写入 ui.c 失败: {}", e))?;
+    // 若 ui.c 已存在，保留 USER CODE BEGIN/END 区域内的用户代码
+    let final_code = if ui_c.exists() {
+        let old_code = std::fs::read_to_string(&ui_c).unwrap_or_default();
+        merge_user_code(&code, &old_code)
+    } else {
+        code
+    };
+    std::fs::write(&ui_c, &final_code).map_err(|e| format!("写入 ui.c 失败: {}", e))?;
 
     // 写入字模 C 文件到 code/fonts/ 目录
     let fonts_dir = code_dir.join("fonts");
@@ -4860,6 +5151,54 @@ async fn download_and_install_update(url: String, app_handle: tauri::AppHandle) 
     Ok(path_str)
 }
 
+#[tauri::command]
+fn save_png_to_desktop_or_dir(filename: String, bytes: Vec<u8>) -> Result<String, String> {
+    use std::path::PathBuf;
+
+    fn get_desktop() -> Option<PathBuf> {
+        if let Ok(home) = std::env::var("USERPROFILE") {
+            let p = PathBuf::from(&home).join("Desktop");
+            if p.exists() { return Some(p); }
+            let p2 = PathBuf::from(&home).join("OneDrive").join("Desktop");
+            if p2.exists() { return Some(p2); }
+        }
+        if let Ok(home) = std::env::var("HOME") {
+            let p = PathBuf::from(&home).join("Desktop");
+            if p.exists() { return Some(p); }
+        }
+        None
+    }
+
+    // 优先保存到项目目录/screenshots 下（可通过最近一次打开的项目路径推断？这里先简化：桌面/screenshots）
+    let target_dir: PathBuf = get_desktop().unwrap_or_else(|| std::env::temp_dir());
+
+    // 若有 screenshots 子目录优先写入，否则直接写桌面
+    let screenshots = target_dir.join("SGL UI 截图");
+    let out_dir = if screenshots.exists() || std::fs::create_dir_all(&screenshots).is_ok() {
+        screenshots
+    } else {
+        target_dir.clone()
+    };
+    // 保证文件名安全
+    let safe_name: String = filename.chars().map(|c| match c {
+        '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+        c => c,
+    }).collect();
+    let mut out_path = out_dir.join(&safe_name);
+    if out_path.exists() {
+        // 同名追加时间戳
+        let stem = out_path.file_stem().and_then(|s| s.to_str()).unwrap_or("screenshot").to_string();
+        let ext = out_path.extension().and_then(|s| s.to_str()).unwrap_or("png").to_string();
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs().to_string())
+            .unwrap_or_else(|_| "0".to_string());
+        out_path = out_dir.join(format!("{}_{}.{}", stem, ts, ext));
+    }
+    std::fs::write(&out_path, bytes).map_err(|e| format!("写入截图失败: {}", e))?;
+    Ok(out_path.to_string_lossy().to_string())
+}
+
 fn main() {
     let result = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -4883,6 +5222,7 @@ fn main() {
             get_image_data_url,
             get_opaque_image_data_url,
             list_directory,
+            get_font_file_fingerprint,
             download_and_install_update,
             // LLM 模块
             llm::load_llm_config,
@@ -4895,7 +5235,8 @@ fn main() {
             load_ai_chat_history,
             save_ai_chat_history,
             clear_ai_chat_history,
-            generate_font_c
+            generate_font_c,
+            save_png_to_desktop_or_dir
         ])
         .run(tauri::generate_context!());
 
@@ -5042,6 +5383,25 @@ fn generate_font_c(
         return Err(format!("字体文件不存在: {}", font_path));
     }
     font_generator::generate_font_c(path, size, bpp, &symbols, compress, &font_name)
+}
+
+/// 返回字体文件指纹（大小+修改时间），用于前端缓存失效判定
+/// 若文件不存在则返回空字符串
+#[tauri::command]
+fn get_font_file_fingerprint(font_path: String) -> Result<String, String> {
+    let path = std::path::Path::new(&font_path);
+    if !path.exists() {
+        return Ok(String::new());
+    }
+    let meta = std::fs::metadata(path).map_err(|e| e.to_string())?;
+    let size = meta.len();
+    let modified = meta
+        .modified()
+        .ok()
+        .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    Ok(format!("{}_{}", size, modified))
 }
 
 /// 读取项目独立存储的 AI 对话历史（与项目文件分离，避免项目文件膨胀）

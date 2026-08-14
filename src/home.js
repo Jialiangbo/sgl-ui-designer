@@ -43,10 +43,6 @@ document.getElementById('card-demo1').addEventListener('click', () => loadDemo('
 document.getElementById('card-demo2').addEventListener('click', () => loadDemo('menu'));
 document.getElementById('card-demo3').addEventListener('click', () => loadDemo('keypad'));
 
-document.querySelectorAll('[data-nav]').forEach(tab => {
-  tab.addEventListener('click', () => navigate(tab.dataset.nav));
-});
-
 function loadDemo(type) {
   AppState.reset();
   const demo = DEMOS[type];

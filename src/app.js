@@ -281,6 +281,14 @@ export const AppState = {
       zOrder: maxZ + 1,
       ...defaults
     };
+    // 需要字体的控件：若资源管理器中已添加字体，直接默认取第一个字体的 path
+    // 这样属性面板也能正确显示字体名，不再依赖渲染/代码生成的 fallback 兜底
+    if (widget.hasOwnProperty('fontFamily') && (!widget.fontFamily || widget.fontFamily === 'default')) {
+      const fonts = (this.project && this.project.resources && this.project.resources.fonts) || [];
+      if (fonts.length > 0 && fonts[0] && fonts[0].path) {
+        widget.fontFamily = fonts[0].path;
+      }
+    }
     // ring 控件：根据宽高计算内外径
     if (type === 'ring') {
       const diameter = Math.min(widget.width, widget.height);
@@ -1047,6 +1055,8 @@ export function uid() {
 }
 
 export function navigate(page) {
+  const cur = window.location.pathname.split('/').pop().replace(/\.html$/i, '');
+  if (cur === page) return; // 已经在目标页，不重复刷新
   window.location.href = page + '.html';
 }
 
@@ -1064,6 +1074,11 @@ export function initNav(activePage) {
   const navTabs = document.querySelectorAll('[data-nav]');
   navTabs.forEach(tab => {
     if (tab.dataset.nav === activePage) tab.classList.add('active');
+    // 统一绑定导航点击（带去重，避免各页面重复绑定）
+    if (!tab.dataset.navBound) {
+      tab.dataset.navBound = '1';
+      tab.addEventListener('click', () => navigate(tab.dataset.nav));
+    }
   });
 }
 

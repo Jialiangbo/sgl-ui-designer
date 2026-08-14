@@ -1,4 +1,4 @@
-/**
+﻿/**
  * SGL 核心渲染引擎 JavaScript 移植
  * 基于源目录 sgl/source/draw/ 下的 C 代码逐函数移植
  * 目标：像素级还原 SGL 仿真渲染效果，实现所见即所得
@@ -13,6 +13,84 @@
 // ============================================================
 // 颜色系统
 // ============================================================
+
+// 当前项目颜色深度：'8bit' | '16bit' | '24bit' | '32bit'
+// 由 editor.js/preview.js 在渲染前根据 AppState.project.color_depth 设置
+let _currentColorDepth = '16bit';
+
+export function setColorDepth(depth) {
+  if (depth === '8bit' || depth === '16bit' || depth === '24bit' || depth === '32bit') {
+    _currentColorDepth = depth;
+  } else {
+    // 兼容旧项目或非法值，默认 16bit
+    _currentColorDepth = '16bit';
+  }
+}
+
+export function getColorDepth() {
+  return _currentColorDepth;
+}
+
+/**
+ * 按当前项目颜色深度量化颜色
+ * @param {{r,g,b}} c
+ * @returns {{r,g,b}}
+ */
+function quantizeColorForDepth(c) {
+  if (_currentColorDepth === '24bit' || _currentColorDepth === '32bit') return c;
+  if (_currentColorDepth === '8bit') {
+    const r3 = (c.r >> 5) & 0x07;
+    const g3 = (c.g >> 5) & 0x07;
+    const b2 = (c.b >> 6) & 0x03;
+    return {
+      r: (r3 << 5) | (r3 << 2) | (r3 >> 1),
+      g: (g3 << 5) | (g3 << 2) | (g3 >> 1),
+      b: (b2 << 6) | (b2 << 4) | (b2 << 2) | b2,
+    };
+  }
+  // 16bit RGB565
+  const r5 = (c.r >> 3) & 0x1F;
+  const g6 = (c.g >> 2) & 0x3F;
+  const b5 = (c.b >> 3) & 0x1F;
+  return {
+    r: (r5 << 3) | (r5 >> 2),
+    g: (g6 << 2) | (g6 >> 4),
+    b: (b5 << 3) | (b5 >> 2),
+  };
+}
+
+/**
+ * 按当前项目颜色深度混合两个颜色
+ * @param {{r,g,b}} fg
+ * @param {{r,g,b}} bg
+ * @param {number} factor 0-255
+ * @returns {{r,g,b}}
+ */
+function mixColorForDepth(fg, bg, factor) {
+  const f = Math.max(0, Math.min(256, factor));
+  if (_currentColorDepth === '24bit' || _currentColorDepth === '32bit') {
+    return {
+      r: Math.trunc((fg.r * f + bg.r * (256 - f)) / 256),
+      g: Math.trunc((fg.g * f + bg.g * (256 - f)) / 256),
+      b: Math.trunc((fg.b * f + bg.b * (256 - f)) / 256),
+    };
+  }
+  if (_currentColorDepth === '8bit') {
+    // RGB332 混合：先量化到 3/3/2，混合后再扩展回 8bit
+    const qfg = quantizeColorForDepth(fg);
+    const qbg = quantizeColorForDepth(bg);
+    const mixed = {
+      r: Math.trunc((qfg.r * f + qbg.r * (256 - f)) / 256),
+      g: Math.trunc((qfg.g * f + qbg.g * (256 - f)) / 256),
+      b: Math.trunc((qfg.b * f + qbg.b * (256 - f)) / 256),
+    };
+    return quantizeColorForDepth(mixed);
+  }
+  // 16bit RGB565：使用 SGL 优化的位运算混合
+  const fg565 = rgba8888ToRGB565(fg.r, fg.g, fg.b);
+  const bg565 = rgba8888ToRGB565(bg.r, bg.g, bg.b);
+  return rgb565ToRGBA8888(colorMixerRGB565(fg565, bg565, factor));
+}
 
 /**
  * hex 字符串转 {r,g,b}
@@ -39,16 +117,10 @@ function colorToHex(c) {
 /**
  * SGL 颜色混合 sgl_color_mixer(fg, bg, factor)
  * factor 0-255，255 = 全前景
+ * 根据当前项目颜色深度动态选择混合精度（8bit/16bit/24bit/32bit）
  */
 function colorMixer(fg, bg, factor) {
-  // SGL: bg + (fg - bg) * factor / 256，factor 范围 0-256
-  // SGL 使用 C 整数除法（向零截断），等价于 Math.trunc 而非 Math.round
-  const f = Math.max(0, Math.min(256, factor));
-  return {
-    r: Math.trunc((fg.r * f + bg.r * (256 - f)) / 256),
-    g: Math.trunc((fg.g * f + bg.g * (256 - f)) / 256),
-    b: Math.trunc((fg.b * f + bg.b * (256 - f)) / 256),
-  };
+  return mixColorForDepth(fg, bg, factor);
 }
 
 /**
@@ -172,9 +244,10 @@ function setPixel(surf, x, y, color, alpha) {
   if (x < surf.clip.x1 || x > surf.clip.x2 || y < surf.clip.y1 || y > surf.clip.y2) return;
   if (alpha <= 0) return;
   const idx = y * surf.w + x;
+  const qColor = quantizeColorForDepth(color);
   if (alpha >= 255) {
-    // 直接覆盖（ABGR 小端）
-    surf.buf32[idx] = 0xff000000 | (color.b << 16) | (color.g << 8) | color.r;
+    // 直接覆盖（ABGR 小端），按项目颜色深度量化
+    surf.buf32[idx] = 0xff000000 | (qColor.b << 16) | (qColor.g << 8) | qColor.r;
   } else {
     // 与现有像素混合
     const existing = surf.buf32[idx];
@@ -183,7 +256,7 @@ function setPixel(surf, x, y, color, alpha) {
       g: (existing >> 8) & 0xff,
       b: (existing >> 16) & 0xff,
     };
-    const mixed = colorMixer(color, bg, alpha);
+    const mixed = colorMixer(qColor, bg, alpha);
     surf.buf32[idx] = 0xff000000 | (mixed.b << 16) | (mixed.g << 8) | mixed.r;
   }
 }
@@ -215,6 +288,7 @@ function setEdgePixel(surf, x, y, color, edge_alpha, alpha) {
   const idx = y * surf.w + x;
   const existing = surf.buf32[idx];
   const bg_a = (existing >> 24) & 0xff;
+  const qColor = quantizeColorForDepth(color);
 
   if (bg_a === 0) {
     // 背景完全透明：写入带 alpha 通道的颜色，不做黑色混合
@@ -222,12 +296,12 @@ function setEdgePixel(surf, x, y, color, edge_alpha, alpha) {
     // 由于 bg 透明，最终像素 = color with alpha = edge_alpha * alpha / 255
     const final_alpha = Math.min(255, Math.round(edge_alpha * alpha / 255));
     if (final_alpha > 0) {
-      surf.buf32[idx] = (final_alpha << 24) | (color.b << 16) | (color.g << 8) | color.r;
+      surf.buf32[idx] = (final_alpha << 24) | (qColor.b << 16) | (qColor.g << 8) | qColor.r;
     }
   } else {
     // 背景不透明：按 SGL 算法与现有像素混合
     const bg = { r: existing & 0xff, g: (existing >> 8) & 0xff, b: (existing >> 16) & 0xff };
-    const mixed = colorMixer(color, bg, edge_alpha);
+    const mixed = colorMixer(qColor, bg, edge_alpha);
     if (alpha >= 255) {
       surf.buf32[idx] = 0xff000000 | (mixed.b << 16) | (mixed.g << 8) | mixed.r;
     } else {
@@ -1574,15 +1648,28 @@ function parseFontCFile(content) {
   if (!tableMatch) throw new Error('解析字模失败: 未找到 table 数组');
   const tableStr = tableMatch[1];
   const table = [];
-  const entryRe = /\{[^}]*\.bitmap_index\s*=\s*(-?\d+)[^}]*\.adv_w\s*=\s*(-?\d+)[^}]*\.box_w\s*=\s*(-?\d+)[^}]*\.box_h\s*=\s*(-?\d+)[^}]*\.ofs_x\s*=\s*(-?\d+)[^}]*\.ofs_y\s*=\s*(-?\d+)[^}]*\}/g;
-  while ((m = entryRe.exec(tableStr)) !== null) {
+  // 兼容注释：先移除 tableStr 中的行内注释 /* ... */ 与 // 注释
+  const tableClean = tableStr
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/[^\n]*/g, '');
+  // 逐个分割 entry：匹配 { ... }，内部允许有逗号、数字、点等
+  const entryRe = /\{([^{}]*)\}/g;
+  // 从 entry body 中按字段名提取数值，不依赖字段顺序
+  const fieldRe = (name) => new RegExp(`\\.${name}\\s*=\\s*(-?\\d+)`);
+  let em;
+  while ((em = entryRe.exec(tableClean)) !== null) {
+    const body = em[1];
+    const getField = (name) => {
+      const fm = body.match(fieldRe(name));
+      return fm ? parseInt(fm[1], 10) : 0;
+    };
     table.push({
-      bitmap_index: parseInt(m[1], 10),
-      adv_w: parseInt(m[2], 10),
-      box_w: parseInt(m[3], 10),
-      box_h: parseInt(m[4], 10),
-      ofs_x: parseInt(m[5], 10),
-      ofs_y: parseInt(m[6], 10),
+      bitmap_index: getField('bitmap_index'),
+      adv_w: getField('adv_w'),
+      box_w: getField('box_w'),
+      box_h: getField('box_h'),
+      ofs_x: getField('ofs_x'),
+      ofs_y: getField('ofs_y'),
     });
   }
 
@@ -1602,30 +1689,73 @@ function parseFontCFile(content) {
   // unicode 映射表：static const sgl_font_unicode_t font_unicode[] = {...};
   // list 中存的是相对 offset 的偏移量（与 SGL sgl_search_unicode_ch_index 一致）
   const unicode = [];
-  const uniRe = /\{\s*\.offset\s*=\s*(0x[0-9a-fA-F]+|\d+)\s*,\s*\.len\s*=\s*(\d+)\s*,\s*\.list\s*=\s*(\w+)\s*,\s*\.tab_offset\s*=\s*(\d+)\s*,?\s*\}/g;
-  while ((m = uniRe.exec(content)) !== null) {
-    const listName = m[3];
-    const offsetVal = m[1].startsWith('0x') ? parseInt(m[1], 16) : parseInt(m[1], 10);
+  // 先在 cleaned 基础上再去掉行内 // 注释
+  const forUni = cleaned.replace(/\/\/[^\n]*/g, '');
+  // 匹配每个 { ... } 子表，不严格依赖字段顺序和逗号位置
+  const uniEntryRe = /\{([^{}]*)\}/g;
+  const uniFieldRe = (name) => new RegExp(`\\.${name}\\s*=\\s*([^,\\s}]+)`);
+  let um;
+  while ((um = uniEntryRe.exec(forUni)) !== null) {
+    const body = um[1];
+    // 必须包含 .offset 字段才认为是 unicode entry（避免误匹配其他结构）
+    if (!uniFieldRe('offset').test(body)) continue;
+    const getField = (name) => {
+      const fm = body.match(uniFieldRe(name));
+      return fm ? fm[1].trim() : '';
+    };
+    const offsetRaw = getField('offset');
+    const lenRaw = getField('len');
+    const listRaw = getField('list').replace(/[",\s]/g, '');
+    const tabOffsetRaw = getField('tab_offset');
+    if (!offsetRaw || !lenRaw || !tabOffsetRaw) continue;
+    const offsetVal = offsetRaw.startsWith('0x') ? parseInt(offsetRaw, 16) : parseInt(offsetRaw, 10);
+    const list = (listRaw === 'NULL' || listRaw === '0' || listRaw === '')
+      ? null
+      : (unicodeLists[listRaw] || null);
     unicode.push({
       offset: offsetVal,
-      len: parseInt(m[2], 10),
-      list: (listName === 'NULL' || listName === '0') ? null : (unicodeLists[listName] || null),
-      tab_offset: parseInt(m[4], 10),
+      len: parseInt(lenRaw, 10),
+      list,
+      tab_offset: parseInt(tabOffsetRaw, 10),
     });
   }
 
-  const fontHeightMatch = content.match(/\.font_height\s*=\s*(\d+)/);
-  const baseLineMatch = content.match(/\.base_line\s*=\s*(-?\d+)/);
-  const bppMatch = content.match(/\.bpp\s*=\s*(\d+)/);
-  const compressMatch = content.match(/\.compress\s*=\s*(\d+)/);
+  const fontHeightMatch = cleaned.match(/\.font_height\s*=\s*(\d+)/);
+  const baseLineMatch = cleaned.match(/\.base_line\s*=\s*(-?\d+)/);
+  const bppMatch = cleaned.match(/\.bpp\s*=\s*(\d+)/);
+  const compressMatch = cleaned.match(/\.compress\s*=\s*(\d+)/);
 
-  return {
+  const fd = {
     bitmap, table, unicode,
     font_height: fontHeightMatch ? parseInt(fontHeightMatch[1], 10) : 14,
     base_line: baseLineMatch ? parseInt(baseLineMatch[1], 10) : 3,
     bpp: bppMatch ? parseInt(bppMatch[1], 10) : 4,
     compress: compressMatch ? parseInt(compressMatch[1], 10) : 0,
   };
+
+  // parseFontCFile 内部诊断：bitmap/table 一致性校验（输出前 3 条越界）
+  const fbpp = fd.bpp;
+  let invalid = 0;
+  for (let i = 1; i < fd.table.length; i++) {
+    const e = fd.table[i];
+    if (!e || e.box_w <= 0 || e.box_h <= 0) continue;
+    const neededBytes = Math.ceil((e.box_w * e.box_h * fbpp) / 8);
+    if (e.bitmap_index + neededBytes > fd.bitmap.length) {
+      invalid++;
+      if (invalid <= 3) {
+        console.log(`[parseFontCFile] 一致性校验失败 table[${i}]`, {
+          bitmap_index: e.bitmap_index, needed_bytes: neededBytes,
+          bitmap_len: fd.bitmap.length, box_w: e.box_w, box_h: e.box_h, bpp: fbpp,
+        });
+      }
+    }
+  }
+  console.log(`[parseFontCFile] 结果: bitmap=${fd.bitmap.length} table=${fd.table.length} unicode=${fd.unicode.length} height=${fd.font_height} baseline=${fd.base_line} bpp=${fd.bpp} compress=${fd.compress} invalidEntries=${invalid}`);
+  if (invalid > 0) console.log(`[parseFontCFile] 共 ${invalid} 个越界字形，请检查后端生成逻辑或 C 文件解析正则`);
+  // 关键诊断：打印 seg.list 原始数值和 table 前 10 条详情
+  console.log(`%c[parseFontCFile-关键诊断] seg[0].list=`, 'color:red;font-weight:bold;', fd.unicode[0]?.list);
+  console.log(`%c[parseFontCFile-关键诊断] table详情:`, 'color:red;font-weight:bold;', fd.table.map((e, i) => `[${i}]bmp_idx=${e.bitmap_index} w=${e.box_w} h=${e.box_h} ofs_x=${e.ofs_x} ofs_y=${e.ofs_y} adv=${e.adv_w}`).join(' | '));
+  return fd;
 }
 
 function registerFontData(key, fontData) { _fontBitmapCache.set(key, fontData); }
@@ -1635,7 +1765,9 @@ function fontDataKey(fontPath, size, bpp) { return `${fontPath}|${size}|${bpp}`;
 
 /**
  * sgl_search_unicode_ch_index - 查找字符索引
- * 移植自 sgl_core.c:1238-1278
+ * 移植自 sgl_core.c:1193-1218
+ * 注意：C 源码中 target 是 uint32_t，unicode < offset 时下溢为超大正数，
+ *       被 target >= len 拦截返回 0。JS 必须显式检查 target < 0。
  */
 function searchUnicodeChIndex(font, unicode) {
   const code = font.unicode;
@@ -1647,6 +1779,9 @@ function searchUnicodeChIndex(font, unicode) {
   if (i >= code.length) i = code.length - 1;
   const seg = code[i];
   const target = unicode - seg.offset;
+  // 对齐 C uint32_t 下溢行为：target < 0 时 C 会下溢为超大正数被 len 拦截，
+  // JS 必须显式检查，否则返回错误索引导致渲染乱码
+  if (target < 0) return 0;
   if (seg.list === null) {
     if (target >= seg.len) return 0;
     return target + seg.tab_offset;
@@ -1669,7 +1804,8 @@ function fontGetStringWidth(str, font) {
   let len = 0;
   for (let i = 0; i < str.length; i++) {
     const chIndex = searchUnicodeChIndex(font, str.charCodeAt(i));
-    if (chIndex < font.table.length) {
+    if (chIndex > 0 && chIndex < font.table.length) {
+      // 对齐 SGL C 源码: x += (font->table[ch_index].adv_w >> 4)
       len += (font.table[chIndex].adv_w + 8) >> 4;
     }
   }
@@ -1685,7 +1821,6 @@ function fontGetHeight(font) { return font ? font.font_height : 0; }
 function drawCharacter(surf, x, y, chIndex, color, alpha, font) {
   const entry = font.table[chIndex];
   if (!entry) return;
-  const offset_y2 = font.font_height - entry.ofs_y - font.base_line;
   const dot = font.bitmap;
   const bitmapStart = entry.bitmap_index;
   const font_w = entry.box_w;
@@ -1696,8 +1831,8 @@ function drawCharacter(surf, x, y, chIndex, color, alpha, font) {
   const text_rect = {
     x1: x + entry.ofs_x,
     x2: x + entry.ofs_x + font_w - 1,
-    y1: y + offset_y2 - font_h,
-    y2: y + offset_y2 - 1,
+    y1: y + (font.font_height - entry.ofs_y - font.base_line) - font_h,
+    y2: y + (font.font_height - entry.ofs_y - font.base_line) - 1,
   };
 
   const px1 = Math.round(text_rect.x1 * z);
@@ -1712,8 +1847,8 @@ function drawCharacter(surf, x, y, chIndex, color, alpha, font) {
   if (cx1 > cx2 || cy1 > cy2) return;
 
   const bpp = font.bpp;
-  // SGL 项目色深为 RGB565，文字混合必须按 RGB565 色深执行才能与运行时一致
-  const fg565 = rgba8888ToRGB565(color.r, color.g, color.b);
+  // 文字颜色按当前项目颜色深度量化，确保与 SGL 运行时一致
+  const fgColor = quantizeColorForDepth(color);
 
   // 将像素坐标反向映射回字模坐标（最近邻），避免缩放时 rel_x/rel_y 超出字模尺寸而读到相邻字符
   for (let py = cy1; py <= cy2; py++) {
@@ -1749,16 +1884,13 @@ function drawCharacter(surf, x, y, chIndex, color, alpha, font) {
         const eff_alpha = (alpha_dot === 255) ? alpha
                         : (alpha === 255) ? alpha_dot
                         : Math.round(alpha_dot * alpha / 255);
-        const fgQuant = rgb565ToRGBA8888(fg565);
-        surf.buf32[idx] = (Math.min(255, eff_alpha) << 24) | (fgQuant.b << 16) | (fgQuant.g << 8) | fgQuant.r;
+        surf.buf32[idx] = (Math.min(255, eff_alpha) << 24) | (fgColor.b << 16) | (fgColor.g << 8) | fgColor.r;
       } else {
-        // 背景不透明：严格按 SGL RGB565 两步混合
-        const bg565 = rgba8888ToRGB565(bg.r, bg.g, bg.b);
-        // Step 1: color_mix = sgl_color_mixer(fg, bg, alpha_dot)
-        const mix1_565 = (alpha_dot === 255) ? fg565 : colorMixerRGB565(fg565, bg565, alpha_dot);
-        // Step 2: *blend = sgl_color_mixer(color_mix, bg, alpha)
-        const result565 = (alpha >= 255) ? mix1_565 : colorMixerRGB565(mix1_565, bg565, alpha);
-        const result = rgb565ToRGBA8888(result565);
+        // 背景不透明：按当前项目颜色深度做两步混合
+        // Step 1: color_mix = mixer(fg, bg, alpha_dot)
+        const mix1 = (alpha_dot === 255) ? fgColor : colorMixer(fgColor, bg, alpha_dot);
+        // Step 2: *blend = mixer(color_mix, bg, alpha)
+        const result = (alpha >= 255) ? mix1 : colorMixer(mix1, bg, alpha);
         surf.buf32[idx] = 0xff000000 | (result.b << 16) | (result.g << 8) | result.r;
       }
     }
@@ -1770,13 +1902,38 @@ function drawCharacter(surf, x, y, chIndex, color, alpha, font) {
  */
 function drawStringSGL(surf, x, y, str, color, alpha, font) {
   if (!str || alpha <= 0 || !font) return;
+  if (!font.bitmap || !font.table || font.table.length < 2 || !font.unicode || font.unicode.length === 0) {
+    return;
+  }
+  // 诊断：输出字模关键信息和 seg.list 状态（只打一次）
+  if (!drawStringSGL._logged) {
+    drawStringSGL._logged = true;
+    console.log(`%c[drawStringSGL诊断] table=${font.table.length} unicode=${font.unicode.length} bitmap=${font.bitmap.length} bpp=${font.bpp}`, 'color:red;font-weight:bold;');
+    font.unicode.forEach((u, i) => {
+      console.log(`%c[drawStringSGL诊断] seg[${i}]: offset=0x${u.offset.toString(16)} len=${u.len} list=${u.list ? JSON.stringify(u.list.map(v=>'0x'+v.toString(16))) : 'null'} tab_offset=${u.tab_offset}`, 'color:red;font-weight:bold;');
+    });
+    console.log(`%c[drawStringSGL诊断] table详情: `, 'color:red;font-weight:bold;', font.table.map((e, i) => `[${i}]bmp_idx=${e.bitmap_index} w=${e.box_w} h=${e.box_h} ofs_x=${e.ofs_x} ofs_y=${e.ofs_y} adv_w=${e.adv_w}`).join(' | '));
+  }
   let cx = x;
   for (let i = 0; i < str.length; i++) {
-    const chIndex = searchUnicodeChIndex(font, str.charCodeAt(i));
-    drawCharacter(surf, cx, y, chIndex, color, alpha, font);
-    if (chIndex < font.table.length) {
-      cx += (font.table[chIndex].adv_w + 8) >> 4;
+    const code = str.charCodeAt(i);
+    const chIndex = searchUnicodeChIndex(font, code);
+    const ch = str.charAt(i);
+    // 逐字符诊断：chIndex 和实际 table entry
+    console.log(`%c[drawStringSGL-逐字符] '${ch}'(U+${code.toString(16)}) → chIndex=${chIndex}`, 'color:magenta;font-weight:bold;');
+    if (chIndex === 0) {
+      console.log(`%c[drawStringSGL-逐字符]   ↳ chIndex=0，跳过`, 'color:magenta;');
+      continue;
     }
+    const entry = font.table[chIndex];
+    console.log(`%c[drawStringSGL-逐字符]   ↳ table[${chIndex}]: bmp_idx=${entry?.bitmap_index} w=${entry?.box_w} h=${entry?.box_h} ofs_x=${entry?.ofs_x} ofs_y=${entry?.ofs_y}`, 'color:magenta;');
+    if (!entry || entry.box_w <= 0 || entry.box_h <= 0) continue;
+    const neededBytes = Math.ceil((entry.box_w * entry.box_h * font.bpp) / 8);
+    if (entry.bitmap_index + neededBytes > font.bitmap.length) {
+      continue;
+    }
+    drawCharacter(surf, cx, y, chIndex, color, alpha, font);
+    cx += (entry.adv_w + 8) >> 4;
   }
 }
 
@@ -2793,9 +2950,7 @@ function drawExtImg(surf, imgData, w, h, rotation, scaleUniform, pivotX, pivotY,
   const isOpaqueFmt = opaqueFormats.has(baseFmt);
 
   // 按 pixmap 格式对颜色做 encode-decode 量化，模拟 SGL 实际存储/读取后的颜色损失
-  // SGL 项目色深为 RGB565，sgl_color_t 内部就是 RGB565
-  // decode_pixel 流程：从 pixmap 字节流读取 → sgl_rgbXXX_to_color → RGB565
-  // 设计器模拟：RGBA8888 → 编码为 pixmap 格式 → sgl_rgbXXX_to_color(RGB565) → 扩展回 RGBA8888
+  // 量化精度由当前项目颜色深度决定：16bit 时保持 RGB565，8bit 时 RGB332，24/32bit 时不量化
   function quantizeColor(r, g, b, a) {
     // 不透明格式：透明/半透明像素按黑色背景合成（与 main.rs convert_image_to_pixmap 一致）
     if (isOpaqueFmt) {
@@ -2804,12 +2959,57 @@ function drawExtImg(surf, imgData, w, h, rotation, scaleUniform, pivotX, pivotY,
       b = Math.round(b * a / 255);
       a = 255;
     }
+
+    if (_currentColorDepth === '24bit' || _currentColorDepth === '32bit') {
+      // 24/32bit：保留 pixmap 格式自身的精度，不再强制压到 RGB565
+      let rr = r, gg = g, bb = b, aa = a;
+      switch (baseFmt) {
+        case 'RGB332':
+          rr = ((r >> 5) & 0x07) << 5;
+          gg = ((g >> 5) & 0x07) << 5;
+          bb = (b & 0xC0);
+          aa = 255;
+          break;
+        case 'ARGB2222': {
+          const v = ((a >> 6) << 6) | ((r >> 6) << 4) | ((g >> 6) << 2) | (b >> 6);
+          rr = ((v >> 4) & 0x03) << 6;
+          gg = ((v >> 2) & 0x03) << 6;
+          bb = (v & 0x03) << 6;
+          aa = OPA2_TABLE[v >> 6];
+          break;
+        }
+        case 'RGB565': {
+          const v = (((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
+          rr = ((v >> 11) & 0x1F) << 3;
+          gg = ((v >> 5) & 0x3F) << 2;
+          bb = (v & 0x1F) << 3;
+          aa = 255;
+          break;
+        }
+        case 'ARGB4444': {
+          const v = (((a & 0xF0) << 8) | ((r & 0xF0) << 4) | (g & 0xF0) | (b >> 4));
+          rr = ((v >> 8) & 0x0F) << 4;
+          gg = ((v >> 4) & 0x0F) << 4;
+          bb = (v & 0x0F) << 4;
+          aa = OPA4_TABLE[v >> 12];
+          break;
+        }
+        case 'RGB888':
+          aa = 255;
+          break;
+        case 'ARGB8888':
+          aa = a;
+          break;
+        default:
+          aa = 255;
+      }
+      return { r: rr, g: gg, b: bb, a: aa };
+    }
+
     let r5, g6, b5, alpha;
     switch (baseFmt) {
       case 'RGB332': {
-        // RGB332: R3G3B2
         const v = ((r >> 5) << 5) | ((g >> 5) << 2) | (b >> 6);
-        // sgl_rgb332_to_color in RGB565:
         b5 = (v & 0x03) << 3;
         g6 = ((v >> 2) & 0x07) << 3;
         r5 = ((v >> 5) & 0x07) << 2;
@@ -2817,9 +3017,7 @@ function drawExtImg(surf, imgData, w, h, rotation, scaleUniform, pivotX, pivotY,
         break;
       }
       case 'ARGB2222': {
-        // ARGB2222: A2R2G2B2
         const v = ((a >> 6) << 6) | ((r >> 6) << 4) | ((g >> 6) << 2) | (b >> 6);
-        // sgl_rgb222_to_color in RGB565:
         b5 = (v & 0x03) << 3;
         g6 = ((v >> 2) & 0x03) << 4;
         r5 = ((v >> 4) & 0x03) << 3;
@@ -2827,9 +3025,7 @@ function drawExtImg(surf, imgData, w, h, rotation, scaleUniform, pivotX, pivotY,
         break;
       }
       case 'RGB565': {
-        // RGB565: R5G6B5
         const v = (((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
-        // sgl_rgb565_to_color in RGB565: direct
         b5 = v & 0x1F;
         g6 = (v >> 5) & 0x3F;
         r5 = (v >> 11) & 0x1F;
@@ -2837,9 +3033,7 @@ function drawExtImg(surf, imgData, w, h, rotation, scaleUniform, pivotX, pivotY,
         break;
       }
       case 'ARGB4444': {
-        // ARGB4444: A4R4G4B4
         const v = (((a & 0xF0) << 8) | ((r & 0xF0) << 4) | (g & 0xF0) | (b >> 4));
-        // sgl_rgb444_to_color in RGB565:
         b5 = (v & 0xF) << 1;
         g6 = ((v >> 4) & 0xF) << 2;
         r5 = ((v >> 8) & 0xF) << 1;
@@ -2847,8 +3041,6 @@ function drawExtImg(surf, imgData, w, h, rotation, scaleUniform, pivotX, pivotY,
         break;
       }
       case 'RGB888': {
-        // RGB888: R8G8B8 (stored as B G R in bytes)
-        // sgl_rgb888_to_color in RGB565:
         b5 = (b >> 3);
         g6 = (g >> 2);
         r5 = (r >> 3);
@@ -2856,7 +3048,6 @@ function drawExtImg(surf, imgData, w, h, rotation, scaleUniform, pivotX, pivotY,
         break;
       }
       case 'ARGB8888': {
-        // sgl_rgb888_to_color in RGB565 (color part same as RGB888):
         b5 = (b >> 3);
         g6 = (g >> 2);
         r5 = (r >> 3);
@@ -3131,34 +3322,89 @@ function drawPixmap(surf, x, y, destW, destH, imgData, fmt, alpha, radius = 0) {
 
       // SGL 定点采样 x
       const sx = (scale_x * (dx - px1)) >> 15;
-      // SGL sgl_pixmap_get_buf 把 pixmap->bitmap.array 强转为 sgl_color_t* 索引，
-      // 16 位色深下每个 sgl_color_t 占 2 字节，按 2 字节为单位跳读。
-      // 对于非 2 字节格式，SGL 会跨像素读取产生错误颜色——这正是 SGL 的实际行为。
-      // 对于 1 字节格式（RGB332/ARGB2222），图片下半部分会越界，画黑色近似。
       const colorTIdx = sy * srcW + sx;
-      const byteOffset = colorTIdx * 2;
-      let color16;
-      if (byteOffset + 1 < pixmapBytes.length) {
-        color16 = pixmapBytes[byteOffset] | (pixmapBytes[byteOffset + 1] << 8);
-      } else if (byteOffset < pixmapBytes.length) {
-        color16 = pixmapBytes[byteOffset];
+
+      let r, g, b, pixAlpha = 255;
+      if (_currentColorDepth === '16bit') {
+        // 16 位色深：sgl_pixmap_get_buf 把 bitmap.array 强转为 sgl_color_t* (2字节)
+        const byteOffset = colorTIdx * 2;
+        let color16;
+        if (byteOffset + 1 < pixmapBytes.length) {
+          color16 = pixmapBytes[byteOffset] | (pixmapBytes[byteOffset + 1] << 8);
+        } else if (byteOffset < pixmapBytes.length) {
+          color16 = pixmapBytes[byteOffset];
+        } else {
+          color16 = 0;
+        }
+        const red5 = (color16 >> 11) & 0x1F;
+        const green6 = (color16 >> 5) & 0x3F;
+        const blue5 = color16 & 0x1F;
+        r = (red5 << 3) | (red5 >> 2);
+        g = (green6 << 2) | (green6 >> 4);
+        b = (blue5 << 3) | (blue5 >> 2);
       } else {
-        color16 = 0;
+        // 8bit/24bit/32bit：按 pixmap 格式正确解码
+        const byteOffset = colorTIdx * bytesPerPixel;
+        if (byteOffset >= pixmapBytes.length) {
+          r = g = b = 0;
+        } else {
+          switch (baseFmt) {
+            case 'RGB332': {
+              const v = pixmapBytes[byteOffset];
+              r = ((v >> 5) & 0x07) << 5;
+              g = ((v >> 2) & 0x07) << 5;
+              b = (v & 0x03) << 6;
+              break;
+            }
+            case 'ARGB2222': {
+              const v = pixmapBytes[byteOffset];
+              r = ((v >> 4) & 0x03) << 6;
+              g = ((v >> 2) & 0x03) << 6;
+              b = (v & 0x03) << 6;
+              pixAlpha = OPA2_TABLE[(v >> 6) & 0x03];
+              break;
+            }
+            case 'RGB565': {
+              const v = pixmapBytes[byteOffset] | (pixmapBytes[byteOffset + 1] << 8);
+              r = ((v >> 11) & 0x1F) << 3;
+              g = ((v >> 5) & 0x3F) << 2;
+              b = (v & 0x1F) << 3;
+              break;
+            }
+            case 'ARGB4444': {
+              const v = pixmapBytes[byteOffset] | (pixmapBytes[byteOffset + 1] << 8);
+              r = ((v >> 8) & 0x0F) << 4;
+              g = ((v >> 4) & 0x0F) << 4;
+              b = (v & 0x0F) << 4;
+              pixAlpha = OPA4_TABLE[(v >> 12) & 0x0F];
+              break;
+            }
+            case 'RGB888':
+              b = pixmapBytes[byteOffset];
+              g = pixmapBytes[byteOffset + 1];
+              r = pixmapBytes[byteOffset + 2];
+              break;
+            case 'ARGB8888':
+              b = pixmapBytes[byteOffset];
+              g = pixmapBytes[byteOffset + 1];
+              r = pixmapBytes[byteOffset + 2];
+              pixAlpha = pixmapBytes[byteOffset + 3];
+              break;
+            default:
+              r = g = b = 0;
+          }
+        }
       }
 
-      // 从 RGB565 位域提取颜色（模拟 sgl_color16_t 位域读取）
-      const red5 = (color16 >> 11) & 0x1F;
-      const green6 = (color16 >> 5) & 0x3F;
-      const blue5 = color16 & 0x1F;
-      const r = (red5 << 3) | (red5 >> 2);
-      const g = (green6 << 2) | (green6 >> 4);
-      const b = (blue5 << 3) | (blue5 >> 2);
-
       // 用全局 alpha 混合（SGL: sgl_color_mixer(*pbuf, *blend, alpha)）
-      // SGL 不使用 pixmap 自身的 alpha，只用全局 alpha 参数
+      // 非 16bit 且 pixmap 含 alpha 时，把像素 alpha 也纳入两步混合
       let finalAlpha = alpha;
       if (edgeAlpha < 255) finalAlpha = (finalAlpha * edgeAlpha) >> 8;
-      blendPixelRGB565(surf, dx, dy, { r, g, b }, finalAlpha);
+      if (pixAlpha < 255) {
+        blendPixelRGB565TwoStep(surf, dx, dy, { r, g, b }, pixAlpha, finalAlpha);
+      } else {
+        blendPixelRGB565(surf, dx, dy, { r, g, b }, finalAlpha);
+      }
     }
   }
 }
@@ -3231,6 +3477,11 @@ function blendPixelRGB565(surf, x, y, fg, alpha) {
   if (bg_a === 0) {
     // 背景透明：写入带 alpha 的前景颜色，让 canvas 与页面背景自然混合
     surf.buf32[idx] = (Math.min(255, alpha) << 24) | (fg.b << 16) | (fg.g << 8) | fg.r;
+  } else if (_currentColorDepth !== '16bit') {
+    // 8bit/24bit/32bit：走通用按深度混合
+    const bg = { r: existing & 0xff, g: (existing >> 8) & 0xff, b: (existing >> 16) & 0xff };
+    const mixed = colorMixer(fg, bg, alpha);
+    surf.buf32[idx] = 0xff000000 | (mixed.b << 16) | (mixed.g << 8) | mixed.r;
   } else {
     const bg565 = rgba8888ToRGB565(existing & 0xff, (existing >> 8) & 0xff, (existing >> 16) & 0xff);
     const fg565 = rgba8888ToRGB565(fg.r, fg.g, fg.b);
@@ -3260,9 +3511,6 @@ function blendPixelRGB565TwoStep(surf, x, y, fg, pix_opa, global_alpha) {
   const existing = surf.buf32[idx];
   const bg_a = (existing >> 24) & 0xff;
 
-  // 前景色转 RGB565
-  const fg565 = rgba8888ToRGB565(fg.r, fg.g, fg.b);
-
   if (bg_a === 0) {
     // 背景透明：简化为一步合并（SGL 帧缓冲不透明，此处为设计器特有逻辑）
     const effA = (pix_opa === 255) ? global_alpha
@@ -3272,7 +3520,17 @@ function blendPixelRGB565TwoStep(surf, x, y, fg, pix_opa, global_alpha) {
     return;
   }
 
-  // 背景不透明：严格两步混合
+  if (_currentColorDepth !== '16bit') {
+    // 8bit/24bit/32bit：走通用按深度两步混合
+    const bg = { r: existing & 0xff, g: (existing >> 8) & 0xff, b: (existing >> 16) & 0xff };
+    const mix1 = (pix_opa === 255) ? fg : colorMixer(fg, bg, pix_opa);
+    const result = (global_alpha === 255) ? mix1 : colorMixer(mix1, bg, global_alpha);
+    surf.buf32[idx] = 0xff000000 | (result.b << 16) | (result.g << 8) | result.r;
+    return;
+  }
+
+  // 背景不透明：严格 RGB565 两步混合
+  const fg565 = rgba8888ToRGB565(fg.r, fg.g, fg.b);
   const bg565 = rgba8888ToRGB565(existing & 0xff, (existing >> 8) & 0xff, (existing >> 16) & 0xff);
 
   // Step 1: if pix_opa != 255, src = mixer(fg, bg, pix_opa)
@@ -3327,6 +3585,52 @@ function drawImg(surf, x, y, imgData, fmt, alpha) {
       b = Math.round(b * a / 255);
       a = 255;
     }
+
+    if (_currentColorDepth === '24bit' || _currentColorDepth === '32bit') {
+      let rr = r, gg = g, bb = b, aa = a;
+      switch (baseFmt) {
+        case 'RGB332':
+          rr = ((r >> 5) & 0x07) << 5;
+          gg = ((g >> 5) & 0x07) << 5;
+          bb = (b & 0xC0);
+          aa = 255;
+          break;
+        case 'ARGB2222': {
+          const v = ((a >> 6) << 6) | ((r >> 6) << 4) | ((g >> 6) << 2) | (b >> 6);
+          rr = ((v >> 4) & 0x03) << 6;
+          gg = ((v >> 2) & 0x03) << 6;
+          bb = (v & 0x03) << 6;
+          aa = OPA2_TABLE[v >> 6];
+          break;
+        }
+        case 'RGB565': {
+          const v = (((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
+          rr = ((v >> 11) & 0x1F) << 3;
+          gg = ((v >> 5) & 0x3F) << 2;
+          bb = (v & 0x1F) << 3;
+          aa = 255;
+          break;
+        }
+        case 'ARGB4444': {
+          const v = (((a & 0xF0) << 8) | ((r & 0xF0) << 4) | (g & 0xF0) | (b >> 4));
+          rr = ((v >> 8) & 0x0F) << 4;
+          gg = ((v >> 4) & 0x0F) << 4;
+          bb = (v & 0x0F) << 4;
+          aa = OPA4_TABLE[v >> 12];
+          break;
+        }
+        case 'RGB888':
+          aa = 255;
+          break;
+        case 'ARGB8888':
+          aa = a;
+          break;
+        default:
+          aa = 255;
+      }
+      return { r: rr, g: gg, b: bb, a: aa };
+    }
+
     let r5, g6, b5, alpha;
     switch (baseFmt) {
       case 'RGB332': {
@@ -4458,6 +4762,8 @@ const SGLRenderer = {
   hexToColor,
   colorToHex,
   colorMixer,
+  setColorDepth,
+  getColorDepth,
   sglRgb,
   // Surface
   createSurface,

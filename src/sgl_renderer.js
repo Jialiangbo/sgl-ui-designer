@@ -1,4 +1,4 @@
-﻿/**
+/**
  * SGL 核心渲染引擎 JavaScript 移植
  * 基于源目录 sgl/source/draw/ 下的 C 代码逐函数移植
  * 目标：像素级还原 SGL 仿真渲染效果，实现所见即所得
@@ -2918,7 +2918,7 @@ function _expandBits(v, bits) {
 }
 
 /**
- * 严格移植 SGL sgl_img_ext_construct_cb 的 ext_img 渲染算法。
+ * 严格移植 SGL sgl_img_ext_construct_cb 的 img_ext 渲染算法。
  * 在控件逻辑坐标 (0,0) ~ (w-1,h-1) 范围内，对每个目标像素做逆变换采样源图片，
  * 并用 SGL colorMixer + setPixel 完成 alpha 混合。
  * @param {Object} surf - createSurface 返回的表面
@@ -2935,7 +2935,7 @@ function _expandBits(v, bits) {
  */
 function drawExtImg(surf, imgData, w, h, rotation, scaleUniform, pivotX, pivotY, alpha, pixmapFormat, scaleX, scaleY) {
   if (!imgData || alpha <= 0) return;
-  // SGL ext_img 的 decode_pixel 不支持 RLE 压缩格式（default 分支返回黑色），
+  // SGL img_ext 的 decode_pixel 不支持 RLE 压缩格式（default 分支返回黑色），
   // 设计器与 SGL 仿真一致：RLE 格式不渲染
   if (pixmapFormat && /^RLE_/i.test(pixmapFormat)) return;
   const imgW = imgData.width;
@@ -3493,7 +3493,7 @@ function blendPixelRGB565(surf, x, y, fg, alpha) {
 
 /**
  * SGL blend_pixel 两步混合（RGB565 色深）
- * 模拟 SGL ext_img / icon 的 blend_pixel：
+ * 模拟 SGL img_ext / icon 的 blend_pixel：
  *   if (pix_opa != 255) src = sgl_color_mixer(src, *dst, pix_opa);
  *   if (global_alpha != 255) *dst = sgl_color_mixer(src, *dst, global_alpha);
  * 由于 SGL sgl_color_mixer 的 factor 先量化到 0-32，两步混合和一步合并不等价，
@@ -4823,7 +4823,7 @@ const SGLRenderer = {
   drawDashedLine,
   // 位图绘制（按 pixmapFormat 量化）
   drawPixmap,
-  // SGL ext_img 专用渲染（严格移植 sgl_img_ext_construct_cb）
+  // SGL img_ext 专用渲染（严格移植 sgl_img_ext_construct_cb）
   drawExtImg,
   // SGL img 控件渲染（移植自 sgl_img.c，支持全部12种格式）
   drawImg,

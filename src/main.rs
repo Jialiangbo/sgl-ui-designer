@@ -129,12 +129,8 @@ struct Widget {
     medium_color: Option<String>,
     #[serde(default, rename = "highColor")]
     high_color: Option<String>,
-    #[serde(default, rename = "numCells")]
-    num_cells: Option<i32>,
-    #[serde(default, rename = "capSize")]
-    cap_size: Option<i32>,
-    #[serde(default, rename = "capPos")]
-    cap_pos: Option<i32>,
+    #[serde(default)]
+    vertical: Option<bool>,
     #[serde(default)]
     charging: Option<bool>,
     #[serde(default, rename = "chargingColor")]
@@ -178,7 +174,7 @@ struct Widget {
     painter_cb: Option<String>,
     #[serde(default, rename = "privateData")]
     private_data: Option<String>,
-    // ext_img 控件属性
+    // img_ext 控件属性
     #[serde(default)]
     rotation: Option<i32>,
     #[serde(default, rename = "scaleUniform")]
@@ -263,6 +259,8 @@ struct Widget {
     btn_border_color: Option<String>,
     #[serde(default, rename = "btnRadius")]
     btn_radius: Option<i32>,
+    #[serde(default, rename = "btnPixmap")]
+    btn_pixmap: Option<String>,
     // chart 控件属性
     #[serde(default, rename = "chartType")]
     chart_type: Option<String>,
@@ -650,6 +648,19 @@ fn resolve_font_path(family: &str) -> Option<String> {
     Some(family.to_string())
 }
 
+/// 统一解析控件的 (font_family, font_size, font_bpp) 三元组，
+/// 确保 collect_fonts、extern 声明、setter 调用 三处完全一致。
+/// 规则：
+/// - 必须存在 font_family，且不能是空白、不能是 "default"；否则返回 None
+/// - font_size 缺失时默认 14（与 sgl_api.js win 标题字体 unwrap_or(14) 对齐）
+/// - font_bpp 缺失时默认 4
+fn resolve_widget_font_spec(w: &Widget) -> Option<(String, i32, i32)> {
+    let fam = w.font_family.as_ref().filter(|s| !s.trim().is_empty() && s.as_str() != "default")?;
+    let sz = w.font_size.unwrap_or(14);
+    let bpp = w.font_bpp.unwrap_or(4);
+    Some((fam.clone(), sz, bpp))
+}
+
 fn collect_fonts(project: &Project) -> Vec<(String, String, i32, i32, i32, String)> {
     // (font_name, font_path, size, bpp, compress, symbols)
     use std::collections::{HashMap, HashSet};
@@ -661,27 +672,21 @@ fn collect_fonts(project: &Project) -> Vec<(String, String, i32, i32, i32, Strin
 
     for page in &project.pages {
         for w in &page.widgets {
-            if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
-                let bpp = w.font_bpp.unwrap_or(4);
-                // 控件字体默认不压缩
+            if let Some((fam, sz, bpp)) = resolve_widget_font_spec(w) {
                 let compress = 0;
-                // 修复 #28: 使用完整路径作为去重 key，
-                // 避免不同目录下同名字体互相覆盖。
-                // 同一字体文件的多处引用共享字模。
-                let font_key = fam.replace('\\', "/");
-                // 跳过 "default" 字体
+                let font_path = resolve_font_path(&fam).unwrap_or_else(|| fam.clone());
+                let path_normalized = font_path.replace('\\', "/");
+                let file_name = path_normalized.rsplit('/').next().unwrap_or(&path_normalized).to_string();
+                let font_key: String = file_name.chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect();
                 if font_key == "default" {
                     continue;
                 }
-                // 解析字体文件路径
-                let font_path = resolve_font_path(fam).unwrap_or_else(|| fam.clone());
                 let entry = map
-                    .entry((font_key, sz, bpp, compress))
+                    .entry((font_key.clone(), sz, bpp, compress))
                     .or_insert((font_path, HashSet::new()));
-                // 收集该控件使用的文本字符
+                // 收集该控件使用的文本字符（以下原有 if let text / options / title_text / numberkbd / keyboard / msgbox / leftBtnText / rightBtnText 的代码全部保留不变）
                 if let Some(ref text) = w.text {
                     for ch in text.chars() {
-                        // 跳过控制字符，但保留普通空格
                         if !ch.is_control() || ch == ' ' {
                             entry.1.insert(ch);
                         }
@@ -703,25 +708,19 @@ fn collect_fonts(project: &Project) -> Vec<(String, String, i32, i32, i32, Strin
                         }
                     }
                 }
-                // numberkbd 用 char-31 作为字体表索引直接访问（sgl_numberkbd.c: kbd_digits[r][c] - 31）
-                // 绕过 sgl_search_unicode_ch_index，要求字体表包含完整 ASCII 字符集
-                // 因此收集完整 ASCII_SYMBOLS，与手动添加 ASCII 字模配置效果一致
+                // numberkbd 用 char-31 作为字体表索引直接访问
                 if w.widget_type == "numberkbd" {
                     for ch in ASCII_SYMBOLS.chars() {
                         entry.1.insert(ch);
                     }
                 }
-                // keyboard 内部固定字符表（3种模式所有按键文本）
-                // UPPER: QWERTYUIOPASDFGHJKLZXCVBNM
-                // LOWER: qwertyuiopasdfghjklzxcvbnm
-                // SPEC: 1234567890+-/*=%!?#\<>@${}[];"'
-                // 通用: _-.,:1# (多字符按键 "1#" 中的字符)
+                // keyboard 内部固定字符表
                 if w.widget_type == "keyboard" {
                     for ch in "qwertyuiopasdfghjklzxcvbnmQWERTYUIOPASDFGHJKLZXCVBNM1234567890_-.,:+-/*=%!?#<>\\@${}[];\"'".chars() {
                         entry.1.insert(ch);
                     }
                 }
-                // msgbox 使用 msgText / leftBtnText / rightBtnText 作为文本
+                // msgbox 使用 msgText / leftBtnText / rightBtnText
                 if let Some(ref msg) = w.msg_text {
                     for ch in msg.chars() {
                         if !ch.is_control() || ch == ' ' {
@@ -743,6 +742,47 @@ fn collect_fonts(project: &Project) -> Vec<(String, String, i32, i32, i32, Strin
                         }
                     }
                 }
+                // statusbar 槽位文本
+                if let Some(ref left) = w.left_slots {
+                    for ch in left.chars() {
+                        if !ch.is_control() || ch == ' ' {
+                            entry.1.insert(ch);
+                        }
+                    }
+                }
+                if let Some(ref right) = w.right_slots {
+                    for ch in right.chars() {
+                        if !ch.is_control() || ch == ' ' {
+                            entry.1.insert(ch);
+                        }
+                    }
+                }
+                // chart / gauge / scope 数值与标签
+                if w.widget_type == "chart" || w.widget_type == "gauge" || w.widget_type == "scope" {
+                    for ch in "0123456789.-".chars() {
+                        entry.1.insert(ch);
+                    }
+                }
+                // battery 百分比文本 "N%"
+                if w.widget_type == "battery" && w.show_percentage == Some(true) {
+                    for ch in "0123456789%".chars() {
+                        entry.1.insert(ch);
+                    }
+                }
+                if let Some(ref xl) = w.x_labels {
+                    for ch in xl.chars() {
+                        if !ch.is_control() || ch == ' ' {
+                            entry.1.insert(ch);
+                        }
+                    }
+                }
+                if let Some(ref sl) = w.slice_labels {
+                    for ch in sl.chars() {
+                        if !ch.is_control() || ch == ' ' {
+                            entry.1.insert(ch);
+                        }
+                    }
+                }
             }
         }
     }
@@ -756,18 +796,20 @@ fn collect_fonts(project: &Project) -> Vec<(String, String, i32, i32, i32, Strin
         }) else {
             continue;
         };
-        let font_name = res.name.replace('\\', "/").rsplit('/').next().unwrap_or(&res.name).to_string();
-        if font_name == "default" {
-            continue;
-        }
         let font_path = resolve_font_path(&res.path)
             .or_else(|| resolve_font_path(&res.name))
             .unwrap_or_else(|| res.path.clone());
+        let path_normalized = font_path.replace('\\', "/");
+        let file_name = path_normalized.rsplit('/').next().unwrap_or(&path_normalized).to_string();
+        let font_key: String = file_name.chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect();
+        if font_key == "default" {
+            continue;
+        }
         let sz = if cfg.size > 0 { cfg.size } else { 16 };
         let bpp = if cfg.bpp > 0 { cfg.bpp } else { 4 };
         let compress = if cfg.compress > 0 { 1 } else { 0 };
         let entry = map
-            .entry((font_name, sz, bpp, compress))
+            .entry((font_key.clone(), sz, bpp, compress))
             .or_insert((font_path, HashSet::new()));
         for ch in &ascii_chars {
             entry.1.insert(*ch);
@@ -793,32 +835,152 @@ fn font_id_from_family(family: &str, size: i32, bpp: i32, compress: i32) -> Stri
 }
 
 fn font_filename(family: &str, size: i32, bpp: i32, compress: i32) -> String {
-    let clean: String = family.chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect();
+    let binding = family.replace('\\', "/");
+    let name = binding.rsplit('/').next().unwrap_or(family);
+    let clean: String = name.chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect();
     let compress_suffix = if compress > 0 { "_compress" } else { "" };
     format!("sgl_font_{}_{}_bpp{}{}.c", clean, size, bpp, compress_suffix)
 }
 
-/// 确保 sgl-port 的 CMakeLists.txt 会自动收集 demo/fonts/*.c 字模源文件
+/// 写入 demo 资源目录的 *.cmake（显式列出源文件供 CMakelists.txt include）
+fn write_demo_sources_cmake(
+    cmake_path: &std::path::Path,
+    relative_dir: &str,
+    file_names: &[String],
+) -> Result<(), String> {
+    if let Some(parent) = cmake_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("创建目录失败: {}", e))?;
+    }
+    if file_names.is_empty() {
+        if cmake_path.exists() {
+            let _ = std::fs::remove_file(cmake_path);
+        }
+        return Ok(());
+    }
+    let mut names = file_names.to_vec();
+    names.sort();
+    let mut content = String::from(
+        "# Auto-generated by SGL UI Designer - do not edit manually\n\
+         list(APPEND DEMO_SOURCES\n",
+    );
+    for name in &names {
+        if !is_safe_filename(name) {
+            return Err(format!("非法资源文件名（含路径分隔符）: {}", name));
+        }
+        content.push_str(&format!("    ${{DEMO_DIR}}/{}/{}\n", relative_dir, name));
+    }
+    content.push_str(")\n");
+    std::fs::write(cmake_path, content)
+        .map_err(|e| format!("写入 {} 失败: {}", cmake_path.to_string_lossy(), e))?;
+    Ok(())
+}
+
+/// 写入 demo/fonts/fonts.cmake
+fn write_fonts_cmake(font_files: &[FontCFile], fonts_dir: &std::path::Path) -> Result<(), String> {
+    let names: Vec<String> = font_files.iter().map(|f| f.file_name.clone()).collect();
+    write_demo_sources_cmake(&fonts_dir.join("fonts.cmake"), "fonts", &names)
+}
+
+/// 写入 demo/pixmaps/pixmaps.cmake（根据目录中已有 .c 文件）
+fn write_pixmaps_cmake(pixmaps_dir: &std::path::Path) -> Result<(), String> {
+    let mut names: Vec<String> = Vec::new();
+    if pixmaps_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(pixmaps_dir) {
+            for entry in entries.flatten() {
+                if entry.path().extension().map(|e| e == "c").unwrap_or(false) {
+                    if let Some(n) = entry.file_name().to_str() {
+                        names.push(n.to_string());
+                    }
+                }
+            }
+        }
+    }
+    write_demo_sources_cmake(&pixmaps_dir.join("pixmaps.cmake"), "pixmaps", &names)
+}
+
+/// 写入 demo/icons/icons.cmake
+fn write_icons_cmake(icons_dir: &std::path::Path) -> Result<(), String> {
+    let mut names: Vec<String> = Vec::new();
+    if icons_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(icons_dir) {
+            for entry in entries.flatten() {
+                if entry.path().extension().map(|e| e == "c").unwrap_or(false) {
+                    if let Some(n) = entry.file_name().to_str() {
+                        names.push(n.to_string());
+                    }
+                }
+            }
+        }
+    }
+    write_demo_sources_cmake(&icons_dir.join("icons.cmake"), "icons", &names)
+}
+
+/// 确保 sgl-port 的 CMakelists.txt include fonts/pixmaps/icons 的 cmake 列表
 /// 返回是否修改了文件
 fn ensure_cmake_fonts_glob(cmake_path: &std::path::Path) -> Result<bool, String> {
     if !cmake_path.exists() {
         return Ok(false);
     }
-    let content = std::fs::read_to_string(cmake_path)
+    let mut content = std::fs::read_to_string(cmake_path)
         .map_err(|e| format!("读取 CMakeLists.txt 失败: {}", e))?;
 
-    // 已包含 demo/fonts 字模源文件收集逻辑则跳过
-    if content.contains("DEMO_FONT_SOURCES") || content.contains("${DEMO_DIR}/fonts/*.c") {
+    const MARKER: &str = "SGL_DESIGNER_DEMO_ASSETS_CMAKE";
+    const OLD_MARKER: &str = "SGL_DESIGNER_FONTS_CMAKE";
+    if content.contains(MARKER) {
         return Ok(false);
     }
 
-    // 在 set(DEMO_SOURCES ...) 结束后的位置插入
+    // 升级：移除旧版仅 fonts 的 include 块或 GLOB 补丁
+    if content.contains(OLD_MARKER) || content.contains("DEMO_FONT_SOURCES") {
+        if let Some(idx) = content.find(OLD_MARKER) {
+            let line_start = content[..idx].rfind('\n').map(|i| i + 1).unwrap_or(0);
+            if let Some(endif_rel) = content[idx..].find("endif()") {
+                let mut end = idx + endif_rel + "endif()".len();
+                while end < content.len() && (content.as_bytes()[end] == b'\n' || content.as_bytes()[end] == b'\r') {
+                    end += 1;
+                }
+                content = format!("{}{}", &content[..line_start], &content[end..]);
+            }
+        }
+        content = content
+            .replace(
+                "\n# Auto-generated: include font bitmap sources\nfile(GLOB DEMO_FONT_SOURCES ${DEMO_DIR}/fonts/*.c)\nlist(APPEND DEMO_SOURCES ${DEMO_FONT_SOURCES})\n",
+                "\n",
+            )
+            .replace(
+                "\n# Auto-generated: include font bitmap sources\nfile(GLOB DEMO_FONT_SOURCES CONFIGURE_DEPENDS \"${DEMO_DIR}/fonts/*.c\")\nlist(APPEND DEMO_SOURCES ${DEMO_FONT_SOURCES})\n",
+                "\n",
+            );
+    }
+
+    let insert = concat!(
+        "\n# ",
+        "SGL_DESIGNER_DEMO_ASSETS_CMAKE\n",
+        "# Auto-generated by SGL UI Designer: link fonts / pixmaps / icons via CMake\n",
+        "if(EXISTS \"${DEMO_DIR}/fonts/fonts.cmake\")\n",
+        "  include(\"${DEMO_DIR}/fonts/fonts.cmake\")\n",
+        "endif()\n",
+        "if(EXISTS \"${DEMO_DIR}/pixmaps/pixmaps.cmake\")\n",
+        "  include(\"${DEMO_DIR}/pixmaps/pixmaps.cmake\")\n",
+        "endif()\n",
+        "if(EXISTS \"${DEMO_DIR}/icons/icons.cmake\")\n",
+        "  include(\"${DEMO_DIR}/icons/icons.cmake\")\n",
+        "endif()\n",
+    );
+
+    if let Some(pos) = content.find("add_executable(sgl_simulator") {
+        content = format!("{}{}{}", &content[..pos], insert, &content[pos..]);
+        std::fs::write(cmake_path, content)
+            .map_err(|e| format!("写入 CMakeLists.txt 失败: {}", e))?;
+        return Ok(true);
+    }
+
     if let Some(start) = content.find("set(DEMO_SOURCES") {
         if let Some(end) = content[start..].find("\n)") {
             let pos = start + end + 2;
-            let insert = "\n# Auto-generated: include font bitmap sources\nfile(GLOB DEMO_FONT_SOURCES ${DEMO_DIR}/fonts/*.c)\nlist(APPEND DEMO_SOURCES ${DEMO_FONT_SOURCES})\n";
-            let new_content = format!("{}{}{}", &content[..pos], insert, &content[pos..]);
-            std::fs::write(cmake_path, new_content)
+            content = format!("{}{}{}", &content[..pos], insert, &content[pos..]);
+            std::fs::write(cmake_path, content)
                 .map_err(|e| format!("写入 CMakeLists.txt 失败: {}", e))?;
             return Ok(true);
         }
@@ -1108,6 +1270,14 @@ fn collect_pixmaps(project: &Project) -> Vec<(String, PixmapFormat)> {
                     }
                 }
             }
+            if let Some(ref p) = w.btn_pixmap {
+                if !p.is_empty() {
+                    let fmt = PixmapFormat::from_str(w.pixmap_format.as_deref().unwrap_or("RGB565"));
+                    if seen.insert((p.clone(), fmt)) {
+                        used.push((p.clone(), fmt));
+                    }
+                }
+            }
             // qrcode 的 logo 图片也需要生成取模文件
             if w.widget_type == "qrcode" {
                 if let Some(ref logo) = w.logo {
@@ -1160,7 +1330,7 @@ fn generate_pixmap_includes(project: &Project) -> Result<String, String> {
 
     let mut out = String::new();
     out.push_str("/* ============================================\n");
-    out.push_str(" * 图片取模数据\n");
+    out.push_str(" * 图片取模声明（.c 由设计器生成到 pixmaps/，经 CMake 链接）\n");
     out.push_str(" * ============================================ */\n");
 
     for (path, fmt) in &used {
@@ -1171,16 +1341,14 @@ fn generate_pixmap_includes(project: &Project) -> Result<String, String> {
         if has_non_ascii(&name) {
             return Err(format!("图片文件名不能包含中文或特殊字符: {}", name));
         }
-        out.push_str(&format!(
-            "#include \"pixmaps/{}\"\n",
-            pixmap_filename(path, fmt)
-        ));
+        let var = pixmap_var_name(path, &fmt.sgl_name().replace("SGL_PIXMAP_FMT_", ""));
+        out.push_str(&format!("extern const sgl_pixmap_t {};\n", var));
     }
     out.push('\n');
     Ok(out)
 }
 
-/// 生成 icon 取模 include 代码段
+/// 生成 icon 取模 extern 声明
 fn generate_icon_includes(project: &Project) -> Result<String, String> {
     let used = collect_icons(project);
     if used.is_empty() {
@@ -1188,7 +1356,7 @@ fn generate_icon_includes(project: &Project) -> Result<String, String> {
     }
     let mut out = String::new();
     out.push_str("/* ============================================\n");
-    out.push_str(" * icon 图标取模数据 (4bpp alpha 蒙版)\n");
+    out.push_str(" * icon 图标取模声明（.c 由设计器生成到 icons/，经 CMake 链接）\n");
     out.push_str(" * ============================================ */\n");
     for path in &used {
         let name = std::path::Path::new(path)
@@ -1198,7 +1366,7 @@ fn generate_icon_includes(project: &Project) -> Result<String, String> {
         if has_non_ascii(&name) {
             return Err(format!("图标文件名不能包含中文或特殊字符: {}", name));
         }
-        out.push_str(&format!("#include \"icons/{}.c\"\n", icon_var_name(path)));
+        out.push_str(&format!("extern const sgl_icon_pixmap_t {};\n", icon_var_name(path)));
     }
     out.push('\n');
     Ok(out)
@@ -1272,6 +1440,7 @@ fn generate_icon_files(project: &Project, icons_dir: &std::path::Path) -> Result
         out.push_str(" * icon 图标取模数据 (4bpp alpha 蒙版)\n");
         out.push_str(&format!(" * source: {}\n", name));
         out.push_str(" * ============================================ */\n");
+        out.push_str("#include <sgl_core.h>\n\n");
         out.push_str(&format!("static const uint8_t {}_bitmap[] = {{\n    ", var));
         for (i, b) in bytes.iter().enumerate() {
             out.push_str(&format!("0x{:02X},", b));
@@ -1337,6 +1506,7 @@ fn generate_pixmap_files(project: &Project, pixmaps_dir: &std::path::Path) -> Re
         out.push_str("/* ============================================\n");
         out.push_str(" * 图片取模数据\n");
         out.push_str(" * ============================================ */\n");
+        out.push_str("#include <sgl_core.h>\n\n");
         out.push_str(&format!("static const uint8_t {}_data[] = {{\n    ", var));
         for (i, b) in bytes.iter().enumerate() {
             out.push_str(&format!("0x{:02X},", b));
@@ -1386,13 +1556,13 @@ fn generate_code(project: Project, window: tauri::Window) -> Result<String, Stri
                     );
                 }
             }
-            if w.widget_type == "ext_img" {
+            if w.widget_type == "img_ext" {
                 if w.pixmap.as_deref().map(|s| s.trim()).unwrap_or("") != "" {
                     if w.read_ops.as_deref().map(|s| s.trim()).unwrap_or("").is_empty() {
                         let _ = window.emit(
                             "build-log",
                             serde_json::json!({
-                                "message": format!("[WARN] ext_img 控件 '{}' (id={}) 设置了图片但未设置外部读取函数 (readOps)，运行时将无法从外部 Flash 读取图片", w.name.as_deref().unwrap_or(""), w.id),
+                                "message": format!("[WARN] img_ext 控件 '{}' (id={}) 设置了图片但未设置外部读取函数 (readOps)，运行时将无法从外部 Flash 读取图片", w.name.as_deref().unwrap_or(""), w.id),
                                 "level": "warn"
                             }),
                         );
@@ -1415,8 +1585,32 @@ fn generate_code(project: Project, window: tauri::Window) -> Result<String, Stri
         code.push_str("\n/* ============================================\n");
         code.push_str(" * 字体字模声明（字模 C 文件由设计器自动生成到 fonts/ 子目录）\n");
         code.push_str(" * ============================================ */\n");
-        for (name, _path, sz, bpp, _compress, _symbols) in &fonts {
-            code.push_str(&format!("extern const sgl_font_t {};\n", font_id_from_family(name, *sz, *bpp, *_compress)));
+        // 先从控件实际设置计算 font_id，再通过 collect_fonts 入口名(clean文件名)映射；
+        // 为了避免 extern 声明遗漏：除了 collect_fonts 返回的集合外，
+        // 再扫描一次所有控件，通过 resolve_widget_font_spec 补充未命中的
+        // (如 win 控件 font_size 缺失时默认 14 可能因 widgets 合并规则被意外覆盖)
+        let mut declared = std::collections::HashSet::new();
+        for (name, _path, sz, bpp, compress, _symbols) in &fonts {
+            let id = font_id_from_family(name, *sz, *bpp, *compress);
+            if declared.insert(id.clone()) {
+                code.push_str(&format!("extern const sgl_font_t {};\n", id));
+            }
+        }
+        for page in &project.pages {
+            for w in &page.widgets {
+                if let Some((fam, sz, bpp)) = resolve_widget_font_spec(w) {
+                    // 用 clean 文件名作为 name（与 collect_fonts 统一）
+                    let fp = resolve_font_path(&fam).unwrap_or_else(|| fam.clone());
+                    let pn = fp.replace('\\', "/");
+                    let fname = pn.rsplit('/').next().unwrap_or(&pn).to_string();
+                    let key: String = fname.chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect();
+                    if key == "default" { continue; }
+                    let id = font_id_from_family(&key, sz, bpp, 0);
+                    if declared.insert(id.clone()) {
+                        code.push_str(&format!("extern const sgl_font_t {};\n", id));
+                    }
+                }
+            }
         }
     }
     code.push('\n');
@@ -1552,7 +1746,6 @@ fn get_create_fn(t: &str) -> &'static str {
         "msgbox" => "sgl_msgbox_create",
         "viewlist" => "sgl_viewlist_create",
         "dropdown" => "sgl_dropdown_create",
-        "scroll" => "sgl_scroll_create",
         "box" => "sgl_box_create",
         "win" => "sgl_win_create",
         "qrcode" => "sgl_qrcode_create",
@@ -1562,7 +1755,7 @@ fn get_create_fn(t: &str) -> &'static str {
         "2dball" => "sgl_2dball_create",
         "sprite" => "sgl_sprite_create",
         "analogclock" => "sgl_analogclock_create",
-        "ext_img" => "sgl_img_ext_create",
+        "img_ext" => "sgl_img_ext_create",
         _ => "sgl_rect_create",
     }
 }
@@ -1698,8 +1891,8 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             code.push_str(&format!("    sgl_line_set_pos({}, {}, {}, {}, {});\n", obj, abs_x1, abs_y1, abs_x2, abs_y2));
         }
         "button" => {
-            if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
-                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
+            if let Some((fam, sz, bpp)) = resolve_widget_font_spec(w) {
+                let fid = font_id_from_family(&fam, sz, bpp, 0);
                 code.push_str(&format!("    sgl_button_set_font({}, &{});\n", obj, fid));
             }
             cstr!("sgl_button_set_text", w.text);
@@ -1736,8 +1929,8 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             }
         }
         "label" => {
-            if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
-                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
+            if let Some((fam, sz, bpp)) = resolve_widget_font_spec(w) {
+                let fid = font_id_from_family(&fam, sz, bpp, 0);
                 code.push_str(&format!("    sgl_label_set_font({}, &{});\n", obj, fid));
             }
             // 文本缓冲区优先：设置 text_buffer 后用动态缓冲，否则用静态 text
@@ -1805,8 +1998,8 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             }
         }
         "label_ext" => {
-            if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
-                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
+            if let Some((fam, sz, bpp)) = resolve_widget_font_spec(w) {
+                let fid = font_id_from_family(&fam, sz, bpp, 0);
                 code.push_str(&format!("    sgl_label_ext_set_font({}, &{});\n", obj, fid));
             }
             let has_buffer = w.text_buffer.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
@@ -1870,8 +2063,8 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             }
         }
         "arc_label" => {
-            if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
-                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
+            if let Some((fam, sz, bpp)) = resolve_widget_font_spec(w) {
+                let fid = font_id_from_family(&fam, sz, bpp, 0);
                 code.push_str(&format!("    sgl_arc_label_set_font({}, &{});\n", obj, fid));
             }
             let has_buffer = w.text_buffer.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
@@ -1952,8 +2145,8 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             cclr!("sgl_textbox_set_border_color", w.border_color);
             c!( "sgl_textbox_set_border_width", w.border_width.map(|v| v as u8));
             c!( "sgl_textbox_set_radius", w.radius.map(|v| v as u8));
-            if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
-                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
+            if let Some((fam, sz, bpp)) = resolve_widget_font_spec(w) {
+                let fid = font_id_from_family(&fam, sz, bpp, 0);
                 code.push_str(&format!("    sgl_textbox_set_text_font({}, &{});\n", obj, fid));
             }
         }
@@ -2005,8 +2198,8 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             cclr!("sgl_gauge_set_text_color", w.text_color);
             c!( "sgl_gauge_set_value", w.value.map(|v| v as i16));
             c!( "sgl_gauge_set_alpha", w.alpha.map(|v| v as u8));
-            if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
-                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
+            if let Some((fam, sz, bpp)) = resolve_widget_font_spec(w) {
+                let fid = font_id_from_family(&fam, sz, bpp, 0);
                 code.push_str(&format!("    sgl_gauge_set_font({}, &{});\n", obj, fid));
             }
         }
@@ -2024,6 +2217,9 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             cclr!("sgl_battery_set_bg_color", w.bg_color);
             cclr!("sgl_battery_set_border_color", w.border_color);
             c!( "sgl_battery_set_level", w.value.map(|v| v as u8));
+            if let Some(v) = w.vertical {
+                code.push_str(&format!("    sgl_battery_set_vertical({}, {});\n", obj, if v { 1 } else { 0 }));
+            }
         }
         "led" => {
             cclr!("sgl_led_set_on_color", w.color);
@@ -2047,8 +2243,8 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             c!( "sgl_ring_set_alpha", w.alpha.map(|v| v as u8));
         }
         "checkbox" => {
-            if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
-                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
+            if let Some((fam, sz, bpp)) = resolve_widget_font_spec(w) {
+                let fid = font_id_from_family(&fam, sz, bpp, 0);
                 code.push_str(&format!("    sgl_checkbox_set_font({}, &{});\n", obj, fid));
             }
             if let Some(s) = w.status {
@@ -2096,13 +2292,9 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
                 }
             }
             // 标题字体（必须在 title_text 之前设置，因为 title_text 会触发 sgl_obj_update_area）
-            if let Some(ref font_family) = w.font_family {
-                if !font_family.is_empty() && font_family != "default" {
-                    let font_size = w.font_size.unwrap_or(14);
-                    let font_bpp = w.font_bpp.unwrap_or(4);
-                    let font_var = font_id_from_family(font_family, font_size, font_bpp, 0);
-                    code.push_str(&format!("    sgl_win_set_title_font({}, &{});\n", obj, font_var));
-                }
+            if let Some((fam, sz, bpp)) = resolve_widget_font_spec(w) {
+                let font_var = font_id_from_family(&fam, sz, bpp, 0);
+                code.push_str(&format!("    sgl_win_set_title_font({}, &{});\n", obj, font_var));
             }
             // title_text 必须在 title_height 和 title_font 之后调用
             // SGL: sgl_win_set_title_text 内部调用 sgl_obj_update_area(area.y2 = area.y1 + title_h)
@@ -2117,8 +2309,8 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             c!( "sgl_msgbox_set_alpha", w.alpha.map(|v| v as u8));
         }
         "dropdown" => {
-            if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
-                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
+            if let Some((fam, sz, bpp)) = resolve_widget_font_spec(w) {
+                let fid = font_id_from_family(&fam, sz, bpp, 0);
                 code.push_str(&format!("    sgl_dropdown_set_text_font({}, &{});\n", obj, fid));
             }
             cclr!("sgl_dropdown_set_bg_color", w.color);
@@ -2130,8 +2322,8 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             c!( "sgl_dropdown_set_alpha", w.alpha.map(|v| v as u8));
         }
         "textline" => {
-            if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
-                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
+            if let Some((fam, sz, bpp)) = resolve_widget_font_spec(w) {
+                let fid = font_id_from_family(&fam, sz, bpp, 0);
                 code.push_str(&format!("    sgl_textline_set_text_font({}, &{});\n", obj, fid));
             }
             cstr!("sgl_textline_set_text", w.text);
@@ -2141,8 +2333,8 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             c!( "sgl_textline_set_alpha", w.alpha.map(|v| v as u8));
         }
         "textlist" => {
-            if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
-                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
+            if let Some((fam, sz, bpp)) = resolve_widget_font_spec(w) {
+                let fid = font_id_from_family(&fam, sz, bpp, 0);
                 code.push_str(&format!("    sgl_textlist_set_text_font({}, &{});\n", obj, fid));
             }
             cclr!("sgl_textlist_set_text_color", w.text_color);
@@ -2157,11 +2349,6 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             c!( "sgl_viewlist_set_border_width", w.border_width.map(|v| v as u8));
             c!( "sgl_viewlist_set_radius", w.radius.map(|v| v as u8));
             c!( "sgl_viewlist_set_alpha", w.alpha.map(|v| v as u8));
-        }
-        "scroll" => {
-            cclr!("sgl_scroll_set_color", w.color);
-            cclr!("sgl_scroll_set_border_color", w.border_color);
-            c!( "sgl_scroll_set_alpha", w.alpha.map(|v| v as u8));
         }
         "box" => {
             cclr!("sgl_box_set_bg_color", w.bg_color);
@@ -2212,8 +2399,8 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
                     code.push_str(&format!("    sgl_polygon_set_vertex_array({}, (int16_t[][2]){{{}}}, {});\n", obj, pairs, coords.len()));
                 }
             }
-            if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
-                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
+            if let Some((fam, sz, bpp)) = resolve_widget_font_spec(w) {
+                let fid = font_id_from_family(&fam, sz, bpp, 0);
                 code.push_str(&format!("    sgl_polygon_set_font({}, &{});\n", obj, fid));
             }
             if let Some(ref text) = w.text {
@@ -2233,8 +2420,8 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             c!( "sgl_numberkbd_set_border_width", w.border_width.map(|v| v as u8));
             cclr!("sgl_numberkbd_set_border_color", w.border_color);
             // numberkbd 必须有字体，否则仿真崩溃
-            if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
-                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
+            if let Some((fam, sz, bpp)) = resolve_widget_font_spec(w) {
+                let fid = font_id_from_family(&fam, sz, bpp, 0);
                 code.push_str(&format!("    sgl_numberkbd_set_text_font({}, &{});\n", obj, fid));
             }
             cclr!("sgl_numberkbd_set_text_color", w.text_color);
@@ -2251,8 +2438,8 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             c!( "sgl_keyboard_set_border_width", w.border_width.map(|v| v as u8));
             c!( "sgl_keyboard_set_radius", w.radius.map(|v| v as u8));
             c!( "sgl_keyboard_set_alpha", w.alpha.map(|v| v as u8));
-            if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
-                let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
+            if let Some((fam, sz, bpp)) = resolve_widget_font_spec(w) {
+                let fid = font_id_from_family(&fam, sz, bpp, 0);
                 code.push_str(&format!("    sgl_keyboard_set_text_font({}, &{});\n", obj, fid));
             }
         }
@@ -2309,7 +2496,7 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             c!( "sgl_2dball_set_radius", w.radius.map(|v| v as u16));
             c!( "sgl_2dball_set_alpha", w.alpha.map(|v| v as u8));
         }
-        "ext_img" => {
+        "img_ext" => {
             if let Some(ref pixmap) = w.pixmap {
                 if !pixmap.is_empty() {
                     let fmt = w.pixmap_format.as_deref().unwrap_or("RGB565");
@@ -2468,8 +2655,8 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
                     code.push_str(&format!("    {}_set_axis_grid_style({}, {}, {});\n", prefix, obj, axis_y, dashed));
                 }
                 // 字体：同时设置 X 轴和 Y 轴的 label_font，确保 SGL 仿真中两轴都有 margin
-                if let (Some(fam), Some(sz)) = (w.font_family.as_ref(), w.font_size) {
-                    let fid = font_id_from_family(fam, sz, w.font_bpp.unwrap_or(4), 0);
+                if let Some((fam, sz, bpp)) = resolve_widget_font_spec(w) {
+                    let fid = font_id_from_family(&fam, sz, bpp, 0);
                     let axis_x = match chart_type {
                         "barchart" => "SGL_BARCHART_AXIS_X",
                         _ => "SGL_LINECHART_AXIS_X",
@@ -2740,7 +2927,17 @@ fn save_project(path: String, mut project: Project) -> Result<(), String> {
             font_path_map.insert(font.path.clone(), new_rel_path.clone());
             // 同时记录规范化后的路径（正斜杠）以应对路径分隔符差异
             let normalized_old = font.path.replace('\\', "/");
-            font_path_map.insert(normalized_old, new_rel_path.clone());
+            font_path_map.insert(normalized_old.clone(), new_rel_path.clone());
+            // 按文件名匹配（应对绝对/相对路径写法不一致）
+            let base_key = dest_name.to_lowercase();
+            font_path_map.insert(base_key.clone(), new_rel_path.clone());
+            if let Some(old_base) = std::path::Path::new(&normalized_old)
+                .file_name()
+                .map(|s| s.to_string_lossy().to_lowercase())
+            {
+                font_path_map.insert(old_base, new_rel_path.clone());
+            }
+            font_path_map.insert(new_rel_path.clone(), new_rel_path.clone());
 
             // 安全检查：防止恶意项目文件包含指向项目目录外的绝对路径
             if src.exists() && is_safe_resource_path(&font.path, proj_dir) {
@@ -2812,12 +3009,27 @@ fn save_project(path: String, mut project: Project) -> Result<(), String> {
                 if let Some(new_path) = font_path_map.get(ff) {
                     *ff = new_path.clone();
                 } else {
-                    // 回退：原路径不在映射表中（可能是手动输入的路径），用 path_to_rel 处理
                     let normalized = ff.replace('\\', "/");
                     if let Some(new_path) = font_path_map.get(&normalized) {
                         *ff = new_path.clone();
+                    } else if let Some(base) = std::path::Path::new(&normalized)
+                        .file_name()
+                        .map(|s| s.to_string_lossy().to_lowercase())
+                    {
+                        if let Some(new_path) = font_path_map.get(&base) {
+                            *ff = new_path.clone();
+                        } else if ff.contains('/') || ff.contains('\\') {
+                            // 仅当能得到非空相对路径时才替换，避免把有效字体路径清空
+                            let rel = path_to_rel(ff, proj_dir);
+                            if !rel.is_empty() {
+                                *ff = rel;
+                            }
+                        }
                     } else if ff.contains('/') || ff.contains('\\') {
-                        *ff = path_to_rel(ff, proj_dir);
+                        let rel = path_to_rel(ff, proj_dir);
+                        if !rel.is_empty() {
+                            *ff = rel;
+                        }
                     }
                 }
             }
@@ -2970,6 +3182,7 @@ fn export_code(path: String, code: String, mut project: Project, font_files: Vec
         let _ = std::fs::remove_dir_all(&pixmaps_dir);
     }
     generate_pixmap_files(&project, &pixmaps_dir)?;
+    write_pixmaps_cmake(&pixmaps_dir)?;
     let _ = std::fs::write(pixmaps_dir.join(".sgl_auto_gen"), "");
 
     // 生成 icon 图标取模文件到 icons/ 子目录
@@ -2978,6 +3191,7 @@ fn export_code(path: String, code: String, mut project: Project, font_files: Vec
         let _ = std::fs::remove_dir_all(&icons_dir);
     }
     generate_icon_files(&project, &icons_dir)?;
+    write_icons_cmake(&icons_dir)?;
     let _ = std::fs::write(icons_dir.join(".sgl_auto_gen"), "");
 
     std::fs::write(&path, code).map_err(|e| e.to_string())?;
@@ -3044,6 +3258,7 @@ fn export_code(path: String, code: String, mut project: Project, font_files: Vec
         let _ = std::fs::remove_dir_all(&fonts_dir);
     }
     write_font_c_files(&generated_font_files, &fonts_dir)?;
+    write_fonts_cmake(&generated_font_files, &fonts_dir)?;
     let _ = std::fs::write(fonts_dir.join(".sgl_auto_gen"), "");
     Ok(())
 }
@@ -3071,6 +3286,40 @@ fn setup_hidden_window(cmd: &mut std::process::Command) {
 
 #[cfg(not(windows))]
 fn setup_hidden_window(_cmd: &mut std::process::Command) {}
+
+/// 结束正在运行的 sgl_simulator，避免链接时 output\sgl_simulator.exe 被占用 (Permission denied)
+fn kill_sgl_simulator(window: Option<&tauri::Window>) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let mut cmd = std::process::Command::new("taskkill");
+        cmd.args(["/F", "/IM", "sgl_simulator.exe", "/T"]);
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        match cmd.output() {
+            Ok(out) if out.status.success() => {
+                if let Some(w) = window {
+                    let _ = w.emit(
+                        "build-log",
+                        serde_json::json!({
+                            "message": "已结束正在运行的 sgl_simulator，以便重新编译",
+                            "level": "info"
+                        }),
+                    );
+                }
+                // 等待句柄释放，避免立刻链接仍 Permission denied
+                std::thread::sleep(std::time::Duration::from_millis(400));
+            }
+            _ => {}
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = window;
+        let _ = std::process::Command::new("pkill")
+            .args(["-f", "sgl_simulator"])
+            .output();
+    }
+}
 
 fn run_command_output_hidden(program: &str, args: &[&str], cwd: &std::path::Path) -> Result<std::process::Output, String> {
     let mut cmd = std::process::Command::new(program);
@@ -3380,6 +3629,30 @@ fn list_font_files(fonts_dir: &std::path::Path) -> String {
     files.join("\n")
 }
 
+/// 字模/图片/图标链接状态戳，用于触发 CMake 重新 configure
+fn fonts_link_stamp(demo_dir: &std::path::Path) -> String {
+    let mut stamp = String::new();
+    for (subdir, cmake_name) in [
+        ("fonts", "fonts.cmake"),
+        ("pixmaps", "pixmaps.cmake"),
+        ("icons", "icons.cmake"),
+    ] {
+        let dir = demo_dir.join(subdir);
+        stamp.push_str(subdir);
+        stamp.push(':');
+        stamp.push_str(&list_font_files(&dir));
+        stamp.push('\n');
+        let cmake = dir.join(cmake_name);
+        if let Ok(bytes) = std::fs::read(&cmake) {
+            stamp.push_str(cmake_name);
+            stamp.push(':');
+            stamp.push_str(&simple_hash(&bytes));
+            stamp.push('\n');
+        }
+    }
+    stamp
+}
+
 /// 递归同步 SGL 库源码（仅 .c 和 .h 文件，排除 sgl_config.h 以免覆盖 demo 同步的配置）
 /// 总是用 copy 覆盖目标文件（更新时间戳），确保 make 检测到 .c 比 .obj 新而重新编译
 /// 返回真正发生内容变化的文件数（用于决定是否清理 build 目录）
@@ -3442,6 +3715,7 @@ fn export_code_to_project(mut project: Project, project_path: String, code: Stri
         let _ = std::fs::remove_dir_all(&pixmaps_dir);
     }
     generate_pixmap_files(&project, &pixmaps_dir)?;
+    write_pixmaps_cmake(&pixmaps_dir)?;
 
     // 生成 icon 图标取模文件到 code/icons/ 子目录
     let icons_dir = code_dir.join("icons");
@@ -3449,6 +3723,7 @@ fn export_code_to_project(mut project: Project, project_path: String, code: Stri
         let _ = std::fs::remove_dir_all(&icons_dir);
     }
     generate_icon_files(&project, &icons_dir)?;
+    write_icons_cmake(&icons_dir)?;
 
     // 写入 code/ui.c
     let ui_c = code_dir.join("ui.c");
@@ -3536,6 +3811,98 @@ fn export_code_to_project(mut project: Project, project_path: String, code: Stri
         let _ = std::fs::remove_dir_all(&fonts_dir);
     }
     write_font_c_files(&generated_font_files, &fonts_dir)?;
+    write_fonts_cmake(&generated_font_files, &fonts_dir)?;
+
+
+    // 若项目目录下已克隆 sgl-port-windows-vscode 仓库（用户可能用 VSCode/CMake 手动编译），
+    // 则把导出的 code/ui.c、fonts/、pixmaps/、icons/ 同步到 sgl-port/demo/，
+    // 并确保 CMakelists.txt include demo/fonts/fonts.cmake，避免 undefined reference 链接错误。
+    let sgl_port_dir = proj_dir.join("sgl-port-windows-vscode");
+    if sgl_port_dir.exists()
+        && sgl_port_dir.join("CMakelists.txt").exists()
+        && sgl_port_dir.join("demo").exists()
+    {
+        let demo_dir = sgl_port_dir.join("demo");
+
+        // 同步 ui.c
+        let ui_c_dest = demo_dir.join("ui.c");
+        let _ = std::fs::copy(&ui_c, &ui_c_dest);
+
+        // 同步 pixmaps
+        let demo_pixmaps_dir = demo_dir.join("pixmaps");
+        if demo_pixmaps_dir.exists() {
+            let _ = std::fs::remove_dir_all(&demo_pixmaps_dir);
+        }
+        let pixmaps_dir = code_dir.join("pixmaps");
+        if pixmaps_dir.exists() {
+            let _ = copy_dir_contents(&pixmaps_dir, &demo_pixmaps_dir);
+        }
+
+        // 同步 icons
+        let demo_icons_dir = demo_dir.join("icons");
+        if demo_icons_dir.exists() {
+            let _ = std::fs::remove_dir_all(&demo_icons_dir);
+        }
+        let icons_dir = code_dir.join("icons");
+        if icons_dir.exists() {
+            let _ = copy_dir_contents(&icons_dir, &demo_icons_dir);
+        }
+
+        // 同步 fonts（字模 C 文件）
+        let demo_fonts_dir = demo_dir.join("fonts");
+        if demo_fonts_dir.exists() {
+            let _ = std::fs::remove_dir_all(&demo_fonts_dir);
+        }
+        if fonts_dir.exists() {
+            let _ = copy_dir_contents(&fonts_dir, &demo_fonts_dir);
+        }
+
+        // 写入 sgl_config.h 到 demo 目录
+        let demo_config_path = demo_dir.join("sgl_config.h");
+        let _ = generate_sgl_config_h(&project.sgl_config, &demo_config_path);
+
+        // 确保 CMakelists.txt 使用 ui.c 而非 test.c/bg.c，修复 widgets GLOB 递归问题
+        let cmake_path = sgl_port_dir.join("CMakelists.txt");
+        if let Ok(cmake_content) = std::fs::read_to_string(&cmake_path) {
+            let mut updated = cmake_content
+                .replace("${DEMO_DIR}/test.c", "${DEMO_DIR}/ui.c")
+                .replace("${DEMO_DIR}/bg.c`n", "`n")
+                .replace("${DEMO_DIR}/bg.c", "");
+            updated = updated.replace(
+                "file(GLOB SGL_WIDGETS_SOURCES ${SGL_ROOT_DIR}/sgl/source/widgets/*/*.c)",
+                "file(GLOB_RECURSE SGL_WIDGETS_SOURCES ${SGL_ROOT_DIR}/sgl/source/widgets/*/*.c)",
+            );
+            let _ = std::fs::write(&cmake_path, &updated);
+        }
+
+        // 确保 CMakelists.txt include demo/fonts/fonts.cmake
+        let cmake_modified = ensure_cmake_fonts_glob(&cmake_path).unwrap_or(false);
+
+        // 检测字模链接状态变化（fonts.cmake 或 .c 列表变化时重新 configure）
+        let build_dir = sgl_port_dir.join("build");
+        let fonts_changed = if build_dir.exists() {
+            let manifest_file = build_dir.join(".fonts_manifest");
+            let new_stamp = fonts_link_stamp(&demo_dir);
+            let prev_stamp = std::fs::read_to_string(&manifest_file).unwrap_or_default();
+            if new_stamp != prev_stamp {
+                let _ = std::fs::write(&manifest_file, &new_stamp);
+                let _ = std::fs::remove_file(build_dir.join("CMakeCache.txt"));
+                let _ = std::fs::remove_file(build_dir.join("Makefile"));
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        if cmake_modified {
+            if build_dir.exists() {
+                let _ = std::fs::remove_file(build_dir.join("CMakeCache.txt"));
+                let _ = std::fs::remove_file(build_dir.join("Makefile"));
+            }
+        }
+    }
 
     Ok(format!("代码已导出到 {}", code_dir.to_string_lossy()))
 }
@@ -4262,10 +4629,10 @@ fn build_project(
         );
         let _ = std::fs::write(&cmake_path, &updated);
     }
-    // 确保 CMakeLists.txt 自动收集 demo/fonts 下的字模源文件
+    // 确保 CMakelists.txt include demo/fonts/fonts.cmake
     let cmake_modified = ensure_cmake_fonts_glob(&cmake_path).unwrap_or(false);
 
-    // 智能 reconfigure 检测：只有 CMakeLists.txt 内容变化或字模文件增删时才删 CMakeCache.txt
+    // 智能 reconfigure 检测：CMakelists.txt 或字模链接状态变化时才删 CMakeCache.txt
     // 避免每次编译都重新 cmake configure（3-5秒开销）
     let build_dir = sgl_port_dir.join("build");
     let need_reconfigure = if !build_dir.exists() {
@@ -4278,30 +4645,30 @@ fn build_project(
         let prev_cmake_hash = std::fs::read_to_string(&cmake_hash_file).unwrap_or_default();
         let cmake_changed = cmake_modified || current_cmake_hash != prev_cmake_hash;
 
-        // 检测字模文件列表是否变化（新增/删除字模需要 reconfigure 让 GLOB 重新收集）
-        let fonts_dir = sgl_port_dir.join("demo").join("fonts");
-        let current_fonts_list = list_font_files(&fonts_dir);
+        // 检测 demo 资源链接状态是否变化（fonts/pixmaps/icons cmake）
+        let demo_dir_for_stamp = sgl_port_dir.join("demo");
+        let current_fonts_stamp = fonts_link_stamp(&demo_dir_for_stamp);
         let fonts_manifest_file = build_dir.join(".fonts_manifest");
-        let prev_fonts_list = std::fs::read_to_string(&fonts_manifest_file).unwrap_or_default();
-        let fonts_changed = current_fonts_list != prev_fonts_list;
+        let prev_fonts_stamp = std::fs::read_to_string(&fonts_manifest_file).unwrap_or_default();
+        let fonts_changed = current_fonts_stamp != prev_fonts_stamp;
 
         if cmake_changed {
             let _ = std::fs::write(&cmake_hash_file, &current_cmake_hash);
         }
         if fonts_changed {
-            let _ = std::fs::write(&fonts_manifest_file, &current_fonts_list);
+            let _ = std::fs::write(&fonts_manifest_file, &current_fonts_stamp);
         }
 
         if cmake_changed {
             let _ = window.emit(
                 "build-log",
-                serde_json::json!({ "message": "CMakeLists.txt 已变化，触发重新 configure", "level": "info" }),
+                serde_json::json!({ "message": "CMakelists.txt 已变化，触发重新 configure", "level": "info" }),
             );
         }
         if fonts_changed {
             let _ = window.emit(
                 "build-log",
-                serde_json::json!({ "message": "字模文件列表已变化，触发重新 configure", "level": "info" }),
+                serde_json::json!({ "message": "字模链接状态已变化，触发重新 configure", "level": "info" }),
             );
         }
 
@@ -4381,9 +4748,13 @@ fn build_project(
         if !font_abs_path.exists() {
             let _ = window.emit(
                 "build-log",
-                serde_json::json!({ "message": format!("字体文件不存在，跳过: {} -> {}", font_path_str, font_abs_path.display()), "level": "warn" }),
+                serde_json::json!({ "message": format!("字体文件不存在: {} -> {}", font_path_str, font_abs_path.display()), "level": "error" }),
             );
-            continue;
+            return Err(format!(
+                "字体文件不存在，无法生成字模: {}（解析路径: {}）。请检查项目资源中的字体路径。",
+                font_path_str,
+                font_abs_path.display()
+            ));
         }
 
         let font_id = font_id_from_family(font_path_str, *size, *bpp, *compress);
@@ -4423,6 +4794,7 @@ fn build_project(
         let _ = std::fs::remove_dir_all(&pixmaps_dir);
     }
     generate_pixmap_files(&project, &pixmaps_dir)?;
+    write_pixmaps_cmake(&pixmaps_dir)?;
 
     // 生成 icon 图标取模文件到 code/icons/ 子目录
     let icons_dir = code_dir.join("icons");
@@ -4430,6 +4802,7 @@ fn build_project(
         let _ = std::fs::remove_dir_all(&icons_dir);
     }
     generate_icon_files(&project, &icons_dir)?;
+    write_icons_cmake(&icons_dir)?;
 
     std::fs::create_dir_all(&code_dir).map_err(|e| format!("创建 code 目录失败: {}", e))?;
     let ui_c = code_dir.join("ui.c");
@@ -4459,6 +4832,7 @@ fn build_project(
         );
     }
     write_font_c_files(&generated_font_files, &fonts_dir)?;
+    write_fonts_cmake(&generated_font_files, &fonts_dir)?;
 
     // 复制 UI 代码到 sgl-port 的 demo/ui.c
     let demo_dir = sgl_port_dir.join("demo");
@@ -4501,22 +4875,21 @@ fn build_project(
         serde_json::json!({ "message": format!("demo/fonts 目录文件列表: {}", list_font_files(&demo_fonts_dir)), "level": "info" }),
     );
 
-    // 字模文件写入 demo/fonts/ 后，检测文件列表是否变化
-    // 若变化则删除 CMakeCache.txt，触发重新 configure 让 GLOB 收集新字模源文件
-    // 修复 #26: 先确保 build_dir 存在，再写 manifest，避免首次编译写入失败
+    // 字模文件写入 demo/fonts/ 后，检测链接状态是否变化
+    // 若变化则删除 CMakeCache.txt，触发重新 configure 以加载 fonts.cmake
     if !build_dir.exists() {
         let _ = std::fs::create_dir_all(&build_dir);
     }
-    let new_fonts_list = list_font_files(&demo_fonts_dir);
+    let new_fonts_stamp = fonts_link_stamp(&demo_dir);
     let fonts_manifest_file = build_dir.join(".fonts_manifest");
-    let prev_fonts_list = std::fs::read_to_string(&fonts_manifest_file).unwrap_or_default();
-    if new_fonts_list != prev_fonts_list {
-        let _ = std::fs::write(&fonts_manifest_file, &new_fonts_list);
+    let prev_fonts_stamp = std::fs::read_to_string(&fonts_manifest_file).unwrap_or_default();
+    if new_fonts_stamp != prev_fonts_stamp {
+        let _ = std::fs::write(&fonts_manifest_file, &new_fonts_stamp);
         let _ = std::fs::remove_file(build_dir.join("CMakeCache.txt"));
         let _ = std::fs::remove_file(build_dir.join("Makefile"));
         let _ = window.emit(
             "build-log",
-            serde_json::json!({ "message": "字模文件列表已变化，触发重新 configure", "level": "info" }),
+            serde_json::json!({ "message": "字模链接状态已变化，触发重新 configure", "level": "info" }),
         );
     }
 
@@ -4682,6 +5055,9 @@ fn build_project(
     if !cmake_status.success() {
         return Err("cmake 配置失败".to_string());
     }
+
+    // 链接前结束旧模拟器，否则 Windows 下 exe 被占用会导致 Permission denied
+    kill_sgl_simulator(Some(&window));
 
     // 编译，并实时输出到控制台
     let make_status = run_command_stream(
@@ -4973,6 +5349,9 @@ fn run_simulator(project_path: String) -> Result<String, String> {
     if !simulator.exists() {
         return Err("未找到 sgl_simulator.exe，请先编译项目".to_string());
     }
+
+    // 先结束旧实例，避免多开与文件占用
+    kill_sgl_simulator(None);
 
     // 复制 SDL2.dll 到 output 目录
     let sdl_dll_src = sgl_port_dir.join("demo").join("sdl").join("bin").join("SDL2.dll");

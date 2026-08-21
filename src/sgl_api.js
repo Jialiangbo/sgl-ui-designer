@@ -35,20 +35,43 @@ export function setCodegenFontContext(fonts) {
 // 按路径/文件名/字体名三种方式判断字体是否在项目字体资源列表中匹配
 function _isFontMatched(family, fonts) {
   if (!family) return false;
-  const fileName = family.replace(/[/\\]/g, '/').split('/').pop();
-  return (fonts || []).some(f => f.path === family || f.name === fileName || f.name === family);
+  const famNorm = String(family).replace(/\\/g, '/');
+  const famFile = famNorm.split('/').pop();
+  return (fonts || []).some(f => {
+    const pathNorm = String(f.path || '').replace(/\\/g, '/');
+    const pathFile = pathNorm.split('/').pop();
+    return pathNorm === famNorm
+      || pathFile === famFile
+      || f.name === famFile
+      || f.name === family
+      || String(f.name || '').replace(/\\/g, '/') === famNorm;
+  });
 }
 
-// 获取控件实际使用的字体族名/路径：
-//   1) 未设置 / default → fallback 到项目第一个字体
-//   2) 设置了但指向的字体已被从资源管理器删除（找不到匹配）→ 同样 fallback 到第一个字体
-// 调用方需要确保已经设置了上下文（collectFonts / validateProjectFonts 自行传入，generateSGLCode 通过 setCodegenFontContext）
+// 解析控件实际使用的字体路径（与放置规则、后端 collect_fonts 对齐）：
+//   - 未设置 / default → ''，使用系统/SGL 默认字体（不生成自定义字模、不 set_font）
+//   - 已设置但不在项目字体资源中 → ''，避免引用不存在的字模
+//   - 已设置且匹配 → 返回资源中的规范 path（优先相对路径）
 export function resolveEffectiveFontFamily(family, fonts) {
+  if (!family || family === 'default') return '';
   const f = fonts || _codegenContextFonts || [];
-  if (f.length === 0) return family;
-  if (!family || family === 'default') return f[0].path || f[0].name || '';
-  if (!_isFontMatched(family, f)) return f[0].path || f[0].name || '';
-  return family;
+  if (f.length === 0) return '';
+  const famNorm = String(family).replace(/\\/g, '/').trim();
+  const famFile = famNorm.split('/').pop().toLowerCase();
+  const hit = f.find(x => {
+    const pathNorm = String(x.path || '').replace(/\\/g, '/').trim();
+    const pathFile = pathNorm.split('/').pop().toLowerCase();
+    const nameNorm = String(x.name || '').replace(/\\/g, '/').trim();
+    const nameFile = nameNorm.split('/').pop().toLowerCase();
+    return pathNorm === famNorm
+      || (famFile && pathFile === famFile)
+      || (famFile && nameFile === famFile)
+      || x.name === family
+      || nameNorm === famNorm
+      || (famNorm && pathNorm.endsWith('/' + famNorm))
+      || (pathNorm && famNorm.endsWith('/' + pathNorm.split('/').slice(-2).join('/')));
+  });
+  return hit ? (hit.path || hit.name || '') : '';
 }
 
 // ============ 对齐方式 ============
@@ -276,7 +299,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><rect x="2" y="7" width="18" height="10" rx="2"/><rect x="5" y="9" width="10" height="6" rx="1"/><line x1="22" y1="10" x2="22" y2="14"/></svg>',
     category: 'display',
     defaultSize: [60, 30],
-    properties: ['level', 'fillColor', 'lowColor', 'mediumColor', 'highColor', 'bgColor', 'borderColor', 'numCells', 'direction', 'capSize', 'capPos', 'charging', 'chargingColor', 'showPercentage', 'textColor', 'fontSize', 'fontFamily', 'fontBpp', 'alpha', 'locked']
+    properties: ['level', 'fillColor', 'lowColor', 'mediumColor', 'highColor', 'bgColor', 'borderColor', 'vertical', 'charging', 'chargingColor', 'showPercentage', 'textColor', 'fontSize', 'fontFamily', 'fontBpp', 'alpha', 'locked']
   },
   {
     type: 'led',
@@ -327,14 +350,6 @@ export const SGL_WIDGET_TYPES = [
     category: 'interactive',
     defaultSize: [120, 120],
     properties: ['options', 'optionDynamic', 'visibleRows', 'infiniteMode', 'textColor', 'selectedColor', 'bgColor', 'borderColor', 'borderWidth', 'radius', 'fontSize', 'fontFamily', 'fontBpp', 'alpha', 'locked']
-  },
-  {
-    type: 'scroll',
-    name: '滚动容器',
-    icon: '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="19" y1="7" x2="19" y2="17"/><line x1="17" y1="9" x2="17" y2="15"/></svg>',
-    category: 'special',
-    defaultSize: [160, 120],
-    properties: ['color', 'borderColor', 'borderWidth', 'radius', 'width', 'value', 'direct', 'hidden', 'bindTarget', 'alpha', 'locked']
   },
   {
     type: 'box',
@@ -425,7 +440,7 @@ export const SGL_WIDGET_TYPES = [
     properties: ['hour', 'minute', 'second', 'hourPtrColor', 'minPtrColor', 'secPtrColor', 'scaleColor', 'textColor', 'hubColor', 'bgColor', 'borderColor', 'borderWidth', 'hourPtrWidth', 'minPtrWidth', 'secPtrWidth', 'scaleWidth', 'scaleLength', 'hubRadius', 'alpha', 'locked']
   },
   {
-    type: 'ext_img',
+    type: 'img_ext',
     name: '外部图片',
     icon: '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><polyline points="4,18 9,13 13,17 17,12 20,15"/></svg>',
     category: 'image',
@@ -580,7 +595,7 @@ export const PROP_META = {
   minute: { label: '分 (0-59)', type: 'number', min: 0, max: 59 },
   second: { label: '秒 (0-59)', type: 'number', min: 0, max: 59 },
   direct: { label: '方向', type: 'select', options: [[0, '水平'], [1, '垂直']] },
-  direction: { label: '电池方向', type: 'select', options: [[0, '水平'], [1, '垂直']] },
+  vertical: { label: '垂直方向', type: 'bool' },
   thickness: { label: '粗细', type: 'number', min: 2, max: 30 },
   width: { label: '滚动条宽度', type: 'number', min: 0, max: 50 },
   bindTarget: { label: '绑定目标对象', type: 'select' },
@@ -611,8 +626,6 @@ export const PROP_META = {
   longModeSpeed: { label: '滚动速度(ms)', type: 'number', min: 100, max: 10000 },
   titleHeight: { label: '标题栏高度', type: 'number', min: 0, max: 100 },
   msgLineMargin: { label: '消息行间距', type: 'number', min: 0, max: 50 },
-  capSize: { label: '电池头尺寸(像素)', type: 'number', min: 0, max: 200 },
-  numCells: { label: '电池格数', type: 'number', min: 1, max: 10 },
   dashed: { label: '线型', type: 'select', options: [[false, '实线'], [true, '虚线']] },
   dashLen: { label: '虚线长度', type: 'number', min: 1, max: 50 },
   gapLen: { label: '虚线间隔', type: 'number', min: 1, max: 50 },
@@ -642,7 +655,6 @@ export const PROP_META = {
   logoRadius: { label: 'Logo 圆角', type: 'number', min: -1, max: 100 },
   labelColor: { label: '标签文本颜色', type: 'color' },
   currentPage: { label: '当前页', type: 'number', min: 0, max: 100 },
-  capPos: { label: '电池头位置', type: 'select', options: [[0, '右'], [1, '左'], [2, '上']] },
   btnMargin: { label: '按钮边距', type: 'number', min: 0, max: 30 },
   selectedIndex: { label: '选中项索引', type: 'number', min: -1, max: 50 },
   pixmapNum: { label: '图片数量', type: 'number', min: 1, max: 200 },
@@ -773,7 +785,6 @@ export const WIDGET_EVENTS = {
   analogclock: [],
   // 特殊组件
   msgbox: ['onPressed', 'onReleased', 'onKeyLeft', 'onKeyRight', 'onKeyEnter'],
-  scroll: ['onMoveUp', 'onMoveDown', 'onMoveLeft', 'onMoveRight'],
   box: ['onPressed', 'onReleased', 'onMoveUp', 'onMoveDown', 'onMoveLeft', 'onMoveRight'],
   win: ['onPressed', 'onClicked'],
   canvas: [],
@@ -783,7 +794,7 @@ export const WIDGET_EVENTS = {
   launcher: ['onPressed', 'onReleased', 'onClicked'],
   // 图像组件
   icon: [],
-  ext_img: ['onPressed', 'onReleased'],
+  img_ext: ['onPressed', 'onReleased'],
 };
 
 // ============ 组件分类 ============
@@ -792,8 +803,8 @@ export const WIDGET_CATEGORIES = [
   { id: 'interactive', name: '交互组件', types: ['button', 'switch', 'checkbox', 'slider', 'numberkbd', 'keyboard', 'dropdown', 'roller'] },
   { id: 'text', name: '文本组件', types: ['label', 'textbox', 'textline', 'textlist', 'arc_label'] },
   { id: 'display', name: '显示组件', types: ['progress', 'bar', 'gauge', 'spectrum', 'battery', 'led', 'viewlist', 'qrcode', 'scope', 'chart', 'analogclock'] },
-  { id: 'special', name: '特殊组件', types: ['msgbox', 'scroll', 'box', 'win', 'canvas', '2dball', 'sprite', 'statusbar', 'launcher'] },
-  { id: 'image', name: '图像组件', types: ['icon', 'ext_img', 'img'] }
+  { id: 'special', name: '特殊组件', types: ['msgbox', 'box', 'win', 'canvas', '2dball', 'sprite', 'statusbar', 'launcher'] },
+  { id: 'image', name: '图像组件', types: ['icon', 'img_ext', 'img'] }
 ];
 
 // ============ 组件默认值工厂 ============
@@ -851,7 +862,7 @@ export function createWidgetDefaults(type) {
     case 'spectrum':
       return { ...base, barColor: '#000000', barHatColor: '#808080', barNum: 12, barMode: 2, barHatHeight: 3, barValues: '' };
     case 'battery':
-      return { ...base, level: 100, fillColor: '#00FF00', lowColor: '#FF0000', mediumColor: '#FFA500', highColor: '#00FF00', bgColor: '#1E1E1E', borderColor: '#FFFFFF', numCells: 6, direction: 0, capSize: 4, capPos: 0, charging: false, chargingColor: '#FFFF00', showPercentage: false, textColor: '#000000', fontSize: 14, fontFamily: '', fontBpp: 4 };
+      return { ...base, level: 100, fillColor: '', lowColor: '#E74C3C', mediumColor: '#F39C12', highColor: '#2ECC71', bgColor: '#1E1E1E', borderColor: '#B4B4B4', vertical: true, charging: false, chargingColor: '#F1C40F', showPercentage: false, textColor: '#FFFFFF', fontSize: 14, fontFamily: '', fontBpp: 4, alpha: 140 };
     case 'icon':
       return { ...base, color: '#000000', align: 'CENTER', icon: '' };
     case 'led':
@@ -862,8 +873,6 @@ export function createWidgetDefaults(type) {
       return { ...base, bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, itemHeight: 20, itemMarginX: 1, itemMarginY: 1, pixmap: '' };
     case 'dropdown':
       return { ...base, options: '选项1\n选项2\n选项3', optionDynamic: false, textColor: '#000000', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, fontSize: 14, fontFamily: '', fontBpp: 4, selectedColor: '#808080', visibleRows: 5 };
-    case 'scroll':
-      return { ...base, color: '#FFFFFF', borderColor: '#000000', borderWidth: 2, radius: 0, width: 10, value: 0, direct: 1, hidden: false, bindTarget: '' };
     case 'box':
       return { ...base, bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, scrollbarColor: '#C8C8C8', showVScrollbar: true, showHScrollbar: true, elasticUp: 0, elasticDown: 0, elasticLeft: 0, elasticRight: 0, pixmap: '' };
     case 'win':
@@ -888,7 +897,7 @@ export function createWidgetDefaults(type) {
       return { ...base, options: '选项1\n选项2\n选项3', optionDynamic: false, visibleRows: 3, infiniteMode: false, textColor: '#000000', selectedColor: '#808080', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, fontSize: 14, fontFamily: '', fontBpp: 4 };
     case 'analogclock':
       return { ...base, hourPtrColor: '#ffffff', minPtrColor: '#FFFFFF', secPtrColor: '#FF0000', scaleColor: '#FFFFFF', textColor: '#FFFFFF', hubColor: '#FF0000', bgColor: '#000000', borderColor: '#FFFFFF', borderWidth: 0, hour: 0, minute: 0, second: 0, hourPtrWidth: 5, minPtrWidth: 5, secPtrWidth: 2, scaleWidth: 1, scaleLength: 8, hubRadius: 6, fontFamily: '', fontSize: 12, fontBpp: 4 };
-    case 'ext_img':
+    case 'img_ext':
       return { ...base, pixmap: '', pixmapFormat: 'RGB565', rotation: 0, scaleUniform: 0, pivotX: '', pivotY: '', readOps: '', alpha: 255 };
     case 'img':
       return { ...base, pixmap: '', pixmapFormat: 'RGB565', readOps: '', alpha: 255 };
@@ -924,7 +933,7 @@ export const WIDGET_DEFAULTS = {
   bar: { value: 50, barColor: '#000000', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 2, radius: 0, barWidth: 20, barNum: 10, barMode: 0, barHatColor: '#808080', barHatHeight: 2, direct: 0, pixmap: '', pixmapFormat: 'RGB565', alpha: 255 },
   gauge: { value: 0, arcColor: '#FFFFFF', scaleColor: '#FFFFFF', pointerColor: '#FF0000', hubColor: '#FFFFFF', bgColor: '#000000', startAngle: 30, endAngle: 330, arcWidth: 2, scaleWidth: 1, scaleLength: 0, pointerWidth: 2, hubRadius: 0, scaleStart: 0, scaleStep: 10, scaleAngle: 15, textInterval: 3, scaleWarning: 32767, fontSize: 12, fontFamily: '', fontBpp: 4, alpha: 255 },
   spectrum: { barColor: '#000000', barHatColor: '#808080', barNum: 12, barMode: 2, barHatHeight: 3, barValues: '', alpha: 255 },
-  battery: { level: 100, fillColor: '#00FF00', lowColor: '#FF0000', mediumColor: '#FFA500', highColor: '#00FF00', bgColor: '#000000', borderColor: '#FFFFFF', numCells: 6, direction: 0, capSize: 4, capPos: 0, charging: false, chargingColor: '#FFFF00', showPercentage: false, textColor: '#000000', fontSize: 14, fontFamily: '', fontBpp: 4, alpha: 255 },
+  battery: { level: 100, fillColor: '', lowColor: '#E74C3C', mediumColor: '#F39C12', highColor: '#2ECC71', bgColor: '#1E1E1E', borderColor: '#B4B4B4', vertical: true, charging: false, chargingColor: '#F1C40F', showPercentage: false, textColor: '#FFFFFF', fontSize: 14, fontFamily: '', fontBpp: 4, alpha: 140 },
   icon: { color: '#000000', align: 'CENTER', icon: '', alpha: 255 },
   led: { onColor: '#FFFFFF', offColor: '#000000', bgColor: '#000000', radius: 0, status: false, alpha: 255 },
   msgbox: { titleText: 'Message Box', titleTextColor: '#000000', msgText: 'NULL', msgColor: '#000000', leftBtnText: 'YES', leftBtnColor: '#C8C8C8', leftBtnTextColor: '#000000', rightBtnText: 'NO', rightBtnColor: '#C8C8C8', rightBtnTextColor: '#000000', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 2, radius: 0, titleHeight: 0, msgOffsetX: 0, msgOffsetY: 0, msgLineMargin: 1, mainAlpha: 255, borderAlpha: 255, pixmap: '', pixmapFormat: 'RGB565', fontFamily: '', fontSize: 14, fontBpp: 4, exitAnswer: false, alpha: 255 },
@@ -943,7 +952,7 @@ export const WIDGET_DEFAULTS = {
   launcher: { iconSize: 48, gridCol: 4, gridRow: 5, marginLeft: 20, marginTop: 40, marginRight: 20, marginBottom: 60, labelColor: '#e4e4e7', navigbarColor: '#F5DEB3', currentPage: 0, fontFamily: '', fontSize: 14, fontBpp: 4, alpha: 255 },
   roller: { options: '选项1\n选项2\n选项3', optionDynamic: false, visibleRows: 3, infiniteMode: false, textColor: '#000000', selectedColor: '#808080', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, fontSize: 14, fontFamily: '', fontBpp: 4, alpha: 255 },
   analogclock: { hourPtrColor: '#ffffff', minPtrColor: '#FFFFFF', secPtrColor: '#FF0000', scaleColor: '#FFFFFF', textColor: '#FFFFFF', hubColor: '#FF0000', bgColor: '#000000', borderColor: '#FFFFFF', borderWidth: 0, hour: 0, minute: 0, second: 0, hourPtrWidth: 5, minPtrWidth: 5, secPtrWidth: 2, scaleWidth: 1, scaleLength: 8, hubRadius: 6, fontFamily: '', fontSize: 12, fontBpp: 4, alpha: 255 },
-  ext_img: { pixmap: '', pixmapFormat: 'RGB565', rotation: 0, scaleUniform: 0, pivotX: '', pivotY: '', readOps: '', alpha: 255 },
+  img_ext: { pixmap: '', pixmapFormat: 'RGB565', rotation: 0, scaleUniform: 0, pivotX: '', pivotY: '', readOps: '', alpha: 255 },
   img: { pixmap: '', pixmapFormat: 'RGB565', readOps: '', alpha: 255 },
   arc_label: { text: '标签', textColor: '#000000', bgFlag: false, bgColor: '#FFFFFF', radius: 0, align: 'CENTER', fontSize: 14, fontFamily: '', fontBpp: 4, angle: 0, offsetX: 0, offsetY: 0, textBuffer: '', textFmt: '', textFmtDynamic: '', alpha: 255 },
   label_ext: { text: '标签文本', textColor: '#000000', bgColor: 'transparent', bgFlag: false, align: 'CENTER', fontSize: 14, fontFamily: '', fontBpp: 4, textOffsetX: 0, textOffsetY: 0, textRotation: 0, radius: 0, textBuffer: '', textFmt: '', textFmtDynamic: '', alpha: 255 },
@@ -1005,6 +1014,11 @@ function getWidgetTextForFont(w) {
   if (w.type === 'chart') {
     return undefined;
   }
+  // battery 开启百分比时显示 "N%"，必须有字体（无 text 属性）
+  if (w.type === 'battery') {
+    if (w.showPercentage) return '0123456789%';
+    return '';
+  }
   // numberkbd/keyboard 内部有固定按键字符表，总是需要字体
   if (w.type === 'numberkbd' || w.type === 'keyboard') {
     return undefined;
@@ -1025,11 +1039,16 @@ function getWidgetTextForFont(w) {
 }
 
 function shouldGenerateFont(w, defaults) {
-  const effFamily = resolveEffectiveFontFamily(w.fontFamily);
+  let effFamily = resolveEffectiveFontFamily(w.fontFamily);
   const textSource = getWidgetTextForFont(w);
-  const hasFamily = shouldGenerateValue(effFamily, defaults, 'fontFamily') && effFamily && effFamily !== 'default';
-  return hasFamily &&
-         shouldGenerateValue(w.fontSize, defaults, 'fontSize') && w.fontSize != null &&
+  // battery 显示百分比但未选字体时，回退到项目第一个字体资源
+  if ((!effFamily || effFamily === 'default') && w.type === 'battery' && w.showPercentage) {
+    const fonts = _codegenContextFonts || [];
+    if (fonts.length > 0 && fonts[0].path) effFamily = fonts[0].path;
+  }
+  // 空字体 = 系统默认字体，不生成 set_font
+  if (!effFamily || effFamily === 'default') return false;
+  return shouldGenerateValue(w.fontSize, defaults, 'fontSize') && w.fontSize != null &&
          (textSource === undefined || hasVisibleText(textSource));
 }
 
@@ -1067,10 +1086,10 @@ export function generateSGLCode(project) {
             codegenLog(`[WARN] canvas 控件 '${w.name || ''}' (id=${w.id}) 未设置私有数据指针 (privateData)`, 'warn');
           }
         }
-        if (w.type === 'ext_img') {
+        if (w.type === 'img_ext') {
           if (w.pixmap && String(w.pixmap).trim()) {
             if (!w.readOps || !String(w.readOps).trim()) {
-              codegenLog(`[WARN] ext_img 控件 '${w.name || ''}' (id=${w.id}) 设置了图片但未设置外部读取函数 (readOps)，运行时将无法从外部 Flash 读取图片`, 'warn');
+              codegenLog(`[WARN] img_ext 控件 '${w.name || ''}' (id=${w.id}) 设置了图片但未设置外部读取函数 (readOps)，运行时将无法从外部 Flash 读取图片`, 'warn');
             }
           }
         }
@@ -1093,8 +1112,10 @@ export function generateSGLCode(project) {
     code += `/* [警告] 以下文本控件缺少字体资源，请在项目资源中添加字体文件后再编译运行：\n`;
     fontIssues.forEach(item => {
       code += ` *   - ${escapeCComment(item.page)} / ${escapeCComment(item.widget)}: ${escapeCComment(item.reason)} (${escapeCComment(item.fontFamily || '无')})\n`;
+      codegenLog(`[字体警告] ${item.page} / ${item.widget}: ${item.reason} (${item.fontFamily || '无'})`, 'warn');
     });
     code += ` */\n\n`;
+    codegenLog(`[字体警告] 共 ${fontIssues.length} 个文本控件未设置有效字体，生成的代码可能无法正常编译运行`, 'warn');
   }
 
   code += `#include "sgl.h"\n`;
@@ -1115,33 +1136,46 @@ export function generateSGLCode(project) {
 
   code += `\n`;
 
-  // 生成图片取模 include，与导出代码保持一致
-  const pixmapIncludes = new Set();
+  // 图片/图标取模：extern 声明，由 CMake 编译 demo/pixmaps|icons/*.c（与字体同一路径）
+  const pixmapExterns = new Set();
+  const iconExterns = new Set();
   project.pages.forEach(page => {
     if (shouldGeneratePixmap(page.pixmap)) {
-      pixmapIncludes.add(`#include "pixmaps/${pixmapVarName(page.pixmap, page.pixmapFormat)}.c"`);
+      pixmapExterns.add(pixmapVarName(page.pixmap, page.pixmapFormat));
     }
     if (Array.isArray(page.widgets)) {
       page.widgets.forEach(w => {
         if (shouldGeneratePixmap(w.pixmap)) {
-          pixmapIncludes.add(`#include "pixmaps/${pixmapVarName(w.pixmap, w.pixmapFormat)}.c"`);
+          pixmapExterns.add(pixmapVarName(w.pixmap, w.pixmapFormat));
         }
-        // qrcode 的 logo 图片也需要生成 #include
+        if (shouldGeneratePixmap(w.btnPixmap)) {
+          pixmapExterns.add(pixmapVarName(w.btnPixmap, w.pixmapFormat || 'RGB565'));
+        }
         if (w.type === 'qrcode' && shouldGeneratePixmap(w.logo)) {
-          pixmapIncludes.add(`#include "pixmaps/${pixmapVarName(w.logo, w.pixmapFormat)}.c"`);
+          pixmapExterns.add(pixmapVarName(w.logo, w.pixmapFormat));
         }
-        // icon 控件的图标资源
         if (w.type === 'icon' && shouldGeneratePixmap(w.icon)) {
-          pixmapIncludes.add(`#include "icons/${iconVarName(w.icon)}.c"`);
+          iconExterns.add(iconVarName(w.icon));
         }
       });
     }
   });
-  if (pixmapIncludes.size > 0) {
+  if (pixmapExterns.size > 0) {
     code += `/* ============================================\n`;
-    code += ` * 图片取模数据\n`;
+    code += ` * 图片取模声明（.c 由设计器生成到 pixmaps/，经 CMake 链接）\n`;
     code += ` * ============================================ */\n`;
-    pixmapIncludes.forEach(inc => { code += inc + '\n'; });
+    [...pixmapExterns].sort().forEach(name => {
+      code += `extern const sgl_pixmap_t ${name};\n`;
+    });
+    code += '\n';
+  }
+  if (iconExterns.size > 0) {
+    code += `/* ============================================\n`;
+    code += ` * icon 图标取模声明（.c 由设计器生成到 icons/，经 CMake 链接）\n`;
+    code += ` * ============================================ */\n`;
+    [...iconExterns].sort().forEach(name => {
+      code += `extern const sgl_icon_pixmap_t ${name};\n`;
+    });
     code += '\n';
   }
 
@@ -1204,13 +1238,6 @@ export function generateSGLCode(project) {
       if (w.parentId && widgetMap.has(w.parentId)) {
         const parent = widgetMap.get(w.parentId);
         depth = getDepth(parent) + 1;
-      }
-      // scroll 的 bindTarget 依赖：绑定对象必须在 scroll 之前创建
-      if (w.type === 'scroll' && w.bindTarget) {
-        const bindWidget = varNameMap.get(w.bindTarget);
-        if (bindWidget && bindWidget.id !== w.id) {
-          depth = Math.max(depth, getDepth(bindWidget) + 1);
-        }
       }
       depthMap.set(w.id, depth);
       return depth;
@@ -1338,20 +1365,21 @@ export function collectFonts(project) {
   project.pages.forEach(page => {
     if (!Array.isArray(page.widgets)) return;
     page.widgets.forEach(w => {
-      const effFamily = resolveEffectiveFontFamily(w.fontFamily, fonts);
-      if (effFamily && effFamily !== 'default' && w.fontSize != null) {
-        // 有实际显示文本的控件，只有包含可显示字符时才使用字体
-        const textSource = getWidgetTextForFont(w);
-        if (textSource !== undefined && !hasVisibleText(textSource)) return;
-        // 提取文件名
-        const familyName = effFamily.replace(/[/\\]/g, '/').split('/').pop();
-        // 跳过 "default" 字体（不需要生成字模）
-        if (familyName === 'default') return;
-        const bpp = w.fontBpp || 4;
-        const key = `${familyName}|${w.fontSize}|${bpp}`;
-        if (!fontMap.has(key)) {
-          fontMap.set(key, { family: familyName, path: effFamily, size: w.fontSize, bpp: bpp });
-        }
+      // 仅收集控件显式设置且存在于资源中的字体（空 = 系统字体，不生成字模）
+      let effFamily = resolveEffectiveFontFamily(w.fontFamily, fonts);
+      // battery 显示百分比但未选字体时，用第一个资源字体生成字模
+      if ((!effFamily || effFamily === 'default') && w.type === 'battery' && w.showPercentage && fonts.length > 0) {
+        effFamily = fonts[0].path || fonts[0].name || '';
+      }
+      if (!effFamily || w.fontSize == null) return;
+      const textSource = getWidgetTextForFont(w);
+      if (textSource !== undefined && !hasVisibleText(textSource)) return;
+      const familyName = effFamily.replace(/[/\\]/g, '/').split('/').pop();
+      if (!familyName || familyName === 'default') return;
+      const bpp = w.fontBpp || 4;
+      const key = `${familyName}|${w.fontSize}|${bpp}`;
+      if (!fontMap.has(key)) {
+        fontMap.set(key, { family: familyName, path: effFamily, size: w.fontSize, bpp: bpp });
       }
     });
   });
@@ -1360,54 +1388,133 @@ export function collectFonts(project) {
 }
 
 // ============ 字体缺失校验 ============
-// 检查所有需要显示文本的控件是否已添加对应的字体资源
+// 需要显示文本的控件必须设置有效字体资源：
+//   - 未设置 / default → 记入 issues（生成 .c 时警告，运行时拦截）
+//   - 已设置但不在资源中 → 记入 issues
 export function validateProjectFonts(project) {
   const issues = [];
   if (!project || !Array.isArray(project.pages)) return issues;
 
   const typeMap = new Map(SGL_WIDGET_TYPES.map(t => [t.type, t]));
   const fonts = (project.resources && project.resources.fonts) || [];
-  const resourceFontPaths = new Set(fonts.map(f => f.path));
-  const resourceFontNames = new Set(fonts.map(f => f.name));
 
   project.pages.forEach(page => {
     if (!Array.isArray(page.widgets)) return;
     page.widgets.forEach(w => {
       const typeDef = typeMap.get(w.type);
       if (!typeDef || !Array.isArray(typeDef.properties)) return;
-      // 只有具备 fontFamily 属性的控件才需要校验字体
       if (!typeDef.properties.includes('fontFamily')) return;
-      // polygon 没有文本时不需要字体
-      if (w.type === 'polygon' && !w.text) return;
-      // statusbar 没有槽位文本时不需要字体
-      if (w.type === 'statusbar' && !w.leftSlots && !w.rightSlots) return;
-      // 有 text/options/titleText 等文本属性的控件才需要字体
-      const textFields = ['text', 'options', 'titleText', 'msgText', 'leftBtnText', 'rightBtnText', 'leftSlots', 'rightSlots', 'textarea'];
-      const hasText = textFields.some(f => w[f] && String(w[f]).trim().length > 0);
-      if (!hasText) return;
 
-      const family = resolveEffectiveFontFamily(w.fontFamily, fonts);
-      if (!family || family === 'default') {
+      // 无文本内容的控件不强制要求字体（gauge/chart/keyboard 等始终需要）
+      const textSource = getWidgetTextForFont(w);
+      if (textSource !== undefined && !hasVisibleText(textSource)) return;
+
+      const raw = w.fontFamily;
+      if (!raw || raw === 'default') {
         issues.push({
           page: page.name || '未命名页面',
           widget: `${typeDef.name || w.type} (${w.id})`,
           type: w.type,
-          fontFamily: family || '',
-          reason: fonts.length === 0 ? '项目资源中没有字体，请先在资源面板添加字体文件' : '未设置字体文件'
+          fontFamily: '',
+          reason: fonts.length === 0
+            ? '未设置字体：请先在资源面板添加字体，并在控件上选择字体'
+            : '未设置字体：请在属性面板为控件选择字体文件'
         });
         return;
       }
 
-      // 检查字体文件是否已添加到项目资源（路径匹配 / 文件名匹配 / 字体名匹配）
-      const fileName = family.replace(/[/\\]/g, '/').split('/').pop();
-      if (!resourceFontPaths.has(family) && !resourceFontNames.has(fileName) && !resourceFontNames.has(family)) {
+      const family = resolveEffectiveFontFamily(raw, fonts);
+      if (!family) {
         issues.push({
           page: page.name || '未命名页面',
           widget: `${typeDef.name || w.type} (${w.id})`,
           type: w.type,
-          fontFamily: family,
-          reason: '字体文件未添加到项目资源'
+          fontFamily: raw,
+          reason: '字体文件未添加到项目资源（或已被删除）'
         });
+      }
+    });
+  });
+
+  return issues;
+}
+
+/**
+ * 校验「需要显示文本」的控件是否已设置文本内容
+ * 空文本在 SGL 中可运行，但通常是设计遗漏，运行前警告用户
+ * @returns {Array} issues 列表，每项 { page, widget, type, field, reason }
+ */
+export function validateProjectEmptyTexts(project) {
+  const issues = [];
+  if (!project || !Array.isArray(project.pages)) return issues;
+
+  const typeMap = new Map(SGL_WIDGET_TYPES.map(t => [t.type, t]));
+  const isBlank = (v) => v == null || String(v).trim() === '';
+  const usesDynamicText = (w) =>
+    !isBlank(w.textBuffer) || !isBlank(w.textFmt) || !isBlank(w.textFmtDynamic);
+
+  project.pages.forEach(page => {
+    if (!Array.isArray(page.widgets)) return;
+    page.widgets.forEach(w => {
+      const typeDef = typeMap.get(w.type);
+      if (!typeDef) return;
+      const name = `${typeDef.name || w.type} (${w.id})`;
+      const pageName = page.name || '未命名页面';
+
+      // 主文本类：label / button / checkbox / textbox / textline / arc_label / label_ext
+      if (['label', 'label_ext', 'arc_label', 'button', 'checkbox', 'textbox', 'textline'].includes(w.type)) {
+        if (usesDynamicText(w)) return; // 动态缓冲/格式化文本，静态 text 可为空
+        if (isBlank(w.text)) {
+          issues.push({
+            page: pageName,
+            widget: name,
+            type: w.type,
+            field: 'text',
+            reason: '未设置文本内容'
+          });
+        }
+        return;
+      }
+
+      // 列表类：选项文本
+      if (['dropdown', 'roller', 'textlist'].includes(w.type)) {
+        if (isBlank(w.options)) {
+          issues.push({
+            page: pageName,
+            widget: name,
+            type: w.type,
+            field: 'options',
+            reason: '未设置选项文本'
+          });
+        }
+        return;
+      }
+
+      // 窗口标题
+      if (w.type === 'win') {
+        if (isBlank(w.titleText)) {
+          issues.push({
+            page: pageName,
+            widget: name,
+            type: w.type,
+            field: 'titleText',
+            reason: '未设置标题文本'
+          });
+        }
+        return;
+      }
+
+      // 消息框：标题与消息至少应有一项
+      if (w.type === 'msgbox') {
+        if (isBlank(w.titleText) && isBlank(w.msgText)) {
+          issues.push({
+            page: pageName,
+            widget: name,
+            type: w.type,
+            field: 'titleText/msgText',
+            reason: '未设置标题与消息文本'
+          });
+        }
       }
     });
   });
@@ -1442,9 +1549,9 @@ export function validateSpritePixmaps(project) {
 }
 
 function getFontId(family, size, bpp) {
-  // 与 collectFonts / 后端 font_filename 保持一致：使用文件名作为字体标识
+  // 与后端 font_id_from_family 一致：文件名中非字母数字字符替换为 _
   const familyName = family.replace(/[/\\]/g, '/').split('/').pop();
-  const cleanFamily = familyName.replace(/[^\w]/g, '_');
+  const cleanFamily = familyName.replace(/[^0-9a-zA-Z]/g, '_');
   return `sgl_font_${cleanFamily}_${size}_bpp${bpp}`;
 }
 
@@ -1502,7 +1609,6 @@ function getSglCreateFn(type) {
     'msgbox': 'sgl_msgbox_create',
     'viewlist': 'sgl_viewlist_create',
     'dropdown': 'sgl_dropdown_create',
-    'scroll': 'sgl_scroll_create',
     'box': 'sgl_box_create',
     'win': 'sgl_win_create',
     'qrcode': 'sgl_qrcode_create',
@@ -1514,7 +1620,7 @@ function getSglCreateFn(type) {
     'statusbar': 'sgl_statusbar_create',
     'launcher': 'sgl_launcher_create',
     'analogclock': 'sgl_analogclock_create',
-    'ext_img': 'sgl_img_ext_create',
+    'img_ext': 'sgl_img_ext_create',
     'img': 'sgl_img_create',
     'arc_label': 'sgl_arc_label_create',
     'roller': 'sgl_roller_create'
@@ -1816,24 +1922,36 @@ function getSglSetters(w) {
 
     case 'battery':
       {
-        const levelVal = w.level != null ? w.level : (w.value != null ? w.value : 80);
+        const levelVal = w.level != null ? w.level : (w.value != null ? w.value : 100);
         if (shouldGenerateValue(levelVal, defaults, 'level')) setters.push(`sgl_battery_set_level(${obj(w)}, ${levelVal});`);
       }
-      if (shouldGenerateValue(w.fillColor, defaults, 'fillColor')) setters.push(`sgl_battery_set_fill_color(${obj(w)}, ${hexToSglColor(w.fillColor)});`);
+      // 空 fillColor = SGL auto（按电量色），不生成 set_fill_color
+      if (w.fillColor && String(w.fillColor).trim() && shouldGenerateValue(w.fillColor, defaults, 'fillColor')) {
+        setters.push(`sgl_battery_set_fill_color(${obj(w)}, ${hexToSglColor(w.fillColor)});`);
+      }
       if (shouldGenerateValue(w.lowColor, defaults, 'lowColor')) setters.push(`sgl_battery_set_low_color(${obj(w)}, ${hexToSglColor(w.lowColor)});`);
       if (shouldGenerateValue(w.mediumColor, defaults, 'mediumColor')) setters.push(`sgl_battery_set_medium_color(${obj(w)}, ${hexToSglColor(w.mediumColor)});`);
       if (shouldGenerateValue(w.highColor, defaults, 'highColor')) setters.push(`sgl_battery_set_high_color(${obj(w)}, ${hexToSglColor(w.highColor)});`);
       if (shouldGenerateValue(w.bgColor, defaults, 'bgColor')) setters.push(`sgl_battery_set_bg_color(${obj(w)}, ${hexToSglColor(w.bgColor)});`);
       if (shouldGenerateValue(w.borderColor, defaults, 'borderColor')) setters.push(`sgl_battery_set_border_color(${obj(w)}, ${hexToSglColor(w.borderColor)});`);
-      if (shouldGenerateValue(w.numCells, defaults, 'numCells')) setters.push(`sgl_battery_set_num_cells(${obj(w)}, ${w.numCells});`);
-      if (shouldGenerateValue(w.direction, defaults, 'direction')) setters.push(`sgl_battery_set_direction(${obj(w)}, ${w.direction});`);
-      if (shouldGenerateValue(w.capSize, defaults, 'capSize')) setters.push(`sgl_battery_set_cap_size(${obj(w)}, ${w.capSize});`);
-      if (shouldGenerateValue(w.capPos, defaults, 'capPos')) setters.push(`sgl_battery_set_cap_pos(${obj(w)}, ${w.capPos});`);
+      if (shouldGenerateValue(w.vertical, defaults, 'vertical')) setters.push(`sgl_battery_set_vertical(${obj(w)}, ${w.vertical ? 1 : 0});`);
       if (shouldGenerateValue(w.charging, defaults, 'charging')) setters.push(`sgl_battery_set_charging(${obj(w)}, ${w.charging ? 'true' : 'false'});`);
       if (shouldGenerateValue(w.chargingColor, defaults, 'chargingColor')) setters.push(`sgl_battery_set_charging_color(${obj(w)}, ${hexToSglColor(w.chargingColor)});`);
       if (shouldGenerateValue(w.showPercentage, defaults, 'showPercentage')) setters.push(`sgl_battery_show_percentage(${obj(w)}, ${w.showPercentage ? 'true' : 'false'});`);
       if (shouldGenerateValue(w.textColor, defaults, 'textColor')) setters.push(`sgl_battery_set_text_color(${obj(w)}, ${hexToSglColor(w.textColor)});`);
-      if (shouldGenerateFont(w, defaults)) {
+      if (shouldGenerateValue(w.alpha, defaults, 'alpha')) setters.push(`sgl_battery_set_alpha(${obj(w)}, ${w.alpha});`);
+      // 百分比文字必须 set_font：SGL 在 font==NULL 时回退 system font，而 demo 通常未设置 system font
+      if (w.showPercentage) {
+        let fam = resolveEffectiveFontFamily(w.fontFamily);
+        if (!fam) {
+          const fonts = _codegenContextFonts || [];
+          if (fonts.length > 0) fam = fonts[0].path || fonts[0].name || '';
+        }
+        if (fam) {
+          const fontId = getFontId(fam, w.fontSize || 14, w.fontBpp || 4);
+          setters.push(`sgl_battery_set_font(${obj(w)}, &${fontId});`);
+        }
+      } else if (shouldGenerateFont(w, defaults)) {
         const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
         setters.push(`sgl_battery_set_font(${obj(w)}, &${fontId});`);
       }
@@ -2030,19 +2148,6 @@ function getSglSetters(w) {
       }
       if (shouldGenerateValue(w.startAngle, defaults, 'startAngle')) setters.push(`sgl_arc_set_start_angle(${obj(w)}, ${w.startAngle});`);
       if (shouldGenerateValue(w.endAngle, defaults, 'endAngle')) setters.push(`sgl_arc_set_end_angle(${obj(w)}, ${w.endAngle});`);
-      break;
-
-    case 'scroll':
-      if (shouldGenerateValue(w.color, defaults, 'color')) setters.push(`sgl_scroll_set_color(${obj(w)}, ${hexToSglColor(w.color)});`);
-      if (shouldGenerateValue(w.borderColor, defaults, 'borderColor')) setters.push(`sgl_scroll_set_border_color(${obj(w)}, ${hexToSglColor(w.borderColor)});`);
-      if (shouldGenerateValue(w.borderWidth, defaults, 'borderWidth')) setters.push(`sgl_scroll_set_border_width(${obj(w)}, ${w.borderWidth});`);
-      if (shouldGenerateValue(w.radius, defaults, 'radius')) setters.push(`sgl_scroll_set_radius(${obj(w)}, ${w.radius});`);
-      if (shouldGenerateValue(w.width, defaults, 'width')) setters.push(`sgl_scroll_set_width(${obj(w)}, ${w.width});`);
-      if (shouldGenerateValue(w.direct, defaults, 'direct')) setters.push(`sgl_scroll_set_direct(${obj(w)}, ${w.direct});`);
-      if (shouldGenerateValue(w.value, defaults, 'value')) setters.push(`sgl_scroll_set_value(${obj(w)}, ${w.value});`);
-      if (shouldGenerateValue(w.hidden, defaults, 'hidden')) setters.push(`sgl_scroll_set_hidden(${obj(w)}, ${w.hidden ? 1 : 0});`);
-      if (shouldGenerateValue(w.bindTarget, defaults, 'bindTarget') && w.bindTarget) setters.push(`sgl_scroll_bind_obj(${obj(w)}, ${w.bindTarget});`);
-      if (shouldGenerateValue(w.alpha, defaults, 'alpha')) setters.push(`sgl_scroll_set_alpha(${obj(w)}, ${w.alpha});`);
       break;
 
     case 'box':
@@ -2374,7 +2479,7 @@ function getSglSetters(w) {
       if (shouldGenerateValue(w.alpha, defaults, 'alpha')) setters.push(`sgl_icon_set_alpha(${obj(w)}, ${w.alpha});`);
       break;
 
-    case 'ext_img':
+    case 'img_ext':
       if (shouldGeneratePixmap(w.pixmap)) setters.push(`sgl_img_ext_set_pixmap(${obj(w)}, &${pixmapVarName(w.pixmap, w.pixmapFormat || 'RGB565')});`);
       if (shouldGenerateValue(w.alpha, defaults, 'alpha')) setters.push(`sgl_img_ext_set_alpha(${obj(w)}, ${w.alpha});`);
       if (shouldGenerateValue(w.rotation, defaults, 'rotation')) setters.push(`sgl_img_ext_set_rotation(${obj(w)}, ${w.rotation});`);

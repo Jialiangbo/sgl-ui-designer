@@ -393,8 +393,18 @@ fn font_render(font_path: &Path, pixel_size: i32, codes: &[u32]) -> Result<FontD
         };
 
         // 对齐 C: FT_Load_Glyph(face, glyph_index, FT_LOAD_RENDER | FT_LOAD_TARGET_LIGHT | FT_LOAD_FORCE_AUTOHINT)
-        face.load_glyph(glyph_index, LoadFlag::RENDER | LoadFlag::TARGET_LIGHT | LoadFlag::FORCE_AUTOHINT)
-            .map_err(|e| format!("load_glyph 失败 code={}: {}", code, e))?;
+                // 对齐 C: FT_Load_Glyph(..., RENDER | TARGET_LIGHT | FORCE_AUTOHINT)
+        // 额外加 NO_BITMAP：SimSun 等 TTC 在小字号常走内嵌 1bpp 位图（FT_PIXEL_MODE_MONO），
+        // 若按 8bit 灰度直接拷贝会把打包位图读成噪声 → 画布文字不可读。
+        // 优先栅格化矢量轮廓得到 GRAY；若字体无轮廓再回退默认加载，并由下方 MONO 解包兜底。
+        let load_flags = LoadFlag::RENDER | LoadFlag::TARGET_LIGHT | LoadFlag::FORCE_AUTOHINT;
+        if face
+            .load_glyph(glyph_index, load_flags | LoadFlag::NO_BITMAP)
+            .is_err()
+        {
+            face.load_glyph(glyph_index, load_flags)
+                .map_err(|e| format!("load_glyph 失败 code={}: {}", code, e))?;
+        }
 
         let glyph_slot = face.glyph();
         let bitmap = glyph_slot.bitmap();
@@ -415,44 +425,52 @@ fn font_render(font_path: &Path, pixel_size: i32, codes: &[u32]) -> Result<FontD
             }
         }
 
-        // 对齐 C: box_w = (int)bmp->width
+        // 对齐 C: box_w / box_h / ofs_x / ofs_y
         let box_w = bitmap.width() as i32;
-        // 对齐 C: box_h = (int)bmp->rows
         let box_h = bitmap.rows() as i32;
-        // 对齐 C: ofs_x = slot->bitmap_left
         let ofs_x = glyph_slot.bitmap_left();
-        // 对齐 C: ofs_y = slot->bitmap_top - (int)bmp->rows
         let ofs_y = glyph_slot.bitmap_top() - box_h;
 
-        // 提取像素（对齐 C: 从 bmp->buffer 提取 8-bit grayscale）
+        // 提取像素为 8-bit grayscale（下游 quantize 依赖此格式）
+        // FT_PIXEL_MODE: NONE=0 MONO=1 GRAY=2 GRAY2=3 GRAY4=4 LCD=5 LCD_V=6 BGRA=7
         let buffer = bitmap.buffer();
         let pixel_count = (box_w as usize) * (box_h as usize);
         let mut pixels = vec![0u8; pixel_count];
-        // FreeType bitmap.pitch: 正值=top-down(行从顶到底)，负值=bottom-up(行从底到顶)
-        // 必须按实际方向读取，否则字形上下颠倒导致"乱码"
         let pitch_raw = bitmap.pitch();
         let pitch_abs = pitch_raw.unsigned_abs() as usize;
         let is_bottom_up = pitch_raw < 0;
-        if (pitch_abs == box_w as usize || pitch_abs == 0) && !is_bottom_up {
-            // 正向紧凑排列（最常见）
+        let pixel_mode = unsafe { (*bitmap.raw()).pixel_mode };
+
+        if pixel_mode == 1 {
+            // MONO: 1 bit/pixel，MSB 为最左像素；必须解包成 0/255
+            for row in 0..(box_h as usize) {
+                let src_row = if is_bottom_up { (box_h as usize) - 1 - row } else { row };
+                let row_off = src_row * pitch_abs;
+                let dst_off = row * (box_w as usize);
+                for col in 0..(box_w as usize) {
+                    let byte = buffer.get(row_off + (col / 8)).copied().unwrap_or(0);
+                    let bit = 7 - (col % 8);
+                    pixels[dst_off + col] = if (byte >> bit) & 1 != 0 { 255 } else { 0 };
+                }
+            }
+        } else if (pitch_abs == box_w as usize || pitch_abs == 0) && !is_bottom_up {
             if buffer.len() >= pixel_count {
                 pixels.copy_from_slice(&buffer[..pixel_count]);
             }
         } else {
-            // 按 pitch 复制每行：bottom-up 时源行号要反转（buffer[0] 是底行 → 填到 dst 的最后一行）
+            let copy_w = box_w as usize;
             for row in 0..(box_h as usize) {
                 let src_row = if is_bottom_up { (box_h as usize) - 1 - row } else { row };
                 let src_start = src_row * pitch_abs;
-                let src_end = src_start + (box_w as usize);
+                let src_end = src_start + copy_w;
                 if src_end <= buffer.len() {
-                    let dst_start = row * (box_w as usize);
-                    pixels[dst_start..dst_start + (box_w as usize)]
+                    let dst_start = row * copy_w;
+                    pixels[dst_start..dst_start + copy_w]
                         .copy_from_slice(&buffer[src_start..src_end]);
                 }
             }
         }
 
-        // 对齐 C: 更新 ascent/descent（即使 box_h=0 也更新）
         let glyph_top = ofs_y + box_h;
         let glyph_bottom = ofs_y;
         if glyph_top > ascent {

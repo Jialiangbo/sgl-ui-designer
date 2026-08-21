@@ -48,21 +48,77 @@ function getValidTypes() {
 }
 
 /**
- * 系统提示词（动态生成控件参考，与设计器保持一致）
- * @param {Array} currentWidgets - 当前画布上的控件列表（可选，用于让 AI 感知画布状态）
+ * 构建画布/资源上下文文本（供 system prompt 使用）
+ * @param {object|null} ctx
+ * @param {number} [ctx.screenWidth]
+ * @param {number} [ctx.screenHeight]
+ * @param {string} [ctx.pageName]
+ * @param {string} [ctx.bgColor]
+ * @param {Array} [ctx.widgets]
+ * @param {string[]} [ctx.selectedIds]
+ * @param {Array} [ctx.fonts] - [{name,path}]
+ * @param {Array} [ctx.images] - [{name,path}]
+ * @param {string} [ctx.editMode] - auto|generate|append|edit-selected|edit-props|chat
  */
-export function buildSystemPrompt(currentWidgets = null) {
+export function buildCanvasContext(ctx) {
+  if (!ctx) return '';
+  const lines = ['## 当前工程上下文'];
+  if (ctx.screenWidth && ctx.screenHeight) {
+    lines.push(`屏幕：${ctx.screenWidth}×${ctx.screenHeight} px`);
+  }
+  if (ctx.pageName) lines.push(`当前页：${ctx.pageName}`);
+  if (ctx.bgColor) lines.push(`背景色：${ctx.bgColor}`);
+  if (ctx.editMode) {
+    const modeHint = {
+      auto: '用户使用智能模式，请根据指令判断是生成/追加/改属性还是纯问答',
+      generate: '用户明确要求【生成整页布局】，输出完整 widgets；设计器会让用户确认后再替换画布',
+      append: '用户明确要求【追加控件】，只输出新增控件，勿输出已有控件',
+      'edit-selected': '用户明确要求【改选中控件】，只改选中项',
+      'edit-props': '用户明确要求【改属性】，用 id→属性增量对象格式输出',
+      chat: '用户明确要求【仅问答】，用中文纯文本回复，不要输出控件 JSON'
+    };
+    lines.push(`当前助手模式：${ctx.editMode} — ${modeHint[ctx.editMode] || ''}`);
+  }
+  const fonts = ctx.fonts || [];
+  const images = ctx.images || [];
+  if (fonts.length || images.length) {
+    lines.push(`已有字体(${fonts.length})：${fonts.map(f => f.name || f.path).slice(0, 12).join(', ') || '无'}`);
+    lines.push(`已有图片(${images.length})：${images.map(i => i.name || i.path).slice(0, 12).join(', ') || '无'}`);
+  } else {
+    lines.push('资源：尚未添加字体/图片（生成文本控件时可先不指定 fontFamily）');
+  }
+  const widgets = ctx.widgets || [];
+  const selectedIds = ctx.selectedIds || [];
+  if (widgets.length > 0) {
+    const summary = widgets.map(w =>
+      `${w.type}(${w.id})@${w.x},${w.y} ${w.width}x${w.height}`
+    ).join('; ');
+    lines.push(`画布控件 ${widgets.length} 个：${summary}`);
+    if (selectedIds.length > 0) {
+      lines.push(`当前选中：${selectedIds.join(', ')}（优先针对这些控件修改）`);
+    }
+    lines.push('修改/添加时勿与现有 id 重复，尽量避免位置重叠。');
+  } else {
+    lines.push('画布当前为空。');
+  }
+  return '\n' + lines.join('\n') + '\n';
+}
+
+/**
+ * 系统提示词（动态生成控件参考，与设计器保持一致）
+ * @param {Array|object|null} currentWidgetsOrCtx - 控件列表，或 buildCanvasContext 的 ctx 对象
+ */
+export function buildSystemPrompt(currentWidgetsOrCtx = null) {
   const widgetRef = buildWidgetReference();
   const validTypes = getValidTypes();
 
   let canvasInfo = '';
-  if (currentWidgets && currentWidgets.length > 0) {
-    const summary = currentWidgets.map(w =>
-      `${w.type}(${w.id})@${w.x},${w.y} ${w.width}x${w.height}`
-    ).join('; ');
-    canvasInfo = `\n## 当前画布状态\n画布上已有 ${currentWidgets.length} 个控件：${summary}\n用户修改/添加控件时需注意不要与现有控件 id 重复，位置不要重叠。`;
-  } else if (currentWidgets) {
-    canvasInfo = '\n## 当前画布状态\n画布当前为空。';
+  if (currentWidgetsOrCtx && !Array.isArray(currentWidgetsOrCtx) && typeof currentWidgetsOrCtx === 'object') {
+    canvasInfo = buildCanvasContext(currentWidgetsOrCtx);
+  } else if (currentWidgetsOrCtx && currentWidgetsOrCtx.length > 0) {
+    canvasInfo = buildCanvasContext({ widgets: currentWidgetsOrCtx });
+  } else if (currentWidgetsOrCtx) {
+    canvasInfo = buildCanvasContext({ widgets: [] });
   }
 
   return `你是 SGL UI Designer 的 AI 设计助手。请帮用户设计嵌入式设备的界面布局。
@@ -71,6 +127,7 @@ export function buildSystemPrompt(currentWidgets = null) {
 - 当用户要求**生成、创建、修改、优化界面布局**时，输出 JSON 格式的控件布局（见下方输出格式）。
 - 当用户提到**屏幕尺寸、分辨率、页面参数、背景色、资源管理**时，输出包含 meta 对象的 JSON（见下方输出格式），无需输出 widgets。
 - 当用户只是**提问、闲聊、咨询**（如"你好"、"什么是SGL"、"帮我解释一下"等）时，直接用中文纯文本回复，不要输出 JSON。
+- 若系统上下文标明「仅问答」模式：始终纯文本，不要输出控件 JSON。
 - 判断标准：用户的意图是否涉及"修改画布或在画布上添加/修改控件"。如果是→输出JSON；否则→纯文本回复。
 
 ## 本地文件访问

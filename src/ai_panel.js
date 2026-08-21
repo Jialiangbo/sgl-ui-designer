@@ -16,6 +16,27 @@ import { PROVIDER_PRESETS, DEFAULT_LLM_CONFIG } from './llm/llm_config.js';
 
 const LLM_CONFIG_KEY = 'sgl_llm_config_cache';
 
+/** 用户可选的助手模式（产品能力入口） */
+const EDIT_MODES = [
+  { id: 'auto', label: '智能', tip: '自动判断：有选中→改属性；空画布→生成；否则优先追加/问答' },
+  { id: 'generate', label: '生成', tip: '按描述生成整页布局（应用前需确认，避免误清空）' },
+  { id: 'append', label: '追加', tip: '只新增控件，不改动已有控件' },
+  { id: 'edit-selected', label: '改选中', tip: '只修改画布上当前选中的控件属性' },
+  { id: 'chat', label: '问答', tip: '只聊天/解释，不改动画布' }
+];
+
+const MODE_LABELS = {
+  auto: '智能',
+  generate: '生成布局',
+  append: '追加控件',
+  'edit-selected': '改选中',
+  chat: '仅问答',
+  optimize: '优化布局',
+  analyze: '分析',
+  explain: '解释代码',
+  image: '截图还原'
+};
+
 /** 加载 AI 配置（优先从 Rust 后端文件读取，fallback 到 localStorage 缓存） */
 export async function loadLlmConfig() {
   try {
@@ -67,6 +88,10 @@ let _partialSelectedIds = [];   // 局部修改模式下选中的控件ID
 let _appendMode = false;        // 当前是否为追加控件模式
 let _modifyPropsMode = false;   // 当前是否为属性增量修改模式
 let _lastWidgetsSnapshot = null; // 上一次控件快照，用于撤销
+let _userEditMode = 'auto';      // 用户选择的助手模式
+let _requireConfirmReplace = false; // 本次结果若为整页布局，需确认后再替换
+let _pendingApply = null;       // { widgets } 待用户确认应用的布局
+let _contextEl = null;
 
 /**
  * 初始化 AI 面板（在编辑器页面调用）
@@ -88,7 +113,7 @@ export function initAIPanel() {
         <div class="ai-panel-avatar">🤖</div>
         <div>
           <div class="ai-panel-title">SGL AI 助手</div>
-          <div class="ai-panel-subtitle">界面设计智能伙伴</div>
+          <div class="ai-panel-subtitle">设计 · 改控件 · 问答 · 截图还原</div>
         </div>
       </div>
       <div class="ai-panel-header-actions">
@@ -96,20 +121,25 @@ export function initAIPanel() {
         <button class="ai-btn ai-btn-icon" id="ai-btn-close" title="收起">✕</button>
       </div>
     </div>
+    <div class="ai-mode-bar" id="ai-mode-bar" role="tablist" aria-label="助手模式"></div>
+    <div class="ai-context-strip" id="ai-context-strip" title="当前页与资源上下文"></div>
     <div class="ai-panel-body" id="ai-panel-body">
       <div class="ai-messages" id="ai-messages">
         <div class="ai-welcome">
           <div class="ai-welcome-icon">✨</div>
           <h3>你好，我是 SGL UI 设计助手</h3>
-          <p>我可以帮你快速生成和优化界面</p>
-          <ul>
-            <li>描述想要的界面，我来生成布局</li>
-            <li>让我优化当前页面的布局</li>
-            <li>📎 粘贴截图/草图，我来还原</li>
+          <p>先选上方模式，再说你想做什么</p>
+          <ul class="ai-capability-list">
+            <li><b>生成</b> — 描述界面，生成整页布局（应用前确认）</li>
+            <li><b>追加</b> — 在现有页面上再加控件</li>
+            <li><b>改选中</b> — 改颜色/文字/位置等属性</li>
+            <li><b>问答</b> — 问 SGL / 控件用法，不改画布</li>
+            <li><b>📎 截图</b> — 粘贴草图或 UI 图还原布局</li>
           </ul>
           <div class="ai-quick-actions">
             <button class="ai-quick-btn" data-action="generate">✨ 生成布局</button>
-            <button class="ai-quick-btn" data-action="optimize">🎨 优化布局</button>
+            <button class="ai-quick-btn" data-action="append">➕ 追加控件</button>
+            <button class="ai-quick-btn" data-action="edit-selected">🎯 改选中</button>
             <button class="ai-quick-btn" data-action="analyze">💡 分析建议</button>
             <button class="ai-quick-btn" data-action="explain">📖 解释代码</button>
           </div>
@@ -149,6 +179,11 @@ export function initAIPanel() {
   _inputEl = document.getElementById('ai-input');
   _sendBtn = document.getElementById('ai-btn-send');
   _fileInput = document.getElementById('ai-file-input');
+  _contextEl = document.getElementById('ai-context-strip');
+
+  renderModeBar();
+  updateContextStrip();
+  updateInputPlaceholder();
 
   _sendBtn.addEventListener('click', handleSend);
   _inputEl.addEventListener('keydown', (e) => {
@@ -187,12 +222,11 @@ export function initAIPanel() {
   // 加载当前项目的对话历史
   loadHistoryFromProject().then(() => rebuildMessagesUI());
 
-  // 监听 AppState 变化，检测项目切换
+  // 监听 AppState 变化，检测项目切换 + 刷新上下文条
   AppState.subscribe(async () => {
+    updateContextStrip();
     const currentPath = AppState.projectPath;
     if (currentPath !== _lastProjectPath) {
-      // 项目切换了：先保存旧项目的历史（已在 saveHistoryToProject 中实时更新）
-      // 然后加载新项目的历史并重建 UI
       _lastProjectPath = currentPath;
       await loadHistoryFromProject();
       rebuildMessagesUI();
@@ -204,6 +238,82 @@ export function initAIPanel() {
   listen('llm-reasoning', (event) => handleStreamReasoning(event.payload));
   listen('llm-done', (event) => handleStreamDone(event.payload));
   listen('llm-error', (event) => handleStreamError(event.payload));
+}
+
+function renderModeBar() {
+  const bar = document.getElementById('ai-mode-bar');
+  if (!bar) return;
+  bar.innerHTML = EDIT_MODES.map(m =>
+    `<button type="button" class="ai-mode-chip${_userEditMode === m.id ? ' active' : ''}" data-mode="${m.id}" title="${m.tip}">${m.label}</button>`
+  ).join('');
+  bar.querySelectorAll('.ai-mode-chip').forEach(btn => {
+    btn.addEventListener('click', () => setUserEditMode(btn.dataset.mode));
+  });
+}
+
+function setUserEditMode(mode) {
+  if (!EDIT_MODES.some(m => m.id === mode)) return;
+  _userEditMode = mode;
+  renderModeBar();
+  updateInputPlaceholder();
+  updateContextStrip();
+}
+
+function updateInputPlaceholder() {
+  if (!_inputEl) return;
+  const map = {
+    auto: '说说你想做的事，或粘贴截图…',
+    generate: '描述要生成的整页界面，如「智能家居控制面板」…',
+    append: '要追加什么？如「右下角加一个确认按钮」…',
+    'edit-selected': '怎么改选中控件？如「文字改成红色、字号 18」…',
+    chat: '问我 SGL、控件或布局问题…'
+  };
+  _inputEl.placeholder = map[_userEditMode] || map.auto;
+}
+
+function updateContextStrip() {
+  if (!_contextEl) return;
+  const project = AppState.project || {};
+  const page = AppState.getCurrentPage?.();
+  const sw = project.screen_width || 480;
+  const sh = project.screen_height || 320;
+  const fonts = (project.resources && project.resources.fonts) || [];
+  const images = (project.resources && project.resources.images) || [];
+  const n = page && page.widgets ? page.widgets.length : 0;
+  const sel = AppState.selectedWidgetIds ? AppState.selectedWidgetIds.size : 0;
+  const pageName = page ? (page.name || page.id || '未命名') : '无页面';
+  _contextEl.innerHTML =
+    `<span>${sw}×${sh}</span>` +
+    `<span>${escapeHtml(String(pageName))}</span>` +
+    `<span>控件 ${n}</span>` +
+    `<span class="${sel ? 'ai-ctx-sel' : ''}">选中 ${sel}</span>` +
+    `<span>字体 ${fonts.length}</span>` +
+    `<span>图片 ${images.length}</span>` +
+    `<span class="ai-ctx-mode">${MODE_LABELS[_userEditMode] || '智能'}</span>`;
+}
+
+function buildAiContextPayload() {
+  const project = AppState.project || {};
+  const page = AppState.getCurrentPage?.();
+  const widgets = (page && page.widgets) || [];
+  const selectedIds = AppState.selectedWidgetIds ? [...AppState.selectedWidgetIds] : [];
+  return {
+    screenWidth: project.screen_width || 480,
+    screenHeight: project.screen_height || 320,
+    pageName: page ? (page.name || page.id || '') : '',
+    bgColor: project.bg_color || '',
+    widgets: widgets.map(w => ({
+      type: w.type, id: w.id, x: w.x, y: w.y, width: w.width, height: w.height
+    })),
+    selectedIds,
+    fonts: ((project.resources && project.resources.fonts) || []).map(f => ({
+      name: f.name, path: f.path
+    })),
+    images: ((project.resources && project.resources.images) || []).map(i => ({
+      name: i.name, path: i.path
+    })),
+    editMode: _userEditMode
+  };
 }
 
 // ============ 面板控制 ============
@@ -232,15 +342,32 @@ function handleQuickAction(action) {
 
   switch (action) {
     case 'generate':
+      setUserEditMode('generate');
       _inputEl.value = '';
-      _inputEl.placeholder = '描述你想生成的界面，如"智能家居控制面板"...';
       _inputEl.focus();
       break;
+    case 'append':
+      setUserEditMode('append');
+      _inputEl.value = '';
+      _inputEl.focus();
+      break;
+    case 'edit-selected': {
+      const sel = AppState.selectedWidgetIds ? AppState.selectedWidgetIds.size : 0;
+      if (sel === 0) {
+        showToast('请先在画布上选中要修改的控件', 'error');
+        return;
+      }
+      setUserEditMode('edit-selected');
+      _inputEl.value = '';
+      _inputEl.focus();
+      break;
+    }
     case 'optimize':
       if (page.widgets.length === 0) {
         showToast('当前页面没有控件，无法优化', 'error');
         return;
       }
+      setUserEditMode('auto');
       _inputEl.value = '请优化当前页面的布局，改善间距、对齐和视觉层次';
       _inputEl.focus();
       break;
@@ -334,8 +461,8 @@ async function sendMessage(mode, userText) {
       ? page0.widgets.filter(w => selectedIds.includes(w.id))
       : [];
 
-    // 意图分类：基于关键词互斥优先级匹配（add-resources > add-widgets > modify-props > optimize > generate > chat）
-    const generateKeywords = ['生成', '创建', '设计', '画一个', '做一个', '界面布局', '帮我画', '帮我设计', '帮我生成', '新建页面', '新页面', '加一个页面'];
+    // 用户显式模式优先；智能模式再用关键词兜底
+    const generateKeywords = ['生成', '创建', '设计', '画一个', '做一个', '界面布局', '帮我画', '帮我设计', '帮我生成', '新建页面', '新页面'];
     const optimizeKeywords = ['优化布局', '改进布局', '美化布局', '调整布局', '重新布局', '重新排列', '重新设计', '优化', '改进', '美化', '调整', '重新'];
     const addWidgetKeywords = ['加一个', '再加一个', '放一个', '加上', '增加一个', '添加控件', '新增控件', '插入控件', '添加一个', '新增一个'];
     const addResourceKeywords = ['添加字体', '加字体', '添加图片', '加图片', '导入字体', '导入图片', '添加资源', '加资源'];
@@ -348,18 +475,47 @@ async function sendMessage(mode, userText) {
     const isGenerate = !isAddResources && !isAddWidgets && !isModifyProps && !isOptimize && generateKeywords.some(kw => userText.includes(kw));
 
     let intent = 'chat';
-    if (isAddResources) intent = 'add-resources';
-    else if (isAddWidgets) intent = 'add-widgets';
-    else if (isModifyProps) intent = 'modify-props';
-    else if (isOptimize && hasWidgets) intent = 'optimize';
-    else if (isGenerate) intent = 'generate';
+    const forced = _userEditMode;
+    if (forced === 'generate') intent = 'generate';
+    else if (forced === 'append') intent = hasWidgets ? 'add-widgets' : 'generate';
+    else if (forced === 'edit-selected') intent = 'modify-props';
+    else if (forced === 'chat') intent = 'chat';
+    else {
+      // 智能：关键词优先；有选中且像在改属性时走改选中；空画布偏生成
+      if (isAddResources) intent = 'add-resources';
+      else if (isAddWidgets && hasWidgets) intent = 'add-widgets';
+      else if (isModifyProps && hasSelection) intent = 'modify-props';
+      else if (isModifyProps && hasWidgets) intent = 'modify-props';
+      else if (isOptimize && hasWidgets) intent = 'optimize';
+      else if (isGenerate) intent = 'generate';
+      else if (isAddWidgets) intent = 'generate';
+      else if (!hasWidgets && userText.length > 8) intent = 'generate';
+      else if (hasSelection && userText.length > 2) intent = 'modify-props';
+      else intent = 'chat';
+    }
+
+    if (forced === 'edit-selected' && !hasSelection) {
+      addMessage('assistant', '⚠️ 「改选中」模式需要先在画布上选中控件。也可切换到「智能 / 追加 / 生成」。', 'error');
+      return;
+    }
+
+    _requireConfirmReplace = false;
 
     if (_pendingImage) {
       imageBase64 = _pendingImage;
       userPrompt = buildImageToLayoutPrompt(sw, sh, userText);
       removePendingImage();
+      _requireConfirmReplace = true;
+      _partialModifyMode = false;
+      _modifyPropsMode = false;
+      _appendMode = false;
+    } else if (intent === 'chat' && forced === 'chat') {
+      _partialModifyMode = false;
+      _modifyPropsMode = false;
+      _appendMode = false;
+      _partialSelectedIds = [];
+      userPrompt = `【仅问答模式】请用中文纯文本回答，不要输出控件 JSON。\n\n用户问题：${userText}`;
     } else if (intent === 'modify-props' && hasSelection) {
-      // 属性增量修改模式：有选中控件，只修改属性
       isPartialModify = true;
       _partialModifyMode = true;
       _modifyPropsMode = true;
@@ -368,7 +524,6 @@ async function sendMessage(mode, userText) {
       const selectedSlim = serializeWidgetsForAI(selectedWidgets);
       userPrompt = buildModifyPropsPrompt(sw, sh, selectedSlim, userText, 'selected');
     } else if (intent === 'modify-props' && hasWidgets) {
-      // 属性增量修改模式：无选中控件，修改所有控件的属性（如修改配色）
       isPartialModify = true;
       _partialModifyMode = false;
       _modifyPropsMode = true;
@@ -377,7 +532,6 @@ async function sendMessage(mode, userText) {
       const allSlim = serializeWidgetsForAI(page0.widgets);
       userPrompt = buildModifyPropsPrompt(sw, sh, allSlim, userText, 'all');
     } else if (intent === 'add-widgets' && hasWidgets) {
-      // 添加控件模式：追加到现有页面
       _partialModifyMode = false;
       _modifyPropsMode = false;
       _appendMode = true;
@@ -385,22 +539,21 @@ async function sendMessage(mode, userText) {
       const slim = serializeWidgetsForAI(page0.widgets);
       userPrompt = buildAddWidgetsPrompt(sw, sh, slim, userText);
     } else if (intent === 'optimize' && hasWidgets) {
-      // 优化模式：输出完整布局
       _partialModifyMode = false;
       _modifyPropsMode = false;
       _appendMode = false;
       _partialSelectedIds = [];
+      _requireConfirmReplace = true;
       const slim = serializeWidgetsForAI(page0.widgets);
       userPrompt = buildModifyPrompt(sw, sh, slim, userText);
     } else if (intent === 'generate' || intent === 'add-resources' || intent === 'add-widgets') {
-      // 生成模式 / 添加资源 / 添加控件（无现有控件时当生成处理）
       _partialModifyMode = false;
       _modifyPropsMode = false;
       _appendMode = false;
       _partialSelectedIds = [];
+      _requireConfirmReplace = true;
       userPrompt = buildGeneratePrompt(sw, sh, userText);
     } else {
-      // 纯聊天模式：也给系统提示词，让 AI 知道可以输出 JSON 修改参数
       _partialModifyMode = false;
       _modifyPropsMode = false;
       _appendMode = false;
@@ -412,9 +565,12 @@ async function sendMessage(mode, userText) {
   // 显示用户消息
   const userDisplayText = userText || (mode === 'analyze' ? '分析当前布局' : '解释生成的代码');
   let modeLabel = '';
-  if (_modifyPropsMode) modeLabel = '<span class="ai-mode-tag">属性修改</span>';
-  else if (_appendMode) modeLabel = '<span class="ai-mode-tag">添加控件</span>';
-  else if (isPartialModify) modeLabel = '<span class="ai-mode-tag">局部修改</span>';
+  if (imageBase64) modeLabel = `<span class="ai-mode-tag">${MODE_LABELS.image}</span>`;
+  else if (_modifyPropsMode) modeLabel = `<span class="ai-mode-tag">${MODE_LABELS['edit-selected']}</span>`;
+  else if (_appendMode) modeLabel = `<span class="ai-mode-tag">${MODE_LABELS.append}</span>`;
+  else if (_requireConfirmReplace) modeLabel = `<span class="ai-mode-tag">${MODE_LABELS.generate}</span>`;
+  else if (_userEditMode === 'chat') modeLabel = `<span class="ai-mode-tag">${MODE_LABELS.chat}</span>`;
+  else if (isPartialModify) modeLabel = `<span class="ai-mode-tag">局部修改</span>`;
   addMessage('user', userDisplayText, null, modeLabel);
 
   // 检测用户消息中的本地文件路径（仅在普通聊天模式下检测）
@@ -423,11 +579,8 @@ async function sendMessage(mode, userText) {
     if (pathScanned) return;
   }
 
-  // 构建消息历史（传入当前画布控件，让 AI 感知画布状态）
-  const currentWidgets = (AppState.widgets || []).map(w => ({
-    type: w.type, id: w.id, x: w.x, y: w.y, width: w.width, height: w.height
-  }));
-  const systemMsg = { role: 'system', content: buildSystemPrompt(currentWidgets) };
+  // 构建消息历史（传入完整工程上下文）
+  const systemMsg = { role: 'system', content: buildSystemPrompt(buildAiContextPayload()) };
 
   // 构建本次用户消息（用于发送）
   let userMsgForSend;
@@ -664,51 +817,90 @@ async function finalizeAIResponse(content, reasoning) {
   else {
     const result = parseAndValidateAIResponse(content, AppState.project.screen_width, AppState.project.screen_height);
 
-    // 先处理页面参数和资源管理（无论是否有控件都处理）
-    if (result.meta) {
+    // 先处理页面参数和资源管理（问答模式不自动改工程）
+    if (result.meta && _userEditMode !== 'chat') {
       applyAIMeta(result.meta);
     }
 
     if (result.valid && result.widgets.length > 0) {
-      
-      // 自动应用到画布（追加模式用 append，局部修改用 partial-update，其他用 replace）
+      // 聊天模式：有 JSON 也不自动改画布，只展示摘要供手动应用
+      const forceManual = _userEditMode === 'chat';
+      const needConfirm = forceManual || (_requireConfirmReplace && !_appendMode && !_partialModifyMode && !_modifyPropsMode);
       const applyMode = _appendMode ? 'append' : (_partialModifyMode ? 'partial-update' : 'replace');
-      applyAIWidgets(result.widgets, applyMode);
-      
-      // 显示控件摘要 + 操作按钮
+
+      if (!needConfirm) {
+        applyAIWidgets(result.widgets, applyMode);
+      } else {
+        _pendingApply = { widgets: result.widgets };
+      }
+
       const summary = summarizeWidgets(result.widgets);
       if (lastMsg) {
         const contentEl = lastMsg.querySelector('.ai-msg-content');
         if (contentEl) {
-          let actionButtons = `
-            <button class="ai-btn ai-btn-undo" data-action="undo">↩️ 撤销</button>
-          `;
-          if (!_partialModifyMode && !_appendMode) {
-            actionButtons += `<button class="ai-btn ai-btn-append" data-action="append">➕ 追加到页面</button>`;
+          let actionButtons = '';
+          if (needConfirm) {
+            actionButtons = `
+              <button class="ai-btn ai-btn-apply" data-action="replace">✅ 替换画布</button>
+              <button class="ai-btn ai-btn-append" data-action="append">➕ 追加到页面</button>
+              <button class="ai-btn ai-btn-preview-json" data-action="discard">✕ 不用</button>
+              <button class="ai-btn ai-btn-preview-json" data-action="preview-json">📋 查看 JSON</button>
+            `;
+          } else {
+            actionButtons = `<button class="ai-btn ai-btn-undo" data-action="undo">↩️ 撤销</button>`;
+            if (!_partialModifyMode && !_appendMode) {
+              actionButtons += `<button class="ai-btn ai-btn-append" data-action="append">➕ 追加到页面</button>`;
+            }
+            actionButtons += `<button class="ai-btn ai-btn-preview-json" data-action="preview-json">📋 查看 JSON</button>`;
           }
-          actionButtons += `<button class="ai-btn ai-btn-preview-json" data-action="preview-json">📋 查看 JSON</button>`;
 
           let titleText = '';
-          if (_appendMode) titleText = `已追加 ${result.widgets.length} 个控件`;
+          if (needConfirm) titleText = `已生成 ${result.widgets.length} 个控件（待确认）`;
+          else if (_appendMode) titleText = `已追加 ${result.widgets.length} 个控件`;
           else if (_partialModifyMode) titleText = `已更新选中控件 (${result.widgets.length} 个)`;
           else titleText = `已生成 ${result.widgets.length} 个控件`;
 
           contentEl.innerHTML = reasoningHtml + `
             <div class="ai-result-summary">
-              <div class="ai-result-title">✅ ${titleText}：</div>
+              <div class="ai-result-title">${needConfirm ? '👀' : '✅'} ${titleText}：</div>
               <div class="ai-result-detail">${summary}</div>
+              ${needConfirm ? '<div class="ai-result-hint">整页替换需确认，避免误清空当前布局</div>' : ''}
             </div>
             <div class="ai-result-actions">
               ${actionButtons}
             </div>
           `;
-          contentEl.querySelector('[data-action="undo"]').addEventListener('click', undoLastAIApply);
-          if (!_partialModifyMode && !_appendMode) {
-            contentEl.querySelector('[data-action="append"]').addEventListener('click', () => applyAIWidgets(result.widgets, 'append'));
-          }
-          contentEl.querySelector('[data-action="preview-json"]').addEventListener('click', () => showJsonPreview(result.widgets));
+          const bind = (sel, fn) => {
+            const el = contentEl.querySelector(sel);
+            if (el) el.addEventListener('click', fn);
+          };
+          bind('[data-action="undo"]', undoLastAIApply);
+          bind('[data-action="replace"]', () => {
+            if (!_pendingApply) return;
+            applyAIWidgets(_pendingApply.widgets, 'replace');
+            _pendingApply = null;
+            showToast('已替换画布', 'success');
+            contentEl.querySelector('.ai-result-actions').innerHTML =
+              `<button class="ai-btn ai-btn-undo" data-action="undo">↩️ 撤销</button>`;
+            contentEl.querySelector('[data-action="undo"]').addEventListener('click', undoLastAIApply);
+          });
+          bind('[data-action="append"]', () => {
+            const ws = (_pendingApply && _pendingApply.widgets) || result.widgets;
+            applyAIWidgets(ws, 'append');
+            _pendingApply = null;
+          });
+          bind('[data-action="discard"]', () => {
+            _pendingApply = null;
+            showToast('已忽略本次布局', 'info');
+            const tip = contentEl.querySelector('.ai-result-title');
+            if (tip) tip.textContent = '已忽略本次生成';
+            const actions = contentEl.querySelector('.ai-result-actions');
+            if (actions) actions.remove();
+          });
+          bind('[data-action="preview-json"]', () => showJsonPreview(result.widgets));
         }
       }
+      _requireConfirmReplace = false;
     } else if (result.errors && result.errors.length > 0) {
       // 有校验错误
       if (lastMsg) {

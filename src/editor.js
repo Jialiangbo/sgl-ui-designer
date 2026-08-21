@@ -1,6 +1,6 @@
 import './sgl_renderer.js';
 import { AppState, navigate, showToast, initNav, downloadFile, escapeHtml, escapeAttr, setupUpdateChecker, setupWindowControls } from './app.js';
-import { SGL_WIDGET_TYPES, WIDGET_CATEGORIES, PROP_META, WIDGET_EVENTS, WIDGET_DEFAULTS, validateProjectFonts, validateSpritePixmaps, getWidgetVarName, setCodegenLogCallback } from './sgl_api.js';
+import { SGL_WIDGET_TYPES, WIDGET_CATEGORIES, PROP_META, WIDGET_EVENTS, WIDGET_DEFAULTS, validateProjectFonts, validateProjectEmptyTexts, validateSpritePixmaps, getWidgetVarName, setCodegenLogCallback } from './sgl_api.js';
 import { getCheckboxIconDataUrl } from './checkbox_icon.js';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -36,43 +36,78 @@ function scheduleRenderCanvas() {
 setFontLoadCallback(() => scheduleRenderCanvas());
 setCodegenLogCallback((message, level) => logMessage(message, level));
 
-// 获取字体的实际路径（用于字模加载）
+// 获取字体的实际路径（用于字模加载）；仅返回项目资源中存在的字体
 function resolveFontPath(family) {
   const fonts = (AppState.project.resources && AppState.project.resources.fonts) || [];
   if (!family || family === 'default') return '';
-  // 已经是路径（包含分隔符）
-  if (family.includes('/') || family.includes('\\')) return family;
-  // 查找字体资源
-  const font = fonts.find(f => f.name === family);
-  if (font) return font.path;
-  return family;
+  const matched = resolveFontResourcePath(family, fonts);
+  return matched || '';
 }
 
-// 检查一个字体族名/路径是否在项目字体资源中存在（按路径/文件名/字体名三种匹配）
+// 规范化路径分隔符，便于跨 Windows/Unix 比较
+function normalizeFontPathKey(p) {
+  return String(p || '').replace(/\\/g, '/').trim();
+}
+
+function fontPathBasename(p) {
+  return normalizeFontPathKey(p).split('/').pop().toLowerCase();
+}
+
+// 检查一个字体族名/路径是否在项目字体资源中存在
+// 匹配：完整路径（分隔符归一化）/ 文件名（忽略大小写）/ 资源 name / 路径后缀
 function isFontMatchedInProject(family, fonts) {
   if (!family) return false;
-  const fileName = family.replace(/[/\\]/g, '/').split('/').pop();
-  return (fonts || []).some(f => f.path === family || f.name === fileName || f.name === family);
+  const famNorm = normalizeFontPathKey(family);
+  const famFile = fontPathBasename(family);
+  return (fonts || []).some(f => {
+    const pathNorm = normalizeFontPathKey(f.path);
+    const pathFile = fontPathBasename(f.path);
+    const nameNorm = normalizeFontPathKey(f.name);
+    const nameFile = fontPathBasename(f.name);
+    return pathNorm === famNorm
+      || (famFile && pathFile === famFile)
+      || (famFile && nameFile === famFile)
+      || f.name === family
+      || nameNorm === famNorm
+      || (famNorm && pathNorm.endsWith('/' + famNorm))
+      || (pathNorm && famNorm.endsWith('/' + pathNorm.split('/').slice(-2).join('/')));
+  });
 }
 
-// 获取控件实际使用的字体族名/路径：
-//   1) 未设置 / default → fallback 到项目第一个字体
-//   2) 设置了但指向的字体已被从资源管理器删除 → 同样 fallback 到项目第一个字体（用户典型流程：删旧字体→添加新字体，此时仍希望"能用新字体"）
+// 将控件 fontFamily 解析为资源中的规范 path；找不到返回 ''
+function resolveFontResourcePath(family, fonts) {
+  if (!family || family === 'default') return '';
+  const list = fonts || [];
+  if (list.length === 0) return '';
+  const famNorm = normalizeFontPathKey(family);
+  const famFile = fontPathBasename(family);
+  const hit = list.find(f => {
+    const pathNorm = normalizeFontPathKey(f.path);
+    const pathFile = fontPathBasename(f.path);
+    const nameNorm = normalizeFontPathKey(f.name);
+    const nameFile = fontPathBasename(f.name);
+    return pathNorm === famNorm
+      || (famFile && pathFile === famFile)
+      || (famFile && nameFile === famFile)
+      || f.name === family
+      || nameNorm === famNorm
+      || (famNorm && pathNorm.endsWith('/' + famNorm))
+      || (pathNorm && famNorm.endsWith('/' + pathNorm.split('/').slice(-2).join('/')));
+  });
+  return hit ? (hit.path || hit.name || '') : '';
+}
+
+// 空/default = 系统字体；有匹配资源时返回规范 path
 function resolveEffectiveFontFamily(family) {
   const fonts = (AppState.project.resources && AppState.project.resources.fonts) || [];
-  if (fonts.length === 0) return family;
-  // 空 / default → 直接 fallback
-  if (!family || family === 'default') return fonts[0].path || fonts[0].name || '';
-  // 非空但在资源里找不到匹配 → 也 fallback（典型：用户把原来的字体删了）
-  if (!isFontMatchedInProject(family, fonts)) return fonts[0].path || fonts[0].name || '';
-  return family;
+  return resolveFontResourcePath(family, fonts);
 }
 
-// 检查控件是否选择了有效字体（经过 resolveEffectiveFontFamily 处理后，在项目资源里能匹配到就算有）
+// 控件是否绑定了项目自定义字体（未绑定则用系统字体 + CSS 预览）
 function widgetHasFont(widget) {
   const fonts = (AppState.project.resources && AppState.project.resources.fonts) || [];
   if (fonts.length === 0) return false;
-  const family = resolveEffectiveFontFamily(widget.fontFamily);
+  const family = widget.fontFamily;
   if (!family || family === 'default') return false;
   return isFontMatchedInProject(family, fonts);
 }
@@ -90,24 +125,33 @@ function widgetNeedsFont(widget) {
   return textFields.some(f => widget[f] && String(widget[f]).trim().length > 0);
 }
 
-// 递归收集控件及其子控件需要生成的字模字符
+// 递归收集控件及其子控件需要生成的字模字符（只收集项目资源中存在的字体）
 function collectWidgetFontChars(w, fontTextMap) {
-  const fam = w.fontFamily;
-  if (fam && fam !== 'default') {
+  const fam = resolveEffectiveFontFamily(w.fontFamily);
+  if (fam) {
     const sz = w.fontSize || 14;
     const bpp = w.fontBpp || 4;
-    // 使用实际字体路径作为 key，确保与 getSglFontData/loadSglFontData 一致
-    const fontPath = resolveFontPath(fam);
+    // 使用资源中的规范路径作为 key，确保与 getSglFontData/loadSglFontData 一致
+    const fontPath = resolveFontPath(fam) || fam;
     const key = `${fontPath}|${sz}|${bpp}`;
     if (!fontTextMap.has(key)) fontTextMap.set(key, new Set());
     const chars = fontTextMap.get(key);
-    const texts = [w.text, w.titleText, w.options, w.leftSlots, w.rightSlots, w.xLabels];
+    const texts = [w.text, w.titleText, w.options, w.leftSlots, w.rightSlots, w.xLabels,
+      w.msgText, w.leftBtnText, w.rightBtnText, w.sliceLabels];
     for (const t of texts) {
       if (t) for (const ch of String(t)) { if (ch.charCodeAt(0) >= 0x20) chars.add(ch); }
     }
-    // chart 数值标签需要数字字符
-    if (w.type === 'chart') {
+    if (w.type === 'chart' || w.type === 'gauge' || w.type === 'scope') {
       for (const ch of '0123456789.-') chars.add(ch);
+    }
+    if (w.type === 'battery' && w.showPercentage) {
+      for (const ch of '0123456789%') chars.add(ch);
+    }
+    if (w.type === 'numberkbd') {
+      for (const ch of ' !\"#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~') chars.add(ch);
+    }
+    if (w.type === 'keyboard') {
+      for (const ch of 'qwertyuiopasdfghjklzxcvbnmQWERTYUIOPASDFGHJKLZXCVBNM1234567890_-.,:+-/*=%!?#<>\\@${}[];\"\'') chars.add(ch);
     }
   }
   for (const child of (w.widgets || [])) {
@@ -119,12 +163,19 @@ function collectWidgetFontChars(w, fontTextMap) {
 // 确保字体切换/字号/bpp 变更时生成的字模包含控件所需字符
 function collectWidgetText(w) {
   const chars = new Set();
-  const texts = [w.text, w.titleText, w.options, w.leftSlots, w.rightSlots, w.xLabels];
+  const texts = [w.text, w.titleText, w.options, w.leftSlots, w.rightSlots, w.xLabels,
+    w.msgText, w.leftBtnText, w.rightBtnText, w.sliceLabels];
   for (const t of texts) {
     if (t) for (const ch of String(t)) { if (ch.charCodeAt(0) >= 0x20) chars.add(ch); }
   }
-  if (w.type === 'chart') {
+  if (w.type === 'chart' || w.type === 'gauge' || w.type === 'scope') {
     for (const ch of '0123456789.-') chars.add(ch);
+  }
+  if (w.type === 'numberkbd') {
+    for (const ch of ' !\"#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~') chars.add(ch);
+  }
+  if (w.type === 'keyboard') {
+    for (const ch of 'qwertyuiopasdfghjklzxcvbnmQWERTYUIOPASDFGHJKLZXCVBNM1234567890_-.,:+-/*=%!?#<>\\@${}[];\"\'') chars.add(ch);
   }
   return Array.from(chars).join('');
 }
@@ -1216,34 +1267,8 @@ function drawWidget(w, parentEl) {
   let absPos = getWidgetAbsPos(w, page);
   const z = AppState.zoom;
 
-  // scroll 绑定对象时，SGL 运行时会强制重置 scroll 的坐标贴到目标边缘
-  // 设计器模拟此行为以实现 WYSIWYG（垂直贴右侧，水平贴底部）
-  // 注意：scroll 的 width 属性是滚动条宽度，不能覆盖，只重算 DOM 尺寸
-  // SGL 源码: obj->coords.x2 = bind->coords.x2; obj->coords.x1 = x2 - scroll->width
-  //   即 scroll 覆盖在 bind 右边缘上方（重叠 scroll->width 像素），不是贴在外侧
   let domW = w.width;
   let domH = w.height;
-  if (w.type === 'scroll' && w.bindTarget) {
-    const bindWidget = page.widgets.find(wt => getWidgetVarName(wt) === w.bindTarget);
-    if (bindWidget) {
-      const bindAbs = getWidgetAbsPos(bindWidget, page);
-      const scDirect = w.direct != null ? w.direct : 1;
-      const scWidth = w.width != null ? w.width : 10;
-      // 仿真效果：scroll 完全位于绑定目标边框内部，四边均不覆盖目标边框
-      const bindBorder = bindWidget.borderWidth != null ? bindWidget.borderWidth : 1;
-      if (scDirect === 1) {
-        // 垂直：左右留右边框，上下留上下边框
-        absPos = { x: bindAbs.x + bindWidget.width - scWidth - bindBorder, y: bindAbs.y + bindBorder };
-        domW = scWidth;
-        domH = bindWidget.height - 2 * bindBorder;
-      } else {
-        // 水平：上下留底边框，左右留左右边框
-        absPos = { x: bindAbs.x + bindBorder, y: bindAbs.y + bindWidget.height - scWidth - bindBorder };
-        domW = bindWidget.width - 2 * bindBorder;
-        domH = scWidth;
-      }
-    }
-  }
 
   const el = document.createElement('div');
   el.className = 'canvas-widget';
@@ -1421,13 +1446,32 @@ function drawWidget(w, parentEl) {
   // WYSIWYG 渲染（scroll 绑定时传入重算的 DOM 尺寸）
   renderWidgetVisual(el, w, { domW, domH });
 
-  // 需要字体的控件缺少字体：仅控制台 + 日志面板 warn（每个控件只报一次），运行/导出时会正式报错
-  if (!inPreview && widgetNeedsFont(w) && !widgetHasFont(w)) {
-    if (!_reportedMissingFontWidget.has(w.id)) {
+  // 字体校验：未匹配资源时，有资源则自动回退到第一个字体；无资源则提示
+  if (!inPreview && w.fontFamily && w.fontFamily !== 'default' && !widgetHasFont(w)) {
+    const fonts = (AppState.project.resources && AppState.project.resources.fonts) || [];
+    if (fonts.length > 0 && fonts[0] && fonts[0].path) {
+      const old = w.fontFamily;
+      w.fontFamily = fonts[0].path;
+      if (!_reportedMissingFontWidget.has(w.id)) {
+        _reportedMissingFontWidget.add(w.id);
+        const oldName = String(old).replace(/\\/g, '/').split('/').pop();
+        const newName = String(fonts[0].name || fonts[0].path).replace(/\\/g, '/').split('/').pop();
+        const msg = `控件 ${w.name || ('(id=' + w.id + ')')} (${w.type}) 原字体「${oldName}」不在项目资源中，已自动改用「${newName}」。`;
+        console.warn('[字体回退]', msg);
+        logMessage(msg, 'warn');
+      }
+    } else if (!_reportedMissingFontWidget.has(w.id)) {
       _reportedMissingFontWidget.add(w.id);
-      const msg = `控件 ${w.name || ('(id=' + w.id + ')')} (${w.type}) 缺少字体资源，请在资源管理器添加字体后设置控件的 fontFamily。导出代码 / 运行时会报错。`;
-      console.warn('[缺少字体]', msg);
+      const msg = `控件 ${w.name || ('(id=' + w.id + ')')} (${w.type}) 引用的字体不在项目资源中（当前值: ${w.fontFamily}），将按系统字体预览；请重新选择字体或从资源管理器添加。`;
+      console.warn('[字体无效]', msg);
       logMessage(msg, 'warn');
+    }
+  } else if (w.fontFamily && widgetHasFont(w)) {
+    // 能匹配到资源时，纠正为规范 path（消除绝对/相对路径差异）
+    const fonts = (AppState.project.resources && AppState.project.resources.fonts) || [];
+    const canon = resolveFontResourcePath(w.fontFamily, fonts);
+    if (canon && canon !== w.fontFamily) {
+      w.fontFamily = canon;
     }
   }
 
@@ -2718,189 +2762,135 @@ function renderWidgetVisual(el, w, renderSize) {
     }
 
     case 'battery': {
-      // SGL battery: 严格移植自 sgl_battery.c
-      // SGL 结构: 外壳实心填充(border_color, radius=3) + 盖帽实心填充(border_color, radius=0)
-      //          + 内部背景实心填充(bg_color, radius=1, 缩进 border_width=2)
-      //          + 电芯实心填充(fill_color, radius=1, 缩进 border_width+padding=4)
-      // SGL: active_cells = (level * num_cells + 99) / 100
-      // SGL: cell_width = (fill_width - total_min_gap) / num_cells, 前 remaining 个 cell +1px
-      // SGL: 充电闪电 6 段直线多边形, line_width=4
-      const bLevel = Math.min(100, p('level', p('value', 80)));
-      const bDir = p('direction', 0); // 0=水平, 1=垂直
-      const bCapPos = p('capPos', 0); // 0=右, 1=左, 2=上
-      const bCapSize = p('capSize', 4);
-      const bNumCells = p('numCells', 6);
-      const bLowCol = p('lowColor', '#FF0000');
-      const bMedCol = p('mediumColor', '#FFA500');
-      const bHighCol = p('highColor', '#00FF00');
-      // SGL: level<20 红, <50 橙, >=50 绿
-      const bFillCol = bLevel < 20 ? bLowCol : (bLevel < 50 ? bMedCol : bHighCol);
-      const bBorderCol = p('borderColor', '#FFFFFF');
+      // 严格对齐 sgl_battery.c :: sgl_battery_construct_cb
+      // 坐标系为闭区间 [0, W-1]×[0, H-1]；body 内缩 obj->border；盖帽侧再让出 cap_len
+      const batAlpha = p('alpha', 140);
+      const bLevel = Math.min(100, Math.max(0, p('level', p('value', 100))));
+      const bVert = p('vertical', true);
+      const bLowCol = p('lowColor', '#E74C3C');
+      const bMedCol = p('mediumColor', '#F39C12');
+      const bHighCol = p('highColor', '#2ECC71');
+      const levelCol = bLevel < 20 ? bLowCol : (bLevel < 50 ? bMedCol : bHighCol);
+      // SGL: fill_color.full==0 → 按电量色；非 0 则固定 fill_color
+      const rawFill = p('fillColor', '');
+      const bFillCol = (rawFill && String(rawFill).trim()) ? rawFill : levelCol;
+      const bBorderCol = p('borderColor', '#B4B4B4');
       const bBgCol = p('bgColor', '#1E1E1E');
-      // SGL 硬编码
-      const bBorderW = 2;
-      const bPadding = 2;
-      const bShellRadius = 3;
-      const bInnerRadius = 1;
+      // SGL create: border=1, radius=4, pad=3；alpha 默认 140
+      const bBorder = 1;
+      const bRadius = Math.max(4, 1);
+      const bPad = 3;
       const borderColObj = SGLR.hexToColor(bBorderCol);
       const bgColObj = SGLR.hexToColor(bBgCol);
+      const white = SGLR.SGL_COLOR_WHITE;
+      const black = SGLR.SGL_COLOR_BLACK;
 
       const surf = sglSurface(w.width, w.height);
 
-      // SGL: width = x2 - x1, height = y2 - y1 (非闭区间，差 1)
-      const sglW = w.width - 1;
-      const sglH = w.height - 1;
-      let batteryW, batteryH, batteryX, batteryY, capW, capH, capX, capY;
-      if (bDir === 0) {
-        // 水平: battery_width = width - cap_size, battery_height = height - height/5
-        batteryW = sglW - bCapSize;
-        batteryH = sglH - Math.floor(sglH / 5);
-        capW = bCapSize;
-        capH = Math.floor(batteryH / 3);
-        if (bCapPos === 1) { // LEFT
-          batteryX = bCapSize;
-          batteryY = Math.floor((sglH - batteryH) / 2);
-          capX = 0;
-          capY = batteryY + Math.floor((batteryH - capH) / 2);
-        } else { // RIGHT
-          batteryX = 0;
-          batteryY = Math.floor((sglH - batteryH) / 2);
-          capX = batteryW + 1;
-          capY = batteryY + Math.floor((batteryH - capH) / 2);
-        }
+      const bodyX1 = bBorder;
+      const bodyY1 = bBorder;
+      const bodyX2 = w.width - 1 - bBorder;
+      const bodyY2 = w.height - 1 - bBorder;
+      const bodyW = bodyX2 - bodyX1;
+      const bodyH = bodyY2 - bodyY1;
+      const capLen = bVert ? Math.max(Math.floor(bodyH / 20), 2) : Math.max(Math.floor(bodyW / 20), 2);
+      const capThickW = bVert ? Math.floor(bodyW / 2) : Math.max(Math.floor(bodyH / 3), 4);
+      const capThickH = bVert ? Math.max(Math.floor(bodyW / 3), 4) : Math.floor(bodyH / 3);
+
+      // body rect：盖帽侧缩小
+      let bx1, by1, bx2, by2;
+      if (bVert) {
+        bx1 = bodyX1; by1 = bodyY1 + capLen; bx2 = bodyX2; by2 = bodyY2;
       } else {
-        // 垂直: battery_height = height - cap_size, battery_width = width - width/5
-        batteryH = sglH - bCapSize;
-        batteryW = sglW - Math.floor(sglW / 5);
-        capH = bCapSize;
-        capW = Math.floor(batteryW / 3);
-        batteryX = Math.floor((sglW - batteryW) / 2);
-        batteryY = bCapSize;
-        capX = batteryX + Math.floor((batteryW - capW) / 2);
-        capY = 0;
+        bx1 = bodyX1; by1 = bodyY1; bx2 = bodyX2 - capLen; by2 = bodyY2;
+      }
+      const bw = bx2 - bx1;
+      const bh = by2 - by1;
+
+      // 1. 边框 + 背景（SGL: fill_rect_border border=2, 再 fill_rect bg）
+      SGLR.drawFillRectBorder(surf, bx1, by1, bx2, by2, bRadius, borderColObj, 2, batAlpha);
+      SGLR.drawFillRect(surf, bx1, by1, bx2, by2, bRadius, bgColObj, batAlpha);
+
+      // 2. 机身 3D 高光/阴影
+      if (bVert) {
+        const hlW = Math.max(Math.floor(bw / 8), 1);
+        SGLR.drawFillRect(surf, bx1, by1, bx1 + hlW, by2, bRadius, white, Math.floor(batAlpha * 80 / 255));
+        const shW = Math.max(Math.floor(bw / 10), 1);
+        SGLR.drawFillRect(surf, bx2 - shW, by1, bx2, by2, 0, black, Math.floor(batAlpha * 90 / 255));
+      } else {
+        const hlH = Math.max(Math.floor(bh / 8), 1);
+        SGLR.drawFillRect(surf, bx1, by1, bx2, by1 + hlH, bRadius, white, Math.floor(batAlpha * 80 / 255));
+        const shH = Math.max(Math.floor(bh / 10), 1);
+        SGLR.drawFillRect(surf, bx1, by2 - shH, bx2, by2, 0, black, Math.floor(batAlpha * 90 / 255));
       }
 
-      // SGL: fill_x = battery_x + border_width + padding, fill_width = battery_width - 2*border_width - 2*padding
-      const fillX = batteryX + bBorderW + bPadding;
-      const fillY = batteryY + bBorderW + bPadding;
-      const fillW = batteryW - 2 * bBorderW - 2 * bPadding;
-      const fillH = batteryH - 2 * bBorderW - 2 * bPadding;
-      // SGL: bg_rect.x1 = battery_x + border_width, bg_rect.x2 = battery_x + battery_width - border_width
-      const bgX = batteryX + bBorderW;
-      const bgY = batteryY + bBorderW;
-      const bgW = batteryW - 2 * bBorderW;
-      const bgH = batteryH - 2 * bBorderW;
-
-      // 1. 外壳实心填充 (radius=3, border_color) - SGL: sgl_draw_fill_rect(battery_rect, 3, border_color)
-      SGLR.drawFillRect(surf, batteryX, batteryY, batteryX + batteryW, batteryY + batteryH,
-        bShellRadius, borderColObj, alpha);
-      // 2. 盖帽实心填充 (radius=0, border_color) - SGL: sgl_draw_fill_rect(cap_rect, 0, border_color)
-      if (capW > 0 && capH > 0) {
-        SGLR.drawFillRect(surf, capX, capY, capX + capW, capY + capH, 0, borderColObj, alpha);
-      }
-      // 3. 内部背景实心填充 (radius=1, bg_color) - 覆盖外壳内部，留出 border_width=2 的边框
-      if (bgW > 0 && bgH > 0) {
-        SGLR.drawFillRect(surf, bgX, bgY, bgX + bgW, bgY + bgH, bInnerRadius, bgColObj, alpha);
-      }
-      // 4. 电芯 (radius=1, fill_color)
-      if (bLevel > 0 && bNumCells > 0 && fillW > 0 && fillH > 0) {
-        const activeCells = Math.min(bNumCells, Math.floor((bLevel * bNumCells + 99) / 100));
-        const fillColObj = SGLR.hexToColor(bFillCol);
-        if (bDir === 0) {
-          // 水平
-          let minGap = 2;
-          let totalMinGap = (bNumCells - 1) * minGap;
-          if (totalMinGap >= fillW) { minGap = 1; totalMinGap = bNumCells - 1; }
-          const cellW = Math.max(1, Math.floor((fillW - totalMinGap) / bNumCells));
-          const usedW = cellW * bNumCells + totalMinGap;
-          const remainingW = fillW - usedW;
-          if (bCapPos === 1) {
-            // LEFT: 从右向左画
-            let posX = fillX + fillW;
-            for (let i = 0; i < activeCells; i++) {
-              let curW = cellW + (i < remainingW ? 1 : 0);
-              posX -= curW;
-              SGLR.drawFillRect(surf, posX, fillY, posX + curW, fillY + fillH, bInnerRadius, fillColObj, alpha);
-              if (i < bNumCells - 1) posX -= minGap;
-            }
-          } else {
-            // RIGHT: 从左向右画
-            let posX = fillX;
-            for (let i = 0; i < activeCells; i++) {
-              let curW = cellW + (i < remainingW ? 1 : 0);
-              SGLR.drawFillRect(surf, posX, fillY, posX + curW, fillY + fillH, bInnerRadius, fillColObj, alpha);
-              if (i < bNumCells - 1) posX += curW + minGap;
-            }
+      // 3. 填充区
+      const fillX1 = bx1 + bPad;
+      const fillY1 = by1 + bPad;
+      const fillX2 = bx2 - bPad;
+      const fillY2 = by2 - bPad;
+      const fw = fillX2 - fillX1;
+      const fh = fillY2 - fillY1;
+      if (fw > 0 && fh > 0) {
+        const fillBg = SGLR.colorMixer(bgColObj, black, 40);
+        SGLR.drawFillRect(surf, fillX1, fillY1, fillX2, fillY2, bRadius - 1, fillBg, batAlpha);
+        const fc = SGLR.hexToColor(bFillCol);
+        if (bVert) {
+          const levelH = Math.floor(fh * Math.min(bLevel, 100) / 100);
+          if (levelH > 0) {
+            const fy1 = fillY2 - levelH;
+            SGLR.drawFillRect(surf, fillX1, fy1, fillX2, fillY2, bRadius - 1, fc, batAlpha);
+            const hlW = Math.max(Math.floor(fw / 5), 2);
+            SGLR.drawFillRect(surf, fillX1, fy1, fillX1 + hlW, fillY2, bRadius - 1, white, Math.floor(batAlpha * 90 / 255));
+            const shW = Math.max(Math.floor(fw / 6), 1);
+            SGLR.drawFillRect(surf, fillX2 - shW, fy1, fillX2, fillY2, 0, black, Math.floor(batAlpha * 100 / 255));
           }
         } else {
-          // 垂直: SGL 从 i=num_cells-1 递减到 0，i<active_cells 时画，pos_y 递增
-          let minGap = 2;
-          let totalMinGap = (bNumCells - 1) * minGap;
-          if (totalMinGap >= fillH) { minGap = 1; totalMinGap = bNumCells - 1; }
-          const cellH = Math.max(1, Math.floor((fillH - totalMinGap) / bNumCells));
-          const usedH = cellH * bNumCells + totalMinGap;
-          const remainingH = fillH - usedH;
-          let posY = fillY;
-          for (let i = bNumCells - 1; i >= 0; i--) {
-            const curH = cellH + (i < remainingH ? 1 : 0);
-            if (i < activeCells) {
-              SGLR.drawFillRect(surf, fillX, posY, fillX + fillW, posY + curH, bInnerRadius, fillColObj, alpha);
-            }
-            posY += curH + minGap;
+          const levelW = Math.floor(fw * Math.min(bLevel, 100) / 100);
+          if (levelW > 0) {
+            const fx2 = fillX1 + levelW;
+            SGLR.drawFillRect(surf, fillX1, fillY1, fx2, fillY2, bRadius - 1, fc, batAlpha);
+            const hlH = Math.max(Math.floor(fh / 5), 2);
+            SGLR.drawFillRect(surf, fillX1, fillY1, fx2, fillY1 + hlH, bRadius - 1, white, Math.floor(batAlpha * 90 / 255));
+            const shH = Math.max(Math.floor(fh / 6), 1);
+            SGLR.drawFillRect(surf, fillX1, fillY2 - shH, fx2, fillY2, 0, black, Math.floor(batAlpha * 100 / 255));
           }
         }
       }
 
-      // 5. 充电闪电 SGL: 6 段直线多边形, line_width=4
-      if (p('charging', false)) {
-        const chCol = SGLR.hexToColor(p('chargingColor', '#FFFF00'));
-        const chCx = batteryX + Math.floor(batteryW / 2);
-        const chCy = batteryY + Math.floor(batteryH / 2);
-        const chH = Math.floor(batteryH / 2);
-        const chW = Math.floor(batteryW / 6);
-        let p1x,p1y,p2x,p2y,p3x,p3y,p4x,p4y,p5x,p5y,p6x,p6y;
-        if (bDir === 0) {
-          p1x = chCx - Math.floor(chW/2); p1y = chCy - Math.floor(chH/2);
-          p2x = chCx + chW*2;             p2y = chCy + Math.floor(chH/9);
-          p3x = chCx + Math.floor(chW/4); p3y = chCy - Math.floor(chH/8);
-          p4x = chCx + Math.floor(chW/2); p4y = chCy + Math.floor(chH/2);
-          p5x = chCx - chW*2;             p5y = chCy - Math.floor(chH/9);
-          p6x = chCx - Math.floor(chW/4); p6y = chCy + Math.floor(chH/8);
-        } else {
-          p1x = chCx + Math.floor(chW/2); p1y = chCy - Math.floor(chH/2);
-          p2x = chCx - Math.floor(chW/2); p2y = chCy - Math.floor(chH/15);
-          p3x = chCx + chW*2;             p3y = chCy - Math.floor(chH/9);
-          p4x = chCx - Math.floor(chW/2); p4y = chCy + Math.floor(chH/2);
-          p5x = chCx + Math.floor(chW/2); p5y = chCy + Math.floor(chH/15);
-          p6x = chCx - chW*2;             p6y = chCy + Math.floor(chH/9);
-        }
-        const chLW = 4;
-        SGLR.drawLine(surf, p1x, p1y, p2x, p2y, chLW, chCol, alpha);
-        SGLR.drawLine(surf, p2x, p2y, p3x, p3y, chLW, chCol, alpha);
-        SGLR.drawLine(surf, p3x, p3y, p4x, p4y, chLW, chCol, alpha);
-        SGLR.drawLine(surf, p4x, p4y, p5x, p5y, chLW, chCol, alpha);
-        SGLR.drawLine(surf, p5x, p5y, p6x, p6y, chLW, chCol, alpha);
-        SGLR.drawLine(surf, p6x, p6y, p1x, p1y, chLW, chCol, alpha);
+      // 4. 盖帽（SGL 当前未绘制充电闪电，仅画正极帽）
+      if (bVert) {
+        const cx = bx1 + Math.floor((bw - capThickW) / 2);
+        SGLR.drawFillRect(surf, cx - 1, by1 - capLen, cx + capThickW + 1, by1, 0, bgColObj, batAlpha);
+        const capCol = SGLR.colorMixer(bgColObj, borderColObj, 180);
+        SGLR.drawFillRect(surf, cx, by1 - capLen, cx + capThickW, by1, 2, capCol, batAlpha);
+        const chl = Math.max(Math.floor(capThickW / 4), 1);
+        SGLR.drawFillRect(surf, cx, by1 - capLen, cx + chl, by1, 2, white, Math.floor(batAlpha * 70 / 255));
+        const csh = Math.max(Math.floor(capThickW / 5), 1);
+        SGLR.drawFillRect(surf, cx + capThickW - csh, by1 - capLen, cx + capThickW, by1, 0, black, Math.floor(batAlpha * 60 / 255));
+      } else {
+        const cy = by1 + Math.floor((bh - capThickH) / 2);
+        SGLR.drawFillRect(surf, bx2, cy - 1, bx2 + capLen, cy + capThickH + 1, 0, bgColObj, batAlpha);
+        const capCol = SGLR.colorMixer(bgColObj, borderColObj, 180);
+        SGLR.drawFillRect(surf, bx2, cy, bx2 + capLen, cy + capThickH, 2, capCol, batAlpha);
+        const chl = Math.max(Math.floor(capThickH / 4), 1);
+        SGLR.drawFillRect(surf, bx2, cy, bx2 + capLen, cy + chl, 2, white, Math.floor(batAlpha * 70 / 255));
+        const csh = Math.max(Math.floor(capThickH / 5), 1);
+        SGLR.drawFillRect(surf, bx2, cy + capThickH - csh, bx2 + capLen, cy + capThickH, 0, black, Math.floor(batAlpha * 60 / 255));
       }
 
       SGLR.flushSurface(surf);
 
-      // 6. 百分比文本（DOM 叠加）SGL: x_offset 根据 cap_pos, font_height = fontSize+8
+      // 5. 百分比：SGL 在 body 内居中（充电标志 SGL 未实现绘制，此处不画闪电）
       if (p('showPercentage', false)) {
-        const pctText = bLevel + '%';
-        const pctFontSize = p('fontSize', 12);
-        let xOffset = 0, yOffset = 0;
-        if (bCapPos === 0) xOffset = -bCapSize;       // RIGHT
-        else if (bCapPos === 1) xOffset = bCapSize;   // LEFT
-        else if (bCapPos === 2) yOffset = bCapSize;   // TOP
         overlayText({
-          text: pctText,
+          text: bLevel + '%',
           color: p('textColor', '#FFFFFF'),
-          fontSize: pctFontSize,
+          fontSize: p('fontSize', 14),
           fontFamily: p('fontFamily', ''),
           align: 'CENTER',
-          x: 0, y: 0, w: w.width, h: w.height,
-          offX: xOffset, offY: yOffset
+          x: bx1, y: by1, w: bw, h: bh,
+          offX: 0, offY: 0
         });
       }
       break;
@@ -3495,79 +3485,6 @@ function renderWidgetVisual(el, w, renderSize) {
         radius: p('radius', 0),
         border_color: SGLR.hexToColor(p('borderColor', '#000000')),
       });
-      SGLR.flushSurface(surf);
-      break;
-    }
-
-    case 'scroll': {
-      // SGL scroll: 严格移植自 sgl_scroll.c
-      // direct: SGL_DIRECT_HORIZONTAL=0, SGL_DIRECT_VERTICAL=1
-      // 算法: radius=min(radius,width/2), len=max(trackLen/8, radius*2+1),
-      //       pos=value*(trackLen-len)/100
-      // 渲染: 先 sgl_draw_rect 画整个 track（含边框），再用 mixer(color, BG黑, 128)
-      //       画滑块 fill, 滑块圆角=radius-border
-      const scDirect = p('direct', 1); // 默认垂直（SGL: 0=水平, 1=垂直）
-      const scValue = p('value', 0);
-      const scWidth = p('width', 10); // SGL_SCROLL_DEFAULT_WIDTH（滚动条宽度属性）
-      const scColor = SGLR.hexToColor(p('color', '#FFFFFF')); // SGL_THEME_COLOR
-      const scBorderColor = SGLR.hexToColor(p('borderColor', '#000000')); // SGL_THEME_BORDER_COLOR
-      const scBorder = p('borderWidth', 2); // SGL scroll desc.border=2
-      const scRadius = Math.min(p('radius', 0), Math.floor(scWidth / 2));
-      const scAlpha = alpha;
-
-      // 绑定对象时用重算的渲染尺寸，否则用控件自身尺寸
-      // SGL 运行时: 垂直贴目标右侧(宽=scWidth, 高=目标高), 水平贴目标底部(宽=目标宽, 高=scWidth)
-      const rw = renderSize ? renderSize.domW : w.width;
-      const rh = renderSize ? renderSize.domH : w.height;
-
-      // 绑定对象时,scroll 应视觉上融入绑定目标,与仿真图片一致:
-      // track 颜色 = 目标背景色,不显示 scroll 自己的独立边框,只保留滑块
-      // 未绑定时,scroll 作为独立控件画完整 track(含边框、填充)
-      const bindWidget = (w.bindTarget && page.widgets) ? page.widgets.find(wt => getWidgetVarName(wt) === w.bindTarget) : null;
-      const surf = sglSurface(rw, rh);
-
-      if (bindWidget) {
-        // 融入目标:用目标背景色填充整个 scroll 区域,覆盖目标右侧/底侧边框
-        const trackColor = SGLR.hexToColor(bindWidget.bgColor || bindWidget.color || '#FFFFFF');
-        SGLR.drawFillRect(surf, 0, 0, rw - 1, rh - 1, scRadius, trackColor, scAlpha);
-      } else {
-        // 未绑定:画完整 track（含边框、填充）
-        SGLR.drawRect(surf, 0, 0, rw - 1, rh - 1, {
-          alpha: scAlpha,
-          border: scBorder,
-          border_alpha: scAlpha,
-          border_mask: 0,
-          color: scColor,
-          border_color: scBorderColor,
-          radius: scRadius
-        });
-      }
-
-      // 滑块: 颜色 = sgl_color_mixer(color, SGL_THEME_BG_COLOR(黑), 128)
-      const thumbCol = SGLR.colorMixer(scColor, SGLR.hexToColor('#000000'), 128);
-      // 绑定时滑块占满整个 scroll 区域,未绑定时按 SGL 逻辑缩进 border
-      const thumbBorder = bindWidget ? 0 : scBorder;
-      const thumbRadius = Math.max(0, scRadius - thumbBorder);
-      let len, pos, fx1, fy1, fx2, fy2;
-      if (scDirect === 1) {
-        // 垂直: 长度方向 = y
-        len = Math.max(Math.floor(rh / 8), scRadius * 2 + 1);
-        pos = Math.floor(scValue * (rh - len) / 100);
-        fx1 = thumbBorder;
-        fx2 = rw - 1 - thumbBorder;
-        fy1 = pos + thumbBorder;
-        fy2 = pos + len - thumbBorder;
-      } else {
-        // 水平: 长度方向 = x
-        len = Math.max(Math.floor(rw / 8), scRadius * 2 + 1);
-        pos = Math.floor(scValue * (rw - len) / 100);
-        fy1 = thumbBorder;
-        fy2 = rh - 1 - thumbBorder;
-        fx1 = pos + thumbBorder;
-        fx2 = pos + len - thumbBorder;
-      }
-      SGLR.drawFillRect(surf, fx1, fy1, fx2, fy2, thumbRadius, thumbCol, scAlpha);
-
       SGLR.flushSurface(surf);
       break;
     }
@@ -4706,8 +4623,8 @@ function renderWidgetVisual(el, w, renderSize) {
       break;
     }
 
-    case 'ext_img': {
-      // SGL ext_img WYSIWYG 渲染：按 SGL 算法居中/旋转/缩放绘制图片
+    case 'img_ext': {
+      // SGL img_ext WYSIWYG 渲染：按 SGL 算法居中/旋转/缩放绘制图片
       const surf = sglSurface(w.width, w.height);
       const eiPixmap = w.pixmap;
       const eiAlpha = alpha;
@@ -4737,8 +4654,8 @@ function renderWidgetVisual(el, w, renderSize) {
       if (eiPixmap) {
         const imgData = getCachedPixmapImageData(eiPixmap);
         if (imgData) {
-          // 使用严格移植的 SGL ext_img 像素级渲染算法
-          // SGL ext_img 设置 pixmap 后 coords 会被强制设为图片尺寸，绘制区域由图片决定
+          // 使用严格移植的 SGL img_ext 像素级渲染算法
+          // SGL img_ext 设置 pixmap 后 coords 会被强制设为图片尺寸，绘制区域由图片决定
           SGLR.drawExtImg(surf, imgData, imgData.width, imgData.height, w.rotation, w.scaleUniform, w.pivotX, w.pivotY, eiAlpha, w.pixmapFormat, w.scaleX, w.scaleY);
           SGLR.flushSurface(surf);
         } else {
@@ -5559,13 +5476,19 @@ function renderWidgetProps() {
         // 字体选择：只显示项目资源中的字体
         const projectFonts = (AppState.project.resources && AppState.project.resources.fonts) || [];
         const currentVal = rawVal || '';
+        const matchedPath = resolveFontResourcePath(currentVal, projectFonts);
+        // 路径写法不一致时，自动纠正为资源中的规范 path，避免误报“字体不在资源中”
+        if (matchedPath && matchedPath !== currentVal && w) {
+          w.fontFamily = matchedPath;
+        }
+        const selectVal = matchedPath || currentVal;
         html += `<div class="form-group"><label class="form-label">${label}</label>`;
         html += `<select class="form-select" data-prop="fontFamily">`;
         html += `<option value="">无</option>`;
         if (projectFonts.length > 0) {
           html += `<optgroup label="项目字体">`;
           projectFonts.forEach(f => {
-            html += `<option value="${escapeAttr(f.path)}" ${currentVal === f.path ? 'selected' : ''}>${escapeHtml(f.name)}</option>`;
+            html += `<option value="${escapeAttr(f.path)}" ${selectVal === f.path ? 'selected' : ''}>${escapeHtml(f.name)}</option>`;
           });
           html += `</optgroup>`;
         }
@@ -5613,15 +5536,15 @@ function renderWidgetProps() {
         html += `</select></div>`;
       } else if (meta.options && meta.options.length > 0) {
         // pixmapFormat：根据控件类型过滤不支持的格式
-        // ext_img 使用 SGL decode_pixel，支持6种非RLE格式，不支持RLE压缩格式
+        // img_ext 使用 SGL decode_pixel，支持6种非RLE格式，不支持RLE压缩格式
         // img 使用 SGL rle_decompress_line，支持全部12种格式（含RLE）
         // 其他控件使用 sgl_pixmap_get_buf 强转读取，仅支持 RGB565（固定格式，不显示下拉框）
         let optionsList = meta.options;
         let effectiveVal = rawVal;
         if (prop === 'pixmapFormat') {
-          if (w.type === 'ext_img') {
+          if (w.type === 'img_ext') {
             optionsList = meta.options.filter(([v]) => !/^RLE_/.test(v));
-            // 旧项目 ext_img 若设了 RLE 格式，回退到对应基础格式
+            // 旧项目 img_ext 若设了 RLE 格式，回退到对应基础格式
             if (rawVal && /^RLE_/.test(rawVal)) {
               const baseFmt = rawVal.replace(/^RLE_/, '');
               effectiveVal = baseFmt;
@@ -7111,27 +7034,51 @@ async function checkAndWarnFonts(actionName, block = true) {
 
   if (block) {
     // 运行时报错并阻断
-    const msg = `${summary}，请在右侧资源面板添加字体文件后再操作。\n\n${detail}`;
+    const msg = `${summary}，请在资源面板添加字体并为控件设置字体后再运行。\n\n${detail}`;
     showToast(summary, 'error');
     logMessage(`[${actionName}] ${summary}，操作已终止`, 'error');
     issues.forEach(item => {
       logMessage(`  - ${item.page} / ${item.widget}: ${item.reason} (${item.fontFamily || '无'})`, 'error');
     });
     try {
-      await message(msg, { title: '字体资源缺失', kind: 'error' });
+      await message(msg, { title: '字体未设置', kind: 'error' });
     } catch (e) {
       console.warn('显示字体缺失提示失败:', e);
     }
     return false;
   } else {
-    // 导出代码时仅警告，不阻断
-    showToast(summary, 'warn');
-    logMessage(`[${actionName}] ${summary}，生成的代码可能无法正常编译`, 'warn');
+    // 生成/导出代码时仅警告，不阻断
+    showToast(summary + '（已继续生成，请尽快补齐）', 'warn');
+    logMessage(`[${actionName}] ${summary}，生成的代码可能无法正常编译运行`, 'warn');
     issues.forEach(item => {
       logMessage(`  - ${item.page} / ${item.widget}: ${item.reason} (${item.fontFamily || '无'})`, 'warn');
     });
     return true;
   }
+}
+
+// 检查并提示文本控件未设置文本（运行时警告，不阻断）
+async function checkAndWarnEmptyTexts(actionName) {
+  const issues = validateProjectEmptyTexts(AppState.project);
+  if (issues.length === 0) return true;
+
+  const summary = `检测到 ${issues.length} 个控件未设置文本内容`;
+  const detail = issues.map(item =>
+    `• ${item.page} / ${item.widget}: ${item.reason}`
+  ).join('\n');
+  const msg = `${summary}。\n\n${detail}\n\n仍可继续${actionName}，但界面上对应控件将显示为空。`;
+
+  showToast(summary, 'warn');
+  logMessage(`[${actionName}] ${summary}`, 'warn');
+  issues.forEach(item => {
+    logMessage(`  - ${item.page} / ${item.widget}: ${item.reason}`, 'warn');
+  });
+  try {
+    await message(msg, { title: '文本未设置', kind: 'warning' });
+  } catch (e) {
+    console.warn('显示文本缺失提示失败:', e);
+  }
+  return true;
 }
 
 // 检查并提示 sprite 控件未设置图片
@@ -7255,6 +7202,7 @@ document.getElementById('btn-build-run').addEventListener('click', async () => {
   if (!fontOk) return;
   const spriteOk = await checkAndWarnSpritePixmaps('编译运行');
   if (!spriteOk) return;
+  await checkAndWarnEmptyTexts('编译运行');
   const projectPath = await ensureProjectSaved();
   if (!projectPath) return;
   try {

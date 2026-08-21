@@ -50,6 +50,9 @@ function collectWidgetFontChars(w, fontTextMap) {
     if (w.type === 'chart') {
       for (const ch of '0123456789.-') chars.add(ch);
     }
+    if (w.type === 'battery' && w.showPercentage) {
+      for (const ch of '0123456789%') chars.add(ch);
+    }
   }
   for (const child of (w.widgets || [])) {
     collectWidgetFontChars(child, fontTextMap);
@@ -82,25 +85,32 @@ async function preloadSglFontData() {
   }
 }
 
-// 获取字体的实际路径（用于字模加载，确保缓存 key 与 editor.js 一致）
+// 获取字体的实际路径（用于字模加载，确保缓存 key 与 editor.js 一致）；仅返回资源中存在的字体
 function resolveFontPath(family) {
-  const fonts = (AppState.project.resources && AppState.project.resources.fonts) || [];
-  if (!family || family === 'default') return '';
-  // 已经是路径（包含分隔符）
-  if (family.includes('/') || family.includes('\\')) return family;
-  // 查找字体资源
-  const font = fonts.find(f => f.name === family);
-  if (font) return font.path;
-  return family;
+  return resolveEffectiveFontFamily(family);
 }
 
-// 获取控件实际使用的字体族名/路径：未设置或 default 时 fallback 到项目第一个字体
+// 空/default = 系统字体；仅当资源中存在时返回规范路径（与编辑器 / 代码生成一致）
 function resolveEffectiveFontFamily(family) {
   const fonts = (AppState.project.resources && AppState.project.resources.fonts) || [];
-  if ((!family || family === 'default') && fonts.length > 0) {
-    return fonts[0].name || fonts[0].path || '';
-  }
-  return family;
+  if (!family || family === 'default') return '';
+  if (fonts.length === 0) return '';
+  const famNorm = String(family).replace(/\\/g, '/').trim();
+  const famFile = famNorm.split('/').pop().toLowerCase();
+  const hit = fonts.find(f => {
+    const pathNorm = String(f.path || '').replace(/\\/g, '/').trim();
+    const pathFile = pathNorm.split('/').pop().toLowerCase();
+    const nameNorm = String(f.name || '').replace(/\\/g, '/').trim();
+    const nameFile = nameNorm.split('/').pop().toLowerCase();
+    return pathNorm === famNorm
+      || (famFile && pathFile === famFile)
+      || (famFile && nameFile === famFile)
+      || f.name === family
+      || nameNorm === famNorm
+      || (famNorm && pathNorm.endsWith('/' + famNorm))
+      || (pathNorm && famNorm.endsWith('/' + pathNorm.split('/').slice(-2).join('/')));
+  });
+  return hit ? (hit.path || hit.name || '') : '';
 }
 
 let currentIndex = 0;
@@ -111,7 +121,7 @@ export function setPreviewPageIndex(i) { currentIndex = i; }
 // ============================================================
 
 // 控件运行时状态（不污染 AppState.project.widgets，编辑器属性不受影响）
-const runtimeState = new Map(); // key: widget.id, value: { value, status, pressed, scrollVal, scrollFrame, longModeOffset, ... }
+const runtimeState = new Map(); // key: widget.id, value: { value, status, pressed, longModeOffset, ... }
 
 // 控件元素引用（用于事件分发）：id -> { el, widget, z, absX, absY, domW, domH }
 const widgetRefMap = new Map();
@@ -145,8 +155,6 @@ function ensureWidgetState(w) {
       break;
     case 'button': case 'imgbtn':
       s.pressed = false; break;
-    case 'scroll':
-      s.scrollVal = 0; break;
     case 'dropdown':
       s.selectedIndex = Math.max(0, Math.min((w.options || '').split('\n').filter(o => o.length > 0).length - 1, w.selectedIndex != null ? w.selectedIndex : 0));
       s.expanded = false;
@@ -376,25 +384,6 @@ export function render() {
     // arc_label 旋转模式：el 用原始 w×h，整体旋转（与 editor.js 一致）
     // SGL obj->coords 中心 = 原始 w×h 中心，所以 el 旋转中心 = SGL 旋转中心
     // domW/domH 保持原始 w×h，不调整
-    if (w.type === 'scroll' && w.bindTarget) {
-      const bindWidget = page.widgets.find(wt => getWidgetVarName(wt) === w.bindTarget);
-      if (bindWidget) {
-        const bindAbs = getWidgetAbsPos(bindWidget, page);
-        const scDirect = w.direct != null ? w.direct : 1;
-        const scWidth = w.width != null ? w.width : 10;
-        // 仿真效果：scroll 完全位于绑定目标边框内部，四边均不覆盖目标边框
-        const bindBorder = bindWidget.borderWidth != null ? bindWidget.borderWidth : 1;
-        if (scDirect === 1) {
-          absPos = { x: bindAbs.x + bindWidget.width - scWidth - bindBorder, y: bindAbs.y + bindBorder };
-          domW = scWidth;
-          domH = bindWidget.height - 2 * bindBorder;
-        } else {
-          absPos = { x: bindAbs.x + bindBorder, y: bindAbs.y + bindWidget.height - scWidth - bindBorder };
-          domW = bindWidget.width - 2 * bindBorder;
-          domH = scWidth;
-        }
-      }
-    }
 
     el.style.left = (absPos.x * z) + 'px';
     el.style.top = (absPos.y * z) + 'px';
@@ -450,91 +439,6 @@ export function render() {
     // 数据属性：便于调试 & 按 id 快速查找
     el.dataset.widgetId = w.id;
     el.dataset.widgetType = w.type;
-
-    // scroll 绑定目标：根据 scroll 的运行时 scrollVal 位移绑定对象下所有子控件（含后代）并裁剪
-    // 查找绑定目标 = 当前控件某个祖先（或直接等于某个 scroll.bindTarget）
-    if (w.parentId || true) {
-      // 找到页面上所有 scroll 控件，逐个判断是否是当前控件的绑定目标祖先
-      for (const sScroll of (page.widgets || [])) {
-        if (sScroll.type !== 'scroll' || !sScroll.bindTarget) continue;
-        const scrollTargetVar = sScroll.bindTarget;
-        // 通过 widgetVarName 找到目标控件
-        const targetWidget = page.widgets.find(t => getWidgetVarName(t) === scrollTargetVar);
-        if (!targetWidget) continue;
-        // 是否为目标控件的子孙（或目标控件自己）？
-        let ancestor = w.parentId ? widgetMap.get(w.parentId) : null;
-        let isDescendant = (targetWidget.id === w.id);
-        while (!isDescendant && ancestor) {
-          if (ancestor.id === targetWidget.id) { isDescendant = true; break; }
-          ancestor = ancestor.parentId ? widgetMap.get(ancestor.parentId) : null;
-        }
-        if (!isDescendant) continue;
-
-        // 计算 scrollVal → 位移量
-        const sSt = runtimeState.get(sScroll.id) || {};
-        const val = sSt.scrollVal != null ? Number(sSt.scrollVal) : (sScroll.value != null ? Number(sScroll.value) : 0);
-        const scDirect = sScroll.direct != null ? Number(sScroll.direct) : 1;
-        // 目标控件内可见区域尺寸
-        const tw = targetWidget.width;
-        const th = targetWidget.height;
-        // 估算子控件内容占的范围（实际 SGL 里 sgl_obj_get_size(scene)，这里简化取目标宽高的 2 倍上限）
-        // 找到目标控件所有子孙的 min/max 坐标，估算内容尺寸
-        let minX = 0, minY = 0, maxX = tw, maxY = th;
-        for (const ch of page.widgets) {
-          let ancCh = ch.parentId ? widgetMap.get(ch.parentId) : null;
-          let isChDesc = (targetWidget.id === ch.id);
-          while (!isChDesc && ancCh) {
-            if (ancCh.id === targetWidget.id) { isChDesc = true; break; }
-            ancCh = ancCh.parentId ? widgetMap.get(ancCh.parentId) : null;
-          }
-          if (!isChDesc) continue;
-          const chAbs = getWidgetAbsPos(ch, page);
-          const targetAbs = getWidgetAbsPos(targetWidget, page);
-          const rx = chAbs.x - targetAbs.x;
-          const ry = chAbs.y - targetAbs.y;
-          if (rx < minX) minX = rx;
-          if (ry < minY) minY = ry;
-          if (rx + ch.width > maxX) maxX = rx + ch.width;
-          if (ry + ch.height > maxY) maxY = ry + ch.height;
-        }
-        const contentW = Math.max(tw, maxX - minX);
-        const contentH = Math.max(th, maxY - minY);
-        const excessX = Math.max(0, contentW - tw);
-        const excessY = Math.max(0, contentH - th);
-        let offsetX = 0, offsetY = 0;
-        if (scDirect === 1) { // 垂直
-          offsetY = -excessY * Math.max(0, Math.min(100, val)) / 100;
-        } else { // 水平
-          offsetX = -excessX * Math.max(0, Math.min(100, val)) / 100;
-        }
-        // 给当前控件 el 应用位移
-        if (offsetX !== 0 || offsetY !== 0) {
-          el.style.transform = (el.style.transform ? el.style.transform + ' ' : '') + `translate(${offsetX * z}px, ${offsetY * z}px)`;
-        }
-        // 裁剪超出绑定目标边框的部分
-        const targetAbs = getWidgetAbsPos(targetWidget, page);
-        const curAbs = absPos;
-        const clipTop = Math.max(0, (targetAbs.y) - curAbs.y);
-        const clipLeft = Math.max(0, (targetAbs.x) - curAbs.x);
-        const clipBottom = Math.max(0, (curAbs.y + domW) - ((targetAbs.x) + 0)); // placeholder（不影响，只用左右顶）
-        // 用 clip-path：裁剪到 target 控件边框内的可见区域（在当前控件坐标空间）
-        const relTargetX1 = targetAbs.x - curAbs.x;
-        const relTargetY1 = targetAbs.y - curAbs.y;
-        const relTargetX2 = relTargetX1 + targetWidget.width;
-        const relTargetY2 = relTargetY1 + targetWidget.height;
-        const insetT = Math.max(0, -relTargetY1);
-        const insetL = Math.max(0, -relTargetX1);
-        const insetB = Math.max(0, relTargetY2 - domH);
-        const insetR = Math.max(0, relTargetX2 - domW);
-        if (insetT || insetL || insetB || insetR) {
-          const prev = el.style.clipPath;
-          const addClip = `inset(${insetT * z}px ${insetR * z}px ${insetB * z}px ${insetL * z}px)`;
-          el.style.clipPath = prev ? (prev + ' ' + addClip) : addClip;
-        }
-        // 内容超出还会用到上面的 offset，应用在 target 自己（目标控件有 clipPath）
-        break;
-      }
-    }
 
     frame.appendChild(el);
   });
@@ -810,24 +714,6 @@ function onWidgetPointerDown(info, evt) {
       break;
     }
 
-    case 'scroll': {
-      const scDirect = w.direct != null ? w.direct : 1;
-      // scroll 值：0-100，与 slider 一致简化处理
-      let v;
-      if (scDirect === 1) {
-        // 垂直
-        v = Math.max(0, Math.min(100, Math.round(ptY * 100 / Math.max(1, info.domH))));
-      } else {
-        v = Math.max(0, Math.min(100, Math.round(ptX * 100 / Math.max(1, info.domW))));
-      }
-      s.scrollVal = v;
-      dragCtx.active = true;
-      dragCtx.widgetId = w.id;
-      dragCtx.startVal = v;
-      render();
-      break;
-    }
-
     case 'switch': case 'checkbox':
       // switch/checkbox 点击切换：仅设置拖拽上下文（支持按下后移出区域取消）
       dragCtx.active = true;
@@ -906,18 +792,6 @@ function onWidgetPointerMove(evt) {
         v = Math.round(rel * 100 / barHeight);
       }
       if (v !== s.value) { s.value = v; render(); }
-      break;
-    }
-
-    case 'scroll': {
-      const scDirect = w.direct != null ? w.direct : 1;
-      let v;
-      if (scDirect === 1) {
-        v = Math.max(0, Math.min(100, Math.round(ptY * 100 / Math.max(1, info.domH))));
-      } else {
-        v = Math.max(0, Math.min(100, Math.round(ptX * 100 / Math.max(1, info.domW))));
-      }
-      if (v !== s.scrollVal) { s.scrollVal = v; render(); }
       break;
     }
 
@@ -1002,7 +876,7 @@ function onWidgetPointerUp(evt) {
         s.pressed = false;
       }
       break;
-    case 'slider': case 'scroll': case 'progress': case 'bar':
+    case 'slider': case 'progress': case 'bar':
       // 拖拽结束
       break;
     case 'roller':
@@ -2236,167 +2110,126 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
     }
 
     case 'battery': {
-      // SGL battery: 严格移植自 sgl_battery.c
-      // SGL 结构: 外壳实心填充(border_color, radius=3) + 盖帽实心填充(border_color, radius=0)
-      //          + 内部背景实心填充(bg_color, radius=1, 缩进 border_width=2)
-      //          + 电芯实心填充(fill_color, radius=1, 缩进 border_width+padding=4)
-      // SGL: active_cells=(level*num_cells+99)/100, 充电闪电 6 段多边形 line_width=4
+      // 严格对齐 sgl_battery.c :: sgl_battery_construct_cb
       const { surf, R } = createWidgetCanvas(el, w, z);
       el.style.opacity = 1;
-      const alpha = w.alpha != null ? w.alpha : 255;
-      const bLevel = Math.min(100, w.level != null ? w.level : (w.value || 80));
-      const bDir = w.direction || 0;
-      const bCapPos = w.capPos || 0;
-      const bCapSize = w.capSize || 4;
-      const bNumCells = w.numCells || 6;
-      const bLowCol = w.lowColor || '#FF0000';
-      const bMedCol = w.mediumColor || '#FFA500';
-      const bHighCol = w.highColor || '#00FF00';
-      const bFillCol = bLevel < 20 ? bLowCol : (bLevel < 50 ? bMedCol : bHighCol);
-      const bBorderCol = w.borderColor || '#FFFFFF';
+      const alpha = w.alpha != null ? w.alpha : 140;
+      const bLevel = Math.min(100, Math.max(0, w.level != null ? w.level : (w.value != null ? w.value : 100)));
+      const bVert = w.vertical != null ? w.vertical : true;
+      const bLowCol = w.lowColor || '#E74C3C';
+      const bMedCol = w.mediumColor || '#F39C12';
+      const bHighCol = w.highColor || '#2ECC71';
+      const levelCol = bLevel < 20 ? bLowCol : (bLevel < 50 ? bMedCol : bHighCol);
+      const rawFill = w.fillColor || '';
+      const bFillCol = (rawFill && String(rawFill).trim()) ? rawFill : levelCol;
+      const bBorderCol = w.borderColor || '#B4B4B4';
       const bBgCol = w.bgColor || '#1E1E1E';
-      const bBorderW = 2;
-      const bPadding = 2;
-      const bShellRadius = 3;
-      const bInnerRadius = 1;
+      const bBorder = 1;
+      const bRadius = Math.max(4, 1);
+      const bPad = 3;
       const borderColObj = R.hexToColor(bBorderCol);
       const bgColObj = R.hexToColor(bBgCol);
-      // SGL: width = x2 - x1, height = y2 - y1 (非闭区间，差 1)
-      const sglW = w.width - 1;
-      const sglH = w.height - 1;
+      const white = R.SGL_COLOR_WHITE;
+      const black = R.SGL_COLOR_BLACK;
 
-      let batteryW, batteryH, batteryX, batteryY, capW, capH, capX, capY;
-      if (bDir === 0) {
-        batteryW = sglW - bCapSize;
-        batteryH = sglH - Math.floor(sglH / 5);
-        capW = bCapSize;
-        capH = Math.floor(batteryH / 3);
-        if (bCapPos === 1) {
-          batteryX = bCapSize;
-          batteryY = Math.floor((sglH - batteryH) / 2);
-          capX = 0;
-          capY = batteryY + Math.floor((batteryH - capH) / 2);
-        } else {
-          batteryX = 0;
-          batteryY = Math.floor((sglH - batteryH) / 2);
-          capX = batteryW;
-          capY = batteryY + Math.floor((batteryH - capH) / 2);
-        }
+      const bodyX1 = bBorder;
+      const bodyY1 = bBorder;
+      const bodyX2 = w.width - 1 - bBorder;
+      const bodyY2 = w.height - 1 - bBorder;
+      const bodyW = bodyX2 - bodyX1;
+      const bodyH = bodyY2 - bodyY1;
+      const capLen = bVert ? Math.max(Math.floor(bodyH / 20), 2) : Math.max(Math.floor(bodyW / 20), 2);
+      const capThickW = bVert ? Math.floor(bodyW / 2) : Math.max(Math.floor(bodyH / 3), 4);
+      const capThickH = bVert ? Math.max(Math.floor(bodyW / 3), 4) : Math.floor(bodyH / 3);
+
+      let bx1, by1, bx2, by2;
+      if (bVert) {
+        bx1 = bodyX1; by1 = bodyY1 + capLen; bx2 = bodyX2; by2 = bodyY2;
       } else {
-        batteryH = sglH - bCapSize;
-        batteryW = sglW - Math.floor(sglW / 5);
-        capH = bCapSize;
-        capW = Math.floor(batteryW / 3);
-        batteryX = Math.floor((sglW - batteryW) / 2);
-        batteryY = bCapSize;
-        capX = batteryX + Math.floor((batteryW - capW) / 2);
-        capY = 0;
+        bx1 = bodyX1; by1 = bodyY1; bx2 = bodyX2 - capLen; by2 = bodyY2;
+      }
+      const bw = bx2 - bx1;
+      const bh = by2 - by1;
+
+      R.drawFillRectBorder(surf, bx1, by1, bx2, by2, bRadius, borderColObj, 2, alpha);
+      R.drawFillRect(surf, bx1, by1, bx2, by2, bRadius, bgColObj, alpha);
+
+      if (bVert) {
+        const hlW = Math.max(Math.floor(bw / 8), 1);
+        R.drawFillRect(surf, bx1, by1, bx1 + hlW, by2, bRadius, white, Math.floor(alpha * 80 / 255));
+        const shW = Math.max(Math.floor(bw / 10), 1);
+        R.drawFillRect(surf, bx2 - shW, by1, bx2, by2, 0, black, Math.floor(alpha * 90 / 255));
+      } else {
+        const hlH = Math.max(Math.floor(bh / 8), 1);
+        R.drawFillRect(surf, bx1, by1, bx2, by1 + hlH, bRadius, white, Math.floor(alpha * 80 / 255));
+        const shH = Math.max(Math.floor(bh / 10), 1);
+        R.drawFillRect(surf, bx1, by2 - shH, bx2, by2, 0, black, Math.floor(alpha * 90 / 255));
       }
 
-      const fillX = batteryX + bBorderW + bPadding;
-      const fillY = batteryY + bBorderW + bPadding;
-      const fillW = batteryW - 2 * bBorderW - 2 * bPadding;
-      const fillH = batteryH - 2 * bBorderW - 2 * bPadding;
-      const bgX = batteryX + bBorderW;
-      const bgY = batteryY + bBorderW;
-      const bgW = batteryW - 2 * bBorderW;
-      const bgH = batteryH - 2 * bBorderW;
-
-      // 1. 外壳实心填充
-      R.drawFillRect(surf, batteryX, batteryY, batteryX + batteryW, batteryY + batteryH, bShellRadius, borderColObj, alpha);
-      // 2. 盖帽实心填充
-      if (capW > 0 && capH > 0) {
-        R.drawFillRect(surf, capX, capY, capX + capW, capY + capH, 0, borderColObj, alpha);
-      }
-      // 3. 内部背景实心填充
-      if (bgW > 0 && bgH > 0) {
-        R.drawFillRect(surf, bgX, bgY, bgX + bgW, bgY + bgH, bInnerRadius, bgColObj, alpha);
-      }
-      // 4. 电芯
-      if (bLevel > 0 && bNumCells > 0 && fillW > 0 && fillH > 0) {
-        const activeCells = Math.min(bNumCells, Math.floor((bLevel * bNumCells + 99) / 100));
-        const fillColObj = R.hexToColor(bFillCol);
-        if (bDir === 0) {
-          let minGap = 2;
-          let totalMinGap = (bNumCells - 1) * minGap;
-          if (totalMinGap >= fillW) { minGap = 1; totalMinGap = bNumCells - 1; }
-          const cellW = Math.max(1, Math.floor((fillW - totalMinGap) / bNumCells));
-          const usedW = cellW * bNumCells + totalMinGap;
-          const remainingW = fillW - usedW;
-          if (bCapPos === 1) {
-            let posX = fillX + fillW;
-            for (let i = 0; i < activeCells; i++) {
-              let curW = cellW + (i < remainingW ? 1 : 0);
-              posX -= curW;
-              R.drawFillRect(surf, posX, fillY, posX + curW, fillY + fillH, bInnerRadius, fillColObj, alpha);
-              if (i < bNumCells - 1) posX -= minGap;
-            }
-          } else {
-            let posX = fillX;
-            for (let i = 0; i < activeCells; i++) {
-              let curW = cellW + (i < remainingW ? 1 : 0);
-              R.drawFillRect(surf, posX, fillY, posX + curW, fillY + fillH, bInnerRadius, fillColObj, alpha);
-              if (i < bNumCells - 1) posX += curW + minGap;
-            }
+      const fillX1 = bx1 + bPad;
+      const fillY1 = by1 + bPad;
+      const fillX2 = bx2 - bPad;
+      const fillY2 = by2 - bPad;
+      const fw = fillX2 - fillX1;
+      const fh = fillY2 - fillY1;
+      if (fw > 0 && fh > 0) {
+        const fillBg = R.colorMixer(bgColObj, black, 40);
+        R.drawFillRect(surf, fillX1, fillY1, fillX2, fillY2, bRadius - 1, fillBg, alpha);
+        const fc = R.hexToColor(bFillCol);
+        if (bVert) {
+          const levelH = Math.floor(fh * Math.min(bLevel, 100) / 100);
+          if (levelH > 0) {
+            const fy1 = fillY2 - levelH;
+            R.drawFillRect(surf, fillX1, fy1, fillX2, fillY2, bRadius - 1, fc, alpha);
+            const hlW = Math.max(Math.floor(fw / 5), 2);
+            R.drawFillRect(surf, fillX1, fy1, fillX1 + hlW, fillY2, bRadius - 1, white, Math.floor(alpha * 90 / 255));
+            const shW = Math.max(Math.floor(fw / 6), 1);
+            R.drawFillRect(surf, fillX2 - shW, fy1, fillX2, fillY2, 0, black, Math.floor(alpha * 100 / 255));
           }
         } else {
-          let minGap = 2;
-          let totalMinGap = (bNumCells - 1) * minGap;
-          if (totalMinGap >= fillH) { minGap = 1; totalMinGap = bNumCells - 1; }
-          const cellH = Math.max(1, Math.floor((fillH - totalMinGap) / bNumCells));
-          const usedH = cellH * bNumCells + totalMinGap;
-          const remainingH = fillH - usedH;
-          let posY = fillY;
-          for (let i = bNumCells - 1; i >= 0; i--) {
-            const curH = cellH + (i < remainingH ? 1 : 0);
-            if (i < activeCells) {
-              R.drawFillRect(surf, fillX, posY, fillX + fillW, posY + curH, bInnerRadius, fillColObj, alpha);
-            }
-            posY += curH + minGap;
+          const levelW = Math.floor(fw * Math.min(bLevel, 100) / 100);
+          if (levelW > 0) {
+            const fx2 = fillX1 + levelW;
+            R.drawFillRect(surf, fillX1, fillY1, fx2, fillY2, bRadius - 1, fc, alpha);
+            const hlH = Math.max(Math.floor(fh / 5), 2);
+            R.drawFillRect(surf, fillX1, fillY1, fx2, fillY1 + hlH, bRadius - 1, white, Math.floor(alpha * 90 / 255));
+            const shH = Math.max(Math.floor(fh / 6), 1);
+            R.drawFillRect(surf, fillX1, fillY2 - shH, fx2, fillY2, 0, black, Math.floor(alpha * 100 / 255));
           }
         }
       }
-      // 5. 充电闪电 SGL: 6 段直线多边形, line_width=4
-      if (w.charging) {
-        const chCol = R.hexToColor(w.chargingColor || '#FFFF00');
-        const chCx = batteryX + Math.floor(batteryW / 2);
-        const chCy = batteryY + Math.floor(batteryH / 2);
-        const chH = Math.floor(batteryH / 2);
-        const chW = Math.floor(batteryW / 6);
-        let p1x,p1y,p2x,p2y,p3x,p3y,p4x,p4y,p5x,p5y,p6x,p6y;
-        if (bDir === 0) {
-          p1x = chCx - Math.floor(chW/2); p1y = chCy - Math.floor(chH/2);
-          p2x = chCx + chW*2;             p2y = chCy + Math.floor(chH/9);
-          p3x = chCx + Math.floor(chW/4); p3y = chCy - Math.floor(chH/8);
-          p4x = chCx + Math.floor(chW/2); p4y = chCy + Math.floor(chH/2);
-          p5x = chCx - chW*2;             p5y = chCy - Math.floor(chH/9);
-          p6x = chCx - Math.floor(chW/4); p6y = chCy + Math.floor(chH/8);
-        } else {
-          p1x = chCx + Math.floor(chW/2); p1y = chCy - Math.floor(chH/2);
-          p2x = chCx - Math.floor(chW/2); p2y = chCy - Math.floor(chH/15);
-          p3x = chCx + chW*2;             p3y = chCy - Math.floor(chH/9);
-          p4x = chCx - Math.floor(chW/2); p4y = chCy + Math.floor(chH/2);
-          p5x = chCx + Math.floor(chW/2); p5y = chCy + Math.floor(chH/15);
-          p6x = chCx - chW*2;             p6y = chCy + Math.floor(chH/9);
-        }
-        const chLW = 4;
-        R.drawLine(surf, p1x, p1y, p2x, p2y, chLW, chCol, alpha);
-        R.drawLine(surf, p2x, p2y, p3x, p3y, chLW, chCol, alpha);
-        R.drawLine(surf, p3x, p3y, p4x, p4y, chLW, chCol, alpha);
-        R.drawLine(surf, p4x, p4y, p5x, p5y, chLW, chCol, alpha);
-        R.drawLine(surf, p5x, p5y, p6x, p6y, chLW, chCol, alpha);
-        R.drawLine(surf, p6x, p6y, p1x, p1y, chLW, chCol, alpha);
+
+      if (bVert) {
+        const cx = bx1 + Math.floor((bw - capThickW) / 2);
+        R.drawFillRect(surf, cx - 1, by1 - capLen, cx + capThickW + 1, by1, 0, bgColObj, alpha);
+        const capCol = R.colorMixer(bgColObj, borderColObj, 180);
+        R.drawFillRect(surf, cx, by1 - capLen, cx + capThickW, by1, 2, capCol, alpha);
+        const chl = Math.max(Math.floor(capThickW / 4), 1);
+        R.drawFillRect(surf, cx, by1 - capLen, cx + chl, by1, 2, white, Math.floor(alpha * 70 / 255));
+        const csh = Math.max(Math.floor(capThickW / 5), 1);
+        R.drawFillRect(surf, cx + capThickW - csh, by1 - capLen, cx + capThickW, by1, 0, black, Math.floor(alpha * 60 / 255));
+      } else {
+        const cy = by1 + Math.floor((bh - capThickH) / 2);
+        R.drawFillRect(surf, bx2, cy - 1, bx2 + capLen, cy + capThickH + 1, 0, bgColObj, alpha);
+        const capCol = R.colorMixer(bgColObj, borderColObj, 180);
+        R.drawFillRect(surf, bx2, cy, bx2 + capLen, cy + capThickH, 2, capCol, alpha);
+        const chl = Math.max(Math.floor(capThickH / 4), 1);
+        R.drawFillRect(surf, bx2, cy, bx2 + capLen, cy + chl, 2, white, Math.floor(alpha * 70 / 255));
+        const csh = Math.max(Math.floor(capThickH / 5), 1);
+        R.drawFillRect(surf, bx2, cy + capThickH - csh, bx2 + capLen, cy + capThickH, 0, black, Math.floor(alpha * 60 / 255));
       }
+
       flushWidget(surf);
-      // 6. 百分比文本 SGL: x_offset 根据 cap_pos, font_height=fontSize+8
       if (w.showPercentage) {
-        const pctStr = bLevel + '%';
-        const fs = w.fontSize || 12;
-        let xOffset = 0, yOffset = 0;
-        if (bCapPos === 0) xOffset = -bCapSize;
-        else if (bCapPos === 1) xOffset = bCapSize;
-        else if (bCapPos === 2) yOffset = bCapSize;
-        overlayText({ text: pctStr, color: (w.textColor || '#FFFFFF'), fontSize: fs, fontFamily: (w.fontFamily || ''), align: 'CENTER', x: 0, y: 0, w: w.width, h: w.height, offX: xOffset, offY: yOffset });
+        overlayText({
+          text: bLevel + '%',
+          color: w.textColor || '#FFFFFF',
+          fontSize: w.fontSize || 14,
+          fontFamily: w.fontFamily || '',
+          align: 'CENTER',
+          x: bx1, y: by1, w: bw, h: bh,
+          offX: 0, offY: 0
+        });
       }
       break;
     }
@@ -2924,72 +2757,6 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
       if (mbRightBtnX2 >= mbRightBtnX1) {
         mkBtnTextPv(mbRightBtnX1, mbRightBtnX2, rightTxt, (w.rightBtnTextColor || '#000000'));
       }
-      break;
-    }
-
-    case 'scroll': {
-      // SGL scroll: 严格移植自 sgl_scroll.c
-      // direct: 0=水平, 1=垂直 (SGL_DIRECT_HORIZONTAL=0, SGL_DIRECT_VERTICAL=1)
-      // track=整个控件区域, 滑块颜色=mixer(color, BG黑, 128), 滑块圆角=radius-border
-      const { surf, R } = createWidgetCanvas(el, w, z, renderSize);
-      el.style.opacity = 1;
-      const alpha = w.alpha != null ? w.alpha : 255;
-      const scDirect = w.direct != null ? w.direct : 1; // 默认垂直
-      // scroll 使用独立的 scrollVal（预览页通过拖拽产生），若未设置则回退到 value 属性
-      const scrollValRt = getRuntimeValue(w, 'scrollVal', null);
-      const scValue = (scrollValRt != null) ? Number(scrollValRt) : (w.value != null ? Number(w.value) : 0);
-      const scWidth = w.width != null ? w.width : 10; // SGL_SCROLL_DEFAULT_WIDTH（滚动条宽度属性）
-      const scColor = R.hexToColor(w.color || '#FFFFFF'); // SGL_THEME_COLOR
-      const scBorderColor = R.hexToColor(w.borderColor || '#000000'); // SGL_THEME_BORDER_COLOR
-      const scBorder = w.borderWidth != null ? w.borderWidth : 2;
-      const scRadius = Math.min(w.radius != null ? w.radius : 0, Math.floor(scWidth / 2));
-
-      // 绑定对象时用重算的渲染尺寸，否则用控件自身尺寸
-      const rw = renderSize ? renderSize.domW : w.width;
-      const rh = renderSize ? renderSize.domH : w.height;
-
-      // 绑定对象时,scroll 应视觉上融入绑定目标,与仿真图片一致:
-      // track 颜色 = 目标背景色,不显示 scroll 自己的独立边框,只保留滑块
-      // 未绑定时,scroll 作为独立控件画完整 track(含边框、填充)
-      const bindWidget = (w.bindTarget && page && page.widgets) ? page.widgets.find(wt => getWidgetVarName(wt) === w.bindTarget) : null;
-
-      if (bindWidget) {
-        // 融入目标:用目标背景色填充整个 scroll 区域,覆盖目标右侧/底侧边框
-        const trackColor = R.hexToColor(bindWidget.bgColor || bindWidget.color || '#FFFFFF');
-        R.drawFillRect(surf, 0, 0, rw - 1, rh - 1, scRadius, trackColor, alpha);
-      } else {
-        // 未绑定:画完整 track（含边框、填充）
-        R.drawRect(surf, 0, 0, rw - 1, rh - 1, {
-          alpha: alpha, border: scBorder, border_alpha: alpha, border_mask: 0,
-          color: scColor, border_color: scBorderColor, radius: scRadius
-        });
-      }
-
-      // 滑块: 颜色 = sgl_color_mixer(color, SGL_THEME_BG_COLOR(黑), 128)
-      const thumbCol = R.colorMixer(scColor, R.hexToColor('#000000'), 128);
-      // 绑定时滑块占满整个 scroll 区域,未绑定时按 SGL 逻辑缩进 border
-      const thumbBorder = bindWidget ? 0 : scBorder;
-      const thumbRadius = Math.max(0, scRadius - thumbBorder);
-      let len, pos, fx1, fy1, fx2, fy2;
-      if (scDirect === 1) {
-        // 垂直: 长度方向 = y
-        len = Math.max(Math.floor(rh / 8), scRadius * 2 + 1);
-        pos = Math.floor(scValue * (rh - len) / 100);
-        fx1 = thumbBorder;
-        fx2 = rw - 1 - thumbBorder;
-        fy1 = pos + thumbBorder;
-        fy2 = pos + len - thumbBorder;
-      } else {
-        // 水平: 长度方向 = x
-        len = Math.max(Math.floor(rw / 8), scRadius * 2 + 1);
-        pos = Math.floor(scValue * (rw - len) / 100);
-        fy1 = thumbBorder;
-        fy2 = rh - 1 - thumbBorder;
-        fx1 = pos + thumbBorder;
-        fx2 = pos + len - thumbBorder;
-      }
-      R.drawFillRect(surf, fx1, fy1, fx2, fy2, thumbRadius, thumbCol, alpha);
-      flushWidget(surf);
       break;
     }
 
@@ -3888,8 +3655,8 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
       break;
     }
 
-    case 'ext_img': {
-      // SGL ext_img WYSIWYG 渲染：按 SGL 算法居中/旋转/缩放绘制图片
+    case 'img_ext': {
+      // SGL img_ext WYSIWYG 渲染：按 SGL 算法居中/旋转/缩放绘制图片
       const { surf, R } = createWidgetCanvas(el, w, z);
       el.style.opacity = 1;
       const eiAlpha = w.alpha != null ? w.alpha : 255;
@@ -3912,8 +3679,8 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
       if (eiPixmap) {
         const imgData = getCachedPixmapImageData(eiPixmap);
         if (imgData) {
-          // 使用严格移植的 SGL ext_img 像素级渲染算法
-          // SGL ext_img 设置 pixmap 后 coords 会被强制设为图片尺寸，绘制区域由图片决定
+          // 使用严格移植的 SGL img_ext 像素级渲染算法
+          // SGL img_ext 设置 pixmap 后 coords 会被强制设为图片尺寸，绘制区域由图片决定
           R.drawExtImg(surf, imgData, imgData.width, imgData.height, w.rotation, w.scaleUniform, w.pivotX, w.pivotY, eiAlpha, w.pixmapFormat, w.scaleX, w.scaleY);
           flushWidget(surf);
         } else {
@@ -4282,26 +4049,6 @@ document.getElementById('btn-screenshot').addEventListener('click', async () => 
         if (w.type === '2dball' && w.radius != null && w.radius > 0) {
           domW = w.radius * 2;
           domH = w.radius * 2;
-        }
-
-        // scroll 绑定目标时重算位置和尺寸
-        if (w.type === 'scroll' && w.bindTarget) {
-          const bindWidget = page.widgets.find(wt => getWidgetVarName(wt) === w.bindTarget);
-          if (bindWidget) {
-            const bindAbs = getWidgetAbsPos(bindWidget, page);
-            const scDirect = w.direct != null ? w.direct : 1;
-            const scWidth = w.width != null ? w.width : 10;
-            const bindBorder = bindWidget.borderWidth != null ? bindWidget.borderWidth : 1;
-            if (scDirect === 1) {
-              absPos = { x: bindAbs.x + bindWidget.width - scWidth - bindBorder, y: bindAbs.y + bindBorder };
-              domW = scWidth;
-              domH = bindWidget.height - 2 * bindBorder;
-            } else {
-              absPos = { x: bindAbs.x + bindBorder, y: bindAbs.y + bindWidget.height - scWidth - bindBorder };
-              domW = bindWidget.width - 2 * bindBorder;
-              domH = scWidth;
-            }
-          }
         }
 
         const tempEl = document.createElement('div');

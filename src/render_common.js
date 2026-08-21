@@ -243,7 +243,8 @@ export function getFontError(fontPath, size, bpp) {
  * @returns {Promise<object|null>} 字模数据对象
  */
 // localStorage 字模缓存 key 前缀（v9: 强制清除 v8 旧缓存，解决字模位图内容损坏导致的乱码）
-const FONT_CACHE_PREFIX = 'sgl_font_cache_v10_';
+// v11: 修复 TTC/SimSun 等 MONO 内嵌位图被误当 8bit 灰度导致文字不可读
+const FONT_CACHE_PREFIX = 'sgl_font_cache_v11_';
 // 字体文件指纹（大小+修改时间）缓存：避免每次读缓存都 invoke Rust
 const FONT_FP_CACHE = new Map();
 
@@ -620,10 +621,17 @@ export async function preloadSglFontData(fonts, symbols) {
 
 export function getCssFontStack(family) {
   if (!family || family === 'default') return SGL_FONT_MAP['default'];
+  // 已注册的本地字体优先用唯一族名，避免 SGL_FONT_MAP 按文件名映射到系统同名字体
+  //（例如项目里的 simsun.ttc 与系统宋体混用），保证预览与资源一致。
+  const familyName = fontFamilyNameForPath(family);
+  if (registeredFontFaces.has(family) || FONT_FACE_LOAD_PROMISES.has(family)) {
+    if (!registeredFontFaces.has(family)) registerFontFile(family);
+    const mapped = SGL_FONT_MAP[family] || SGL_FONT_MAP[family.replace(/[/\\]/g, '/').split('/').pop()];
+    return mapped ? `"${familyName}", ${mapped}` : `"${familyName}", ${SGL_FONT_MAP['default']}`;
+  }
   if (SGL_FONT_MAP[family]) return SGL_FONT_MAP[family];
   const fileName = family.replace(/[/\\]/g, '/').split('/').pop();
   if (SGL_FONT_MAP[fileName]) return SGL_FONT_MAP[fileName];
-  const familyName = fontFamilyNameForPath(family);
   if (!registeredFontFaces.has(family)) {
     registerFontFile(family);
   }

@@ -281,12 +281,13 @@ export const AppState = {
       zOrder: maxZ + 1,
       ...defaults
     };
-    // 需要字体的控件：若资源管理器中已添加字体，直接默认取第一个字体的 path
-    // 这样属性面板也能正确显示字体名，不再依赖渲染/代码生成的 fallback 兜底
+    // 需要字体的控件：有字体资源时默认第一个；无字体资源时留空（系统字体）
     if (widget.hasOwnProperty('fontFamily') && (!widget.fontFamily || widget.fontFamily === 'default')) {
       const fonts = (this.project && this.project.resources && this.project.resources.fonts) || [];
       if (fonts.length > 0 && fonts[0] && fonts[0].path) {
         widget.fontFamily = fonts[0].path;
+      } else {
+        widget.fontFamily = '';
       }
     }
     // ring 控件：根据宽高计算内外径
@@ -621,27 +622,17 @@ export const AppState = {
   },
 
   // ============ 导出代码到项目目录（设计器和代码预览共用） ============
+  // 字体缺失：此处不阻断（导出/生成 .c 仅警告）；运行入口由 checkAndWarnFonts(block=true) 拦截
   async exportCodeToProject(actionName = '导出代码') {
-    // 检查字体缺失，有缺失则阻止导出
     const issues = validateProjectFonts(this.project);
     if (issues.length > 0) {
       const summary = `检测到 ${issues.length} 个文本控件缺少字体资源`;
-      const detail = issues.map(item =>
-        `• ${item.page} / ${item.widget}: ${item.reason} (${item.fontFamily || '无'})`
-      ).join('\n');
-      showToast(summary, 'error');
       if (this.logger) {
-        this.logger(`[${actionName}] ${summary}，操作已终止`, 'error');
+        this.logger(`[${actionName}] ${summary}（已继续导出，请尽快补齐字体）`, 'warn');
         issues.forEach(item => {
-          this.logger(`  - ${item.page} / ${item.widget}: ${item.reason} (${item.fontFamily || '无'})`, 'error');
+          this.logger(`  - ${item.page} / ${item.widget}: ${item.reason} (${item.fontFamily || '无'})`, 'warn');
         });
       }
-      try {
-        await message(`${summary}，请在右侧资源面板添加字体文件后再操作。\n\n${detail}`, { title: '字体资源缺失', kind: 'error' });
-      } catch (e) {
-        console.warn('显示字体缺失提示失败:', e);
-      }
-      return { ok: false, msg: '字体资源缺失，已终止导出' };
     }
 
     if (!this.projectPath) {
@@ -722,12 +713,10 @@ export const AppState = {
         continue;
       }
 
-      // 字体变量名与后端 font_id_from_family 一致
+      // 字体变量名与后端 font_id_from_family 一致（控件字模不压缩）
       const fontFileName = font.path.replace(/[/\\]/g, '/').split('/').pop();
       const cleanName = fontFileName.replace(/[^0-9a-zA-Z]/g, '_');
-      const compress = font.compress || 0;
-      const compressSuffix = compress > 0 ? '_compress' : '';
-      const fontId = `sgl_font_${cleanName}_${size}_bpp${bpp}${compressSuffix}`;
+      const fontId = `sgl_font_${cleanName}_${size}_bpp${bpp}`;
 
       try {
         const faceName = await registerFontFile(font.path);
@@ -735,7 +724,7 @@ export const AppState = {
           console.warn('字体加载失败:', font.path);
           continue;
         }
-        const cContent = generateFontC(faceName, size, bpp, symbols, compress > 0, fontId);
+        const cContent = generateFontC(faceName, size, bpp, symbols, false, fontId);
         result.push({ fontId, fileName: `${fontId}.c`, content: cContent });
       } catch (err) {
         console.error('生成字模失败:', font.path, size, err);
@@ -744,7 +733,7 @@ export const AppState = {
     return result;
   },
 
-  // 递归收集控件使用的字体字符
+  // 递归收集控件使用的字体字符（与后端 collect_fonts / 预览 collectWidgetFontChars 对齐）
   _collectFontChars(widgets, fontUsageMap) {
     for (const w of widgets) {
       const fam = w.fontFamily;
@@ -754,12 +743,22 @@ export const AppState = {
         const key = `${fam}|${sz}|${bpp}`;
         if (!fontUsageMap.has(key)) fontUsageMap.set(key, new Set());
         const chars = fontUsageMap.get(key);
-        const texts = [w.text, w.titleText, w.options, w.leftSlots, w.rightSlots, w.xLabels];
+        const texts = [w.text, w.titleText, w.options, w.leftSlots, w.rightSlots, w.xLabels,
+          w.msgText, w.leftBtnText, w.rightBtnText, w.sliceLabels];
         for (const t of texts) {
           if (t) for (const ch of String(t)) { if (ch.charCodeAt(0) >= 0x20) chars.add(ch); }
         }
-        if (w.type === 'chart') {
+        if (w.type === 'chart' || w.type === 'gauge' || w.type === 'scope') {
           for (const ch of '0123456789.-') chars.add(ch);
+        }
+        if (w.type === 'battery' && w.showPercentage) {
+          for (const ch of '0123456789%') chars.add(ch);
+        }
+        if (w.type === 'numberkbd') {
+          for (const ch of ' !\"#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~') chars.add(ch);
+        }
+        if (w.type === 'keyboard') {
+          for (const ch of 'qwertyuiopasdfghjklzxcvbnmQWERTYUIOPASDFGHJKLZXCVBNM1234567890_-.,:+-/*=%!?#<>\\@${}[];\"\'') chars.add(ch);
         }
       }
       for (const child of (w.widgets || [])) {
@@ -772,7 +771,6 @@ export const AppState = {
   async saveProject() {
     try {
       let filePath = this.projectPath;
-      const isFirstSave = !filePath;
       if (!filePath) {
         filePath = await save({
           title: '保存项目',
@@ -783,14 +781,12 @@ export const AppState = {
         if (!filePath.endsWith('.sgl') && !filePath.endsWith('.json')) filePath += '.sgl';
       }
       await invoke('save_project', { path: filePath, project: this.getProjectForRust() });
-      // 仅首次保存时重新加载项目（同步资源路径），已保存过的项目不再重新加载以避免触发渲染
-      if (isFirstSave) {
-        const saved = await invoke('load_project', { path: filePath });
-        if (saved) {
-          this.project = saved;
-          this.migrateProject();
-          this.listeners.forEach(fn => fn());
-        }
+      // 每次保存后重新加载，同步 resources/fonts 相对路径与控件 fontFamily（避免绝对/相对路径不一致误报）
+      const saved = await invoke('load_project', { path: filePath });
+      if (saved) {
+        this.project = saved;
+        this.migrateProject();
+        this.listeners.forEach(fn => fn());
       }
       this.projectPath = filePath;
       this.save();
@@ -843,7 +839,7 @@ export const AppState = {
       project.pages.forEach(page => {
         if (!Array.isArray(page.widgets)) return;
         page.widgets.forEach(w => {
-          if (w.type === 'ext_img') {
+          if (w.type === 'img_ext') {
             if (w.pivotX === '') w.pivotX = null;
             if (w.pivotY === '') w.pivotY = null;
           }
@@ -956,6 +952,7 @@ export const AppState = {
     }
     // 为每个 widget 补充缺失的默认属性（不覆盖已有值）
     // 解决旧项目文件因结构体字段缺失导致属性丢失的问题
+    const fonts = p.resources.fonts || [];
     if (Array.isArray(p.pages)) {
       p.pages.forEach(page => {
         if (!Array.isArray(page.widgets)) return;
@@ -967,6 +964,32 @@ export const AppState = {
                 w[key] = defaults[key];
               }
             });
+          }
+          // 纠正 / 回退 fontFamily：
+          // 1) 路径写法不一致但能匹配 → 规范 path
+          // 2) 指向已删除/未添加的字体（如仍写 Bold，资源只剩 Black）→ 回退到第一个资源字体
+          if (w.hasOwnProperty('fontFamily') && fonts.length > 0) {
+            const cur = w.fontFamily;
+            if (cur && cur !== 'default') {
+              const famNorm = String(cur).replace(/\\/g, '/').trim();
+              const famFile = famNorm.split('/').pop().toLowerCase();
+              const hit = fonts.find(f => {
+                const pathNorm = String(f.path || '').replace(/\\/g, '/').trim();
+                const pathFile = pathNorm.split('/').pop().toLowerCase();
+                const nameFile = String(f.name || '').replace(/\\/g, '/').split('/').pop().toLowerCase();
+                return pathNorm === famNorm
+                  || (famFile && pathFile === famFile)
+                  || (famFile && nameFile === famFile)
+                  || f.name === cur;
+              });
+              if (hit && hit.path) {
+                if (hit.path !== cur) w.fontFamily = hit.path;
+              } else if (fonts[0] && fonts[0].path) {
+                w.fontFamily = fonts[0].path;
+              }
+            } else if ((!cur || cur === 'default') && fonts[0] && fonts[0].path) {
+              w.fontFamily = fonts[0].path;
+            }
           }
           // 2dball 控件：SGL circle_zoom 将控件尺寸改为 2*radius，同步 width/height
           if (w.type === '2dball' && w.radius != null && w.radius > 0) {

@@ -131,7 +131,7 @@ const PAGE_TEMPLATES = {
         <div class="panel-title">🏷️ 项目信息</div>
         <div class="form-group">
           <label class="form-label">项目名称</label>
-          <input type="text" class="form-input" id="prop-project-name" />
+          <input type="text" class="form-input" id="prop-project-name" placeholder="未保存时可留空，保存后自动填充" />
         </div>
         <div class="form-row">
           <div class="form-group" style="margin-bottom:0;">

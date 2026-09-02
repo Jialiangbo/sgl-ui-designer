@@ -572,6 +572,58 @@ fn find_glyph_index(font: &FontData, code: u32) -> Option<usize> {
     None
 }
 
+/// 用于 C 注释的字形标注，例如 `U+0041 'A'` / `U+4E2D '中'`
+fn glyph_comment_label(code: u32) -> String {
+    let Some(ch) = char::from_u32(code) else {
+        return format!("U+{:04X}", code);
+    };
+    // 控制字符、不可打印、或会破坏 C 注释的字符只写码点
+    if code < 0x20 || (0x7F..=0x9F).contains(&code) || ch == '*' || ch == '/' {
+        return format!("U+{:04X}", code);
+    }
+    match ch {
+        '\'' => "U+0027 '\\''".to_string(),
+        '\\' => "U+005C '\\\\'".to_string(),
+        _ => format!("U+{:04X} '{}'", code, ch),
+    }
+}
+
+/// 生成字模字符一览注释（对齐 sgl_font_conv：顶部字符速览 + 逐字码点表，便于核对遗漏）
+fn write_glyph_inventory_comment(out: &mut String, glyphs: &[Glyph]) {
+    out.push_str("/*\n");
+    out.push_str(&format!(" * Glyph inventory: {} glyphs\n", glyphs.len()));
+    out.push_str(" * Preview (printable):\n * ");
+    let mut col = 0usize;
+    for g in glyphs {
+        let code = g.code;
+        if code < 0x20 || (0x7F..=0x9F).contains(&code) {
+            continue;
+        }
+        if let Some(ch) = char::from_u32(code) {
+            if ch == '*' || ch == '/' {
+                continue;
+            }
+            out.push(ch);
+            col += 1;
+            if col % 32 == 0 {
+                out.push_str("\n * ");
+            }
+        }
+    }
+    if col % 32 != 0 {
+        out.push('\n');
+    } else if col > 0 {
+        // 刚好换行后已有 " * "，补一行结束
+    } else {
+        out.push('\n');
+    }
+    out.push_str(" *\n * Codepoint list:\n");
+    for (i, g) in glyphs.iter().enumerate() {
+        out.push_str(&format!(" *   [{:4}] {}\n", i, glyph_comment_label(g.code)));
+    }
+    out.push_str(" */\n\n");
+}
+
 /// 生成 SGL 字模 C 文件内容（严格对齐 output_writer.c write_sgl_font）
 fn write_sgl_font(font_name: &str, font: &FontData, cmap: &CmapPlan, bpp: i32, compress: bool) -> String {
     let glyph_count = font.glyphs.len();
@@ -623,15 +675,18 @@ fn write_sgl_font(font_name: &str, font: &FontData, cmap: &CmapPlan, bpp: i32, c
     out.push_str(" * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\n");
     out.push_str(" * SOFTWARE.\n");
     out.push_str(" */\n\n");
-    out.push_str("#include <sgl_core.h>\n");
+    out.push_str("#include <sgl.h>\n");
     out.push_str("#include <sgl_font.h>\n\n");
+
+    // 字符一览（对齐原版 sgl_font_conv 顶部字符注释，并附带码点表便于核对）
+    write_glyph_inventory_comment(&mut out, &font.glyphs);
 
     // Phase 3: font_bitmap[]
     out.push_str("static const uint8_t font_bitmap[] = {\n");
     for i in 0..glyph_count {
         let g = &font.glyphs[i];
         let cg = &compiled[i];
-        out.push_str(&format!("    /* U+{:04X} */\n", g.code));
+        out.push_str(&format!("    /* {} */\n", glyph_comment_label(g.code)));
         for b in 0..cg.bitmap_data.len() {
             if b % 8 == 0 {
                 out.push_str("    ");
@@ -666,14 +721,15 @@ fn write_sgl_font(font_name: &str, font: &FontData, cmap: &CmapPlan, bpp: i32, c
                 if let Some(gi) = find_glyph_index(font, code) {
                     let g = &font.glyphs[gi];
                     out.push_str(&format!(
-                        ",\n    {{.bitmap_index = {}, .adv_w = {}, .box_w = {}, .box_h = {}, .ofs_x = {}, .ofs_y = {}}}",
-                        compiled[gi].bitmap_offset, g.adv_w, g.box_w, g.box_h, g.ofs_x, g.ofs_y
+                        ",\n    {{.bitmap_index = {}, .adv_w = {}, .box_w = {}, .box_h = {}, .ofs_x = {}, .ofs_y = {}}} /* {} */",
+                        compiled[gi].bitmap_offset, g.adv_w, g.box_w, g.box_h, g.ofs_x, g.ofs_y,
+                        glyph_comment_label(code)
                     ));
                 } else {
                     // Dummy entry for gap
                     out.push_str(&format!(
-                        ",\n    {{.bitmap_index = {}, .adv_w = 0, .box_w = 0, .box_h = 0, .ofs_x = 0, .ofs_y = 0}}",
-                        total_bitmap_size
+                        ",\n    {{.bitmap_index = {}, .adv_w = 0, .box_w = 0, .box_h = 0, .ofs_x = 0, .ofs_y = 0}} /* gap U+{:04X} */",
+                        total_bitmap_size, code
                     ));
                 }
             }
@@ -684,13 +740,14 @@ fn write_sgl_font(font_name: &str, font: &FontData, cmap: &CmapPlan, bpp: i32, c
                 if let Some(gi) = find_glyph_index(font, code) {
                     let g = &font.glyphs[gi];
                     out.push_str(&format!(
-                        ",\n    {{.bitmap_index = {}, .adv_w = {}, .box_w = {}, .box_h = {}, .ofs_x = {}, .ofs_y = {}}}",
-                        compiled[gi].bitmap_offset, g.adv_w, g.box_w, g.box_h, g.ofs_x, g.ofs_y
+                        ",\n    {{.bitmap_index = {}, .adv_w = {}, .box_w = {}, .box_h = {}, .ofs_x = {}, .ofs_y = {}}} /* {} */",
+                        compiled[gi].bitmap_offset, g.adv_w, g.box_w, g.box_h, g.ofs_x, g.ofs_y,
+                        glyph_comment_label(code)
                     ));
                 } else {
                     out.push_str(&format!(
-                        ",\n    {{.bitmap_index = {}, .adv_w = 0, .box_w = 0, .box_h = 0, .ofs_x = 0, .ofs_y = 0}}",
-                        total_bitmap_size
+                        ",\n    {{.bitmap_index = {}, .adv_w = 0, .box_w = 0, .box_h = 0, .ofs_x = 0, .ofs_y = 0}} /* missing {} */",
+                        total_bitmap_size, glyph_comment_label(code)
                     ));
                 }
             }
@@ -755,17 +812,18 @@ fn write_sgl_font(font_name: &str, font: &FontData, cmap: &CmapPlan, bpp: i32, c
     }
     out.push_str("};\n\n");
 
-    // Phase 7: sgl_font_t
+    // Phase 7: sgl_font_t — 字段顺序必须与 sgl_core.h 中 sgl_font_t 声明一致
+    // (bitmap, table, font_table_size, font_height, unicode, unicode_num, base_line, bpp, compress)
     out.push_str(&format!("const sgl_font_t {} = {{\n", font_name));
     out.push_str("    .bitmap = font_bitmap,\n");
     out.push_str("    .table = font_table,\n");
     out.push_str("    .font_table_size = SGL_ARRAY_SIZE(font_table),\n");
     out.push_str(&format!("    .font_height = {},\n", font.font_height));
+    out.push_str("    .unicode = font_unicode,\n");
+    out.push_str("    .unicode_num = SGL_ARRAY_SIZE(font_unicode),\n");
     out.push_str(&format!("    .base_line = {},\n", font.base_line));
     out.push_str(&format!("    .bpp = {},\n", bpp));
     out.push_str(&format!("    .compress = {},\n", if should_compress(bpp, compress) { 1 } else { 0 }));
-    out.push_str("    .unicode = font_unicode,\n");
-    out.push_str("    .unicode_num = SGL_ARRAY_SIZE(font_unicode),\n");
     out.push_str("};\n");
 
     out
@@ -792,6 +850,48 @@ fn write_sgl_font(font_name: &str, font: &FontData, cmap: &CmapPlan, bpp: i32, c
 ///
 /// # 返回
 /// SGL 字模 C 文件内容
+
+/// Script group (align output_writer.c script_group)
+fn script_group(code: u32) -> usize {
+    if (0x0020..=0x007E).contains(&code) || (0x00A0..=0x024F).contains(&code) {
+        0
+    } else if (0x2E80..=0x9FFF).contains(&code)
+        || (0xF900..=0xFAFF).contains(&code)
+        || (0xFF00..=0xFFEF).contains(&code)
+    {
+        1
+    } else if (0x0400..=0x04FF).contains(&code) {
+        2
+    } else {
+        3
+    }
+}
+
+/// Smart monospace (align output_writer.c apply_smart_mono)
+fn apply_smart_mono(font: &mut FontData) {
+    let mut max_box_w = [0i32; 4];
+    for g in &font.glyphs {
+        let grp = script_group(g.code);
+        if g.box_w > max_box_w[grp] {
+            max_box_w[grp] = g.box_w;
+        }
+    }
+    for g in &mut font.glyphs {
+        let mw = max_box_w[script_group(g.code)];
+        g.adv_w = mw * 16;
+        g.ofs_x = if g.box_w > 0 { (mw - g.box_w) / 2 } else { 0 };
+    }
+}
+
+fn apply_spacing(font: &mut FontData, spacing: i32) {
+    if spacing <= 0 {
+        return;
+    }
+    for g in &mut font.glyphs {
+        g.adv_w += spacing * 16;
+    }
+}
+
 pub fn generate_font_c(
     font_path: &Path,
     size: i32,
@@ -799,6 +899,8 @@ pub fn generate_font_c(
     symbols: &str,
     compress: bool,
     font_name: &str,
+    spacing: i32,
+    smart_mono: bool,
 ) -> Result<String, String> {
     if size <= 0 {
         return Err(format!("字号必须大于 0，当前值: {}", size));
@@ -828,10 +930,17 @@ pub fn generate_font_c(
         return Err("字体渲染失败：没有有效字形".to_string());
     }
 
-    // 3. 构建 cmap 子表（对齐 C: cmap_build）
+        // 3. smart-mono + spacing (align C Phase 1.5 / 1.6)
+    let mut font_data = font_data;
+    if smart_mono {
+        apply_smart_mono(&mut font_data);
+    }
+    apply_spacing(&mut font_data, spacing);
+
+    // 4. build cmap
     let rendered_codes: Vec<u32> = font_data.glyphs.iter().map(|g| g.code).collect();
     let cmap = cmap_build(&rendered_codes);
 
-    // 4. 生成 C 文件（对齐 C: write_sgl_font）
+    // 5. write C
     Ok(write_sgl_font(font_name, &font_data, &cmap, bpp, compress))
 }

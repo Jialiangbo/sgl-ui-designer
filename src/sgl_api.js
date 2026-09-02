@@ -173,7 +173,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><polygon points="12,2 22,9 18,21 6,21 2,9"/></svg>',
     category: 'basic',
     defaultSize: [80, 80],
-    properties: ['fillColor', 'borderColor', 'borderWidth', 'alpha', 'vertices', 'text', 'textColor', 'fontFamily', 'fontSize', 'fontBpp', 'locked']
+    properties: ['fillColor', 'borderColor', 'borderWidth', 'alpha', 'vertices', 'text', 'textColor', 'fontFamily', 'fontSize', 'fontBpp', 'fontGlyphExtra', 'fontIncludeAscii', 'fontGlyphRanges', 'fontSpacing', 'fontSmartMono', 'locked']
   },
 
   // ============ 按钮与交互 ============
@@ -183,7 +183,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="3"/><line x1="8" y1="12" x2="16" y2="12"/></svg>',
     category: 'interactive',
     defaultSize: [120, 40],
-    properties: ['text', 'color', 'textColor', 'borderColor', 'borderWidth', 'radius', 'alpha', 'align', 'fontSize', 'fontFamily', 'fontBpp', 'pixmap', 'pixmapFormat', 'locked']
+    properties: ['text', 'color', 'textColor', 'borderColor', 'borderWidth', 'radius', 'alpha', 'align', 'fontSize', 'fontFamily', 'fontBpp', 'fontGlyphExtra', 'fontIncludeAscii', 'fontGlyphRanges', 'fontSpacing', 'fontSmartMono', 'pixmap', 'pixmapFormat', 'locked']
   },
   {
     type: 'switch',
@@ -199,7 +199,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="8" rx="1"/><polyline points="5,7 7,9 11,4"/></svg>',
     category: 'interactive',
     defaultSize: [120, 24],
-    properties: ['text', 'status', 'color', 'textColor', 'boxColor', 'checkColor', 'fontSize', 'fontFamily', 'fontBpp', 'alpha', 'radius', 'locked']
+    properties: ['text', 'status', 'color', 'textColor', 'boxColor', 'checkColor', 'fontSize', 'fontFamily', 'fontBpp', 'fontGlyphExtra', 'fontIncludeAscii', 'fontGlyphRanges', 'fontSpacing', 'fontSmartMono', 'alpha', 'radius', 'locked']
   },
   {
     type: 'slider',
@@ -215,7 +215,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="5" height="5" rx="1"/><rect x="10" y="3" width="5" height="5" rx="1"/><rect x="17" y="3" width="5" height="5" rx="1"/><rect x="3" y="10" width="5" height="5" rx="1"/><rect x="10" y="10" width="5" height="5" rx="1"/><rect x="17" y="10" width="5" height="5" rx="1"/><rect x="3" y="17" width="5" height="5" rx="1"/><rect x="10" y="17" width="12" height="5" rx="1"/></svg>',
     category: 'interactive',
     defaultSize: [200, 240],
-    properties: ['cellColor', 'btnColor', 'textColor', 'borderColor', 'borderWidth', 'radius', 'btnMargin', 'btnBorderWidth', 'btnBorderColor', 'btnRadius', 'btnPixmap', 'pixmap', 'pixmapFormat', 'fontSize', 'fontFamily', 'fontBpp', 'alpha', 'locked']
+    properties: ['cellColor', 'btnColor', 'textColor', 'borderColor', 'borderWidth', 'radius', 'btnMargin', 'btnBorderWidth', 'btnBorderColor', 'btnRadius', 'btnPixmap', 'pixmap', 'pixmapFormat', 'fontSize', 'fontFamily', 'fontBpp', 'fontGlyphExtra', 'fontIncludeAscii', 'fontGlyphRanges', 'fontSpacing', 'fontSmartMono', 'alpha', 'locked']
   },
   {
     type: 'keyboard',
@@ -223,7 +223,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><line x1="6" y1="10" x2="6" y2="10.01"/><line x1="10" y1="10" x2="10" y2="10.01"/><line x1="14" y1="10" x2="14" y2="10.01"/><line x1="18" y1="10" x2="18" y2="10.01"/><line x1="8" y1="14" x2="16" y2="14"/></svg>',
     category: 'interactive',
     defaultSize: [320, 180],
-    properties: ['cellColor', 'btnColor', 'textColor', 'borderColor', 'borderWidth', 'radius', 'mainAlpha', 'borderAlpha', 'btnRadius', 'btnAlpha', 'btnMainAlpha', 'btnBorderColor', 'btnBorderWidth', 'btnBorderAlpha', 'btnPixmap', 'pixmap', 'pixmapFormat', 'textarea', 'fontSize', 'fontFamily', 'fontBpp', 'alpha', 'locked']
+    properties: ['cellColor', 'btnColor', 'textColor', 'borderColor', 'borderWidth', 'radius', 'mainAlpha', 'borderAlpha', 'btnRadius', 'btnAlpha', 'btnMainAlpha', 'btnBorderColor', 'btnBorderWidth', 'btnBorderAlpha', 'btnPixmap', 'pixmap', 'pixmapFormat', 'textarea', 'fontSize', 'fontFamily', 'fontBpp', 'fontGlyphExtra', 'fontIncludeAscii', 'fontGlyphRanges', 'fontSpacing', 'fontSmartMono', 'alpha', 'locked']
   },
 
   // ============ 文本相关 ============
@@ -233,7 +233,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><text x="4" y="17" font-size="14" font-weight="bold" fill="currentColor" stroke="none">Aa</text></svg>',
     category: 'text',
     defaultSize: [120, 24],
-    properties: ['text', 'textColor', 'bgColor', 'align', 'fontSize', 'fontFamily', 'fontBpp', 'alpha', 'textOffsetX', 'radius', 'longMode', 'longModeSpeed', 'textBuffer', 'textFmt', 'textFmtDynamic', 'locked']
+    properties: ['text', 'textColor', 'bgColor', 'align', 'fontSize', 'fontFamily', 'fontBpp', 'fontGlyphExtra', 'fontIncludeAscii', 'fontGlyphRanges', 'fontSpacing', 'fontSmartMono', 'alpha', 'textOffsetX', 'radius', 'longMode', 'longModeSpeed', 'textBuffer', 'textFmt', 'textFmtDynamic', 'locked']
   },
   {
     type: 'textbox',
@@ -241,7 +241,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><line x1="7" y1="9" x2="17" y2="9"/><line x1="7" y1="13" x2="13" y2="13"/></svg>',
     category: 'text',
     defaultSize: [160, 36],
-    properties: ['text', 'textColor', 'bgColor', 'borderColor', 'borderWidth', 'radius', 'fontSize', 'fontFamily', 'fontBpp', 'lineMargin', 'pixmap', 'pixmapFormat', 'alpha', 'locked']
+    properties: ['text', 'textColor', 'bgColor', 'borderColor', 'borderWidth', 'radius', 'fontSize', 'fontFamily', 'fontBpp', 'fontGlyphExtra', 'fontIncludeAscii', 'fontGlyphRanges', 'fontSpacing', 'fontSmartMono', 'lineMargin', 'pixmap', 'pixmapFormat', 'alpha', 'locked']
   },
   {
     type: 'textline',
@@ -249,7 +249,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="10" rx="2"/><line x1="7" y1="12" x2="17" y2="12"/></svg>',
     category: 'text',
     defaultSize: [160, 30],
-    properties: ['text', 'textColor', 'bgColor', 'bgTransparent', 'radius', 'fontSize', 'fontFamily', 'fontBpp', 'alpha', 'edgeMargin', 'lineMargin', 'locked']
+    properties: ['text', 'textColor', 'bgColor', 'bgTransparent', 'radius', 'fontSize', 'fontFamily', 'fontBpp', 'fontGlyphExtra', 'fontIncludeAscii', 'fontGlyphRanges', 'fontSpacing', 'fontSmartMono', 'alpha', 'edgeMargin', 'lineMargin', 'locked']
   },
   {
     type: 'textlist',
@@ -257,7 +257,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><line x1="5" y1="7" x2="19" y2="7"/><line x1="5" y1="12" x2="19" y2="12"/><line x1="5" y1="17" x2="19" y2="17"/></svg>',
     category: 'text',
     defaultSize: [160, 120],
-    properties: ['options', 'textColor', 'selectedColor', 'bgColor', 'borderColor', 'borderWidth', 'radius', 'fontSize', 'fontFamily', 'fontBpp', 'alpha', 'pixmap', 'locked']
+    properties: ['options', 'textColor', 'selectedColor', 'bgColor', 'borderColor', 'borderWidth', 'radius', 'fontSize', 'fontFamily', 'fontBpp', 'fontGlyphExtra', 'fontIncludeAscii', 'fontGlyphRanges', 'fontSpacing', 'fontSmartMono', 'alpha', 'pixmap', 'locked']
   },
 
   // ============ 显示/进度 ============
@@ -283,7 +283,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><path d="M4 17a8 8 0 0 1 16 0"/><line x1="12" y1="14" x2="15" y2="8"/><circle cx="12" cy="14" r="1"/></svg>',
     category: 'display',
     defaultSize: [100, 100],
-    properties: ['value', 'bgColor', 'arcColor', 'scaleColor', 'pointerColor', 'textColor', 'hubColor', 'scaleWidth', 'pointerWidth', 'arcWidth', 'hubRadius', 'scaleLength', 'scaleStart', 'scaleStep', 'scaleAngle', 'textInterval', 'scaleWarning', 'startAngle', 'endAngle', 'fontSize', 'fontFamily', 'fontBpp', 'alpha', 'locked']
+    properties: ['value', 'bgColor', 'arcColor', 'scaleColor', 'pointerColor', 'textColor', 'hubColor', 'scaleWidth', 'pointerWidth', 'arcWidth', 'hubRadius', 'scaleLength', 'scaleStart', 'scaleStep', 'scaleAngle', 'textInterval', 'scaleWarning', 'startAngle', 'endAngle', 'fontSize', 'fontFamily', 'fontBpp', 'fontGlyphExtra', 'fontIncludeAscii', 'fontGlyphRanges', 'fontSpacing', 'fontSmartMono', 'alpha', 'locked']
   },
   {
     type: 'spectrum',
@@ -299,7 +299,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><rect x="2" y="7" width="18" height="10" rx="2"/><rect x="5" y="9" width="10" height="6" rx="1"/><line x1="22" y1="10" x2="22" y2="14"/></svg>',
     category: 'display',
     defaultSize: [60, 30],
-    properties: ['level', 'fillColor', 'lowColor', 'mediumColor', 'highColor', 'bgColor', 'borderColor', 'vertical', 'charging', 'chargingColor', 'showPercentage', 'textColor', 'fontSize', 'fontFamily', 'fontBpp', 'alpha', 'locked']
+    properties: ['level', 'fillColor', 'lowColor', 'mediumColor', 'highColor', 'bgColor', 'borderColor', 'vertical', 'charging', 'chargingColor', 'showPercentage', 'textColor', 'fontSize', 'fontFamily', 'fontBpp', 'fontGlyphExtra', 'fontIncludeAscii', 'fontGlyphRanges', 'fontSpacing', 'fontSmartMono', 'alpha', 'locked']
   },
   {
     type: 'led',
@@ -325,7 +325,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="7" y1="7" x2="7" y2="7.01"/></svg>',
     category: 'special',
     defaultSize: [240, 160],
-    properties: ['titleText', 'titleTextColor', 'msgText', 'msgColor', 'leftBtnText', 'leftBtnColor', 'leftBtnTextColor', 'rightBtnText', 'rightBtnColor', 'rightBtnTextColor', 'bgColor', 'borderColor', 'borderWidth', 'radius', 'titleHeight', 'msgOffsetX', 'msgOffsetY', 'msgLineMargin', 'mainAlpha', 'borderAlpha', 'pixmap', 'fontSize', 'fontFamily', 'fontBpp', 'alpha', 'locked']
+    properties: ['titleText', 'titleTextColor', 'msgText', 'msgColor', 'leftBtnText', 'leftBtnColor', 'leftBtnTextColor', 'rightBtnText', 'rightBtnColor', 'rightBtnTextColor', 'bgColor', 'borderColor', 'borderWidth', 'radius', 'titleHeight', 'msgOffsetX', 'msgOffsetY', 'msgLineMargin', 'mainAlpha', 'borderAlpha', 'pixmap', 'fontSize', 'fontFamily', 'fontBpp', 'fontGlyphExtra', 'fontIncludeAscii', 'fontGlyphRanges', 'fontSpacing', 'fontSmartMono', 'alpha', 'locked']
   },
   {
     type: 'viewlist',
@@ -341,7 +341,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><polyline points="8,11 12,15 16,11"/></svg>',
     category: 'interactive',
     defaultSize: [160, 36],
-    properties: ['options', 'optionDynamic', 'selectedColor', 'textColor', 'bgColor', 'borderColor', 'borderWidth', 'radius', 'visibleRows', 'alpha', 'fontSize', 'fontFamily', 'fontBpp', 'locked']
+    properties: ['options', 'optionDynamic', 'selectedColor', 'textColor', 'bgColor', 'borderColor', 'borderWidth', 'radius', 'visibleRows', 'alpha', 'fontSize', 'fontFamily', 'fontBpp', 'fontGlyphExtra', 'fontIncludeAscii', 'fontGlyphRanges', 'fontSpacing', 'fontSmartMono', 'locked']
   },
   {
     type: 'roller',
@@ -349,7 +349,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><rect x="6" y="4" width="12" height="16" rx="2"/><line x1="10" y1="9" x2="14" y2="9"/><line x1="10" y1="12" x2="14" y2="12"/><line x1="10" y1="15" x2="14" y2="15"/></svg>',
     category: 'interactive',
     defaultSize: [120, 120],
-    properties: ['options', 'optionDynamic', 'visibleRows', 'infiniteMode', 'textColor', 'selectedColor', 'bgColor', 'borderColor', 'borderWidth', 'radius', 'fontSize', 'fontFamily', 'fontBpp', 'alpha', 'locked']
+    properties: ['options', 'optionDynamic', 'visibleRows', 'infiniteMode', 'textColor', 'selectedColor', 'bgColor', 'borderColor', 'borderWidth', 'radius', 'fontSize', 'fontFamily', 'fontBpp', 'fontGlyphExtra', 'fontIncludeAscii', 'fontGlyphRanges', 'fontSpacing', 'fontSmartMono', 'alpha', 'locked']
   },
   {
     type: 'box',
@@ -365,7 +365,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="8" x2="21" y2="8"/><circle cx="7" cy="5.5" r="1"/><circle cx="11" cy="5.5" r="1"/><circle cx="15" cy="5.5" r="1"/></svg>',
     category: 'special',
     defaultSize: [240, 180],
-    properties: ['titleText', 'titleBgColor', 'titleTextColor', 'closeBtnColor', 'bgColor', 'borderColor', 'borderWidth', 'radius', 'titleHeight', 'titleAlign', 'pixmap', 'pixmapFormat', 'fontSize', 'fontFamily', 'fontBpp', 'alpha', 'locked']
+    properties: ['titleText', 'titleBgColor', 'titleTextColor', 'closeBtnColor', 'bgColor', 'borderColor', 'borderWidth', 'radius', 'titleHeight', 'titleAlign', 'pixmap', 'pixmapFormat', 'fontSize', 'fontFamily', 'fontBpp', 'fontGlyphExtra', 'fontIncludeAscii', 'fontGlyphRanges', 'fontSpacing', 'fontSmartMono', 'alpha', 'locked']
   },
   {
     type: 'qrcode',
@@ -381,7 +381,8 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><polyline points="5,12 8,8 11,14 14,10 17,12 20,12"/></svg>',
     category: 'display',
     defaultSize: [200, 120],
-    properties: ['channelCount', 'channelBuffers', 'channelWaveformColors', 'maxDisplayPoints', 'rangeMin', 'rangeMax', 'autoScale', 'showYLabels', 'yLabelColor', 'lineWidth', 'gridLine', 'bgColor', 'gridColor', 'borderColor', 'borderWidth', 'alpha', 'fontSize', 'fontFamily', 'fontBpp', 'locked']
+    // 对齐 sgl_scope.h：无 autoScale / Y 标签 / 线宽 / 网格样式 / 最大点数
+    properties: ['channelCount', 'channelWaveformColors', 'dataBuffer', 'waveColorsBuffer', 'vMin', 'vMax', 'bgColor', 'gridColor', 'borderColor', 'borderWidth', 'alpha', 'locked']
   },
   {
     type: 'chart',
@@ -389,7 +390,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><polyline points="4,18 8,10 12,14 16,6 20,12"/></svg>',
     category: 'display',
     defaultSize: [200, 120],
-    properties: ['chartType', 'bgColor', 'bgAlpha', 'borderColor', 'minValue', 'maxValue', 'autoScale', 'showYLabels', 'gridColor', 'gridDashed', 'textColor', 'fontSize', 'fontFamily', 'fontBpp', 'seriesCount', 'seriesData', 'seriesColors', 'seriesLineAlpha', 'seriesLineWidth', 'xLabels', 'barSpacing', 'orientation', 'openAnim', 'openAnimDir', 'openAnimDuration', 'startAngle', 'innerRadiusRate', 'radius', 'sliceAlpha', 'smooth', 'legendEnable', 'legendPos', 'legendDir', 'legendTextColor', 'legendAreaSize', 'legendAlpha', 'legendBoxSize', 'legendPadding', 'legendItemGap', 'legendBg', 'legendBgColor', 'legendBorderColor', 'sliceCount', 'sliceValues', 'sliceColors', 'sliceLabels', 'alpha', 'locked']
+    properties: ['chartType', 'bgColor', 'bgAlpha', 'borderColor', 'minValue', 'maxValue', 'autoScale', 'showYLabels', 'gridColor', 'gridDashed', 'textColor', 'fontSize', 'fontFamily', 'fontBpp', 'fontGlyphExtra', 'fontIncludeAscii', 'fontGlyphRanges', 'fontSpacing', 'fontSmartMono', 'seriesCount', 'seriesData', 'seriesColors', 'seriesLineAlpha', 'seriesLineWidth', 'xLabels', 'barSpacing', 'orientation', 'openAnim', 'openAnimDir', 'openAnimDuration', 'startAngle', 'innerRadiusRate', 'radius', 'sliceAlpha', 'smooth', 'legendEnable', 'legendPos', 'legendDir', 'legendTextColor', 'legendAreaSize', 'legendAlpha', 'legendBoxSize', 'legendPadding', 'legendItemGap', 'legendBg', 'legendBgColor', 'legendBorderColor', 'sliceCount', 'sliceValues', 'sliceColors', 'sliceLabels', 'alpha', 'locked']
   },
   {
     type: 'canvas',
@@ -421,7 +422,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="6" rx="1"/><text x="4" y="9.5" font-size="4" fill="currentColor">L</text><text x="18" y="9.5" font-size="4" fill="currentColor">R</text></svg>',
     category: 'special',
     defaultSize: [240, 24],
-    properties: ['bgColor', 'bgAlpha', 'radius', 'leftMargin', 'rightMargin', 'slotSpace', 'leftSlots', 'rightSlots', 'slotColor', 'slotAlpha', 'fontSize', 'fontFamily', 'fontBpp', 'locked']
+    properties: ['bgColor', 'bgAlpha', 'radius', 'leftMargin', 'rightMargin', 'slotSpace', 'leftSlots', 'rightSlots', 'slotColor', 'slotAlpha', 'fontSize', 'fontFamily', 'fontBpp', 'fontGlyphExtra', 'fontIncludeAscii', 'fontGlyphRanges', 'fontSpacing', 'fontSmartMono', 'locked']
   },
   {
     type: 'launcher',
@@ -429,7 +430,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/></svg>',
     category: 'special',
     defaultSize: [240, 320],
-    properties: ['iconSize', 'gridCol', 'gridRow', 'marginLeft', 'marginTop', 'marginRight', 'marginBottom', 'labelColor', 'navigbarColor', 'currentPage', 'fontFamily', 'fontSize', 'fontBpp', 'locked']
+    properties: ['iconSize', 'gridCol', 'gridRow', 'marginLeft', 'marginTop', 'marginRight', 'marginBottom', 'labelColor', 'navigbarColor', 'currentPage', 'fontFamily', 'fontSize', 'fontBpp', 'fontGlyphExtra', 'fontIncludeAscii', 'fontGlyphRanges', 'fontSpacing', 'fontSmartMono', 'locked']
   },
   {
     type: 'analogclock',
@@ -461,7 +462,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 18 0"/><text x="12" y="16" text-anchor="middle" font-size="10">A</text></svg>',
     category: 'text',
     defaultSize: [80, 30],
-    properties: ['text', 'textColor', 'bgFlag', 'bgColor', 'radius', 'align', 'fontSize', 'fontFamily', 'fontBpp', 'angle', 'offsetX', 'offsetY', 'textBuffer', 'textFmt', 'textFmtDynamic', 'alpha', 'locked']
+    properties: ['text', 'textColor', 'bgFlag', 'bgColor', 'radius', 'align', 'fontSize', 'fontFamily', 'fontBpp', 'fontGlyphExtra', 'fontIncludeAscii', 'fontGlyphRanges', 'fontSpacing', 'fontSmartMono', 'angle', 'offsetX', 'offsetY', 'textBuffer', 'textFmt', 'textFmtDynamic', 'alpha', 'locked']
   },
   {
     type: 'label_ext',
@@ -469,7 +470,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><text x="4" y="17" font-size="14" font-weight="bold" fill="currentColor" stroke="none" transform="rotate(-15 12 12)">Aa</text></svg>',
     category: 'text',
     defaultSize: [120, 24],
-    properties: ['text', 'textColor', 'bgColor', 'bgFlag', 'align', 'fontSize', 'fontFamily', 'fontBpp', 'alpha', 'textOffsetX', 'textOffsetY', 'textRotation', 'radius', 'textBuffer', 'textFmt', 'textFmtDynamic', 'locked']
+    properties: ['text', 'textColor', 'bgColor', 'bgFlag', 'align', 'fontSize', 'fontFamily', 'fontBpp', 'fontGlyphExtra', 'fontIncludeAscii', 'fontGlyphRanges', 'fontSpacing', 'fontSmartMono', 'alpha', 'textOffsetX', 'textOffsetY', 'textRotation', 'radius', 'textBuffer', 'textFmt', 'textFmtDynamic', 'locked']
   }
 ];
 
@@ -477,7 +478,7 @@ export const SGL_WIDGET_TYPES = [
 // type: 'text' | 'number' | 'color' | 'bool' | 'select'
 export const PROP_META = {
   text: { label: '文本内容', type: 'text' },
-  textBuffer: { label: '文本缓冲区', type: 'text', placeholder: '格式: 缓冲区变量名,大小' },
+  textBuffer: { label: '文本缓冲区', type: 'text', placeholder: '格式: 变量名,大小（如 my_buf,64），导出时自动生成变量' },
   textFmt: { label: '格式化文本(静态缓冲)', type: 'text', placeholder: '不含格式参数的字符串，如 Value: 0' },
   textFmtDynamic: { label: '格式化文本(动态缓冲)', type: 'text', placeholder: '不含格式参数的字符串，如 Value: 0' },
   qrText: { label: '二维码内容', type: 'text' },
@@ -572,6 +573,11 @@ export const PROP_META = {
   fontSize: { label: '字体大小', type: 'number', min: 8, max: 72 },
   fontFamily: { label: '字体文件', type: 'select', options: [] },
   fontBpp: { label: '抗锯齿', type: 'select', options: [[1, '1'], [2, '2'], [4, '4']] },
+  fontGlyphExtra: { label: '字模额外文本', type: 'text', placeholder: '导出时并入字模，画布可不显示' },
+  fontIncludeAscii: { label: '包含 ASCII', type: 'bool' },
+  fontGlyphRanges: { label: '字模范围', type: 'text', placeholder: '例: 0x4E00-0x9FA5,A-Z,0-9' },
+  fontSpacing: { label: '字符间距', type: 'number', min: 0, max: 32 },
+  fontSmartMono: { label: '智能等宽', type: 'bool' },
   status: { label: '开关状态', type: 'bool' },
   bgFlag: { label: '启用背景', type: 'bool' },
   charging: { label: '充电状态', type: 'bool' },
@@ -623,7 +629,8 @@ export const PROP_META = {
   msgOffsetY: { label: '消息文本 Y 偏移', type: 'number', min: 0, max: 100 },
   textRotation: { label: '文本旋转 (°)', type: 'number', min: -180, max: 180 },
   longMode: { label: '长文本滚动', type: 'bool' },
-  longModeSpeed: { label: '滚动速度(ms)', type: 'number', min: 100, max: 10000 },
+  // 对齐 SGL sgl_label_set_long_mode：speed = 像素/秒（非毫秒）
+  longModeSpeed: { label: '滚动速度(px/s)', type: 'number', min: 1, max: 500 },
   titleHeight: { label: '标题栏高度', type: 'number', min: 0, max: 100 },
   msgLineMargin: { label: '消息行间距', type: 'number', min: 0, max: 50 },
   dashed: { label: '线型', type: 'select', options: [[false, '实线'], [true, '虚线']] },
@@ -660,7 +667,7 @@ export const PROP_META = {
   pixmapNum: { label: '图片数量', type: 'number', min: 1, max: 200 },
   pixmapIndex: { label: '当前图片索引', type: 'number', min: 0, max: 200 },
   optionDynamic: { label: '动态选项副本', type: 'bool' },
-  readOps: { label: '外部读取函数', type: 'text', placeholder: '例如: flash_read_data' },
+  readOps: { label: '外部读取函数', type: 'text', placeholder: '例如: flash_read（签名: void (*)(const size_t, uint8_t*, uint32_t)）' },
   pixmapNext: { label: '切换到下一张图片', type: 'bool' },
   bgTransparent: { label: '背景透明', type: 'bool' },
   barValues: { label: '初始柱值', type: 'text', placeholder: '用 ; 分隔，如: 10;20;30' },
@@ -707,14 +714,18 @@ export const PROP_META = {
   fillAlpha: { label: '填充透明度', type: 'number', min: 0, max: 255 },
   exitAnswer: { label: '退出时返回答案', type: 'bool' },
   channelCount: { label: '通道数量', type: 'number', min: 1, max: 4 },
-  channelBuffers: { label: '通道数据缓冲区', type: 'text', placeholder: '例如: ch0_buf,128;ch1_buf,128' },
-  channelWaveformColors: { label: '通道波形颜色', type: 'text', placeholder: '用 ; 分隔，如: #ff0000;#00ff00' },
-  maxDisplayPoints: { label: '最大显示点数', type: 'number', min: 1, max: 1000 },
-  rangeMin: { label: '量程最小值', type: 'number', min: -32768, max: 32767 },
-  rangeMax: { label: '量程最大值', type: 'number', min: -32768, max: 32767 },
-  lineWidth: { label: '波形线宽', type: 'number', min: 1, max: 10 },
-  gridLine: { label: '网格线样式', type: 'select', options: [[0, '实线'], [1, '虚线']] },
-  yLabelColor: { label: 'Y轴标签颜色', type: 'color' },
+  channelWaveformColors: { label: '通道波形颜色', type: 'text', placeholder: '用 ; 分隔，如: #00FF00;#FF0000' },
+  dataBuffer: { label: '采样缓冲变量', type: 'text', placeholder: '空=自动生成 int16_t 数组；或填外部变量名' },
+  waveColorsBuffer: { label: '颜色数组变量', type: 'text', placeholder: '空=自动生成 sgl_color_t 数组；或填外部变量名' },
+  vMin: { label: '量程下限 v_min', type: 'number', min: -32768, max: 32767 },
+  vMax: { label: '量程上限 v_max', type: 'number', min: -32768, max: 32767 },
+  // 以下为兼容旧项目字段（属性面板不再展示）
+  channelBuffers: { label: '通道数据缓冲区(旧)', type: 'text' },
+  maxDisplayPoints: { label: '最大显示点数(旧)', type: 'number', min: 1, max: 1000 },
+  rangeMin: { label: '量程最小值(旧)', type: 'number', min: -32768, max: 32767 },
+  rangeMax: { label: '量程最大值(旧)', type: 'number', min: -32768, max: 32767 },
+  gridLine: { label: '网格线样式(旧)', type: 'select', options: [[0, '实线'], [1, '虚线']] },
+  yLabelColor: { label: 'Y轴标签颜色(旧)', type: 'color' },
   visibleRows: { label: '最大可见行数', type: 'number', min: 1, max: 50 },
   itemHeight: { label: '项目高度', type: 'number', min: 10, max: 500 },
   itemMarginX: { label: '项目水平边距', type: 'number', min: 0, max: 50 },
@@ -747,6 +758,94 @@ export const PROP_META = {
   onKeyEnter: { label: 'KEY_ENTER 确认键', type: 'text', event: 'SGL_EVENT_KEY_ENTER' },
   onKeyEsc: { label: 'KEY_ESC 取消键', type: 'text', event: 'SGL_EVENT_KEY_ESC' },
 };
+
+/** 可打印 ASCII（0x20-0x7E），与后端 collect_fonts / ASCII 字模配置一致 */
+export const PRINTABLE_ASCII =
+  ' !"#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~';
+
+function parseGlyphCodepoint(s) {
+  const t = String(s || '').trim();
+  if (!t) return null;
+  const hex = t.match(/^(?:0x|U\+|u\+)([0-9a-fA-F]+)$/);
+  if (hex) {
+    const n = parseInt(hex[1], 16);
+    return Number.isFinite(n) ? n : null;
+  }
+  if ([...t].length === 1) return t.codePointAt(0);
+  if (/^\d+$/.test(t)) {
+    const n = parseInt(t, 10);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+/** 展开字模范围规格：`0x4E00-0x9FA5,A-Z,0-9`（多段用逗号/分号分隔），最多约 30000 字 */
+export function expandGlyphRanges(spec) {
+  const out = [];
+  const seen = new Set();
+  const MAX = 30000;
+  const parts = String(spec || '').split(/[,;\n|]+/);
+  for (const raw of parts) {
+    const part = raw.trim();
+    if (!part || out.length >= MAX) continue;
+    const dash = part.indexOf('-');
+    const tilde = part.indexOf('~');
+    const sep = dash >= 0 ? dash : tilde;
+    if (sep > 0) {
+      const a = parseGlyphCodepoint(part.slice(0, sep));
+      const b = parseGlyphCodepoint(part.slice(sep + 1));
+      if (a == null || b == null) continue;
+      const lo = Math.min(a, b);
+      const hi = Math.max(a, b);
+      for (let cp = lo; cp <= hi && out.length < MAX; cp++) {
+        if (cp < 0x20) continue;
+        try {
+          const ch = String.fromCodePoint(cp);
+          if (!seen.has(ch)) {
+            seen.add(ch);
+            out.push(ch);
+          }
+        } catch (_) { /* invalid */ }
+      }
+    } else {
+      const cp = parseGlyphCodepoint(part);
+      if (cp != null) {
+        try {
+          const ch = String.fromCodePoint(cp);
+          if ((ch.codePointAt(0) >= 0x20 || ch === ' ') && !seen.has(ch)) {
+            seen.add(ch);
+            out.push(ch);
+          }
+        } catch (_) { /* invalid */ }
+      } else {
+        for (const ch of part) {
+          if (out.length >= MAX) break;
+          if ((ch.charCodeAt(0) >= 0x20 || ch === ' ') && !seen.has(ch)) {
+            seen.add(ch);
+            out.push(ch);
+          }
+        }
+      }
+    }
+  }
+  return out;
+}
+
+/** 把控件的字模覆盖属性（额外文本 / ASCII / 范围）并入字符集合；同字体同字号在 Map/Set 层去重 */
+export function addGlyphCoverageChars(charsSet, widget) {
+  if (!charsSet || !widget) return;
+  if (widget.fontIncludeAscii) {
+    for (const ch of PRINTABLE_ASCII) charsSet.add(ch);
+  }
+  if (widget.fontGlyphExtra) {
+    for (const ch of String(widget.fontGlyphExtra)) {
+      if (ch.charCodeAt(0) >= 0x20 || ch === ' ') charsSet.add(ch);
+    }
+  }
+  if (widget.fontGlyphRanges) {
+    for (const ch of expandGlyphRanges(widget.fontGlyphRanges)) charsSet.add(ch);
+  }
+}
 
 // ============ 各控件类型支持的事件列表 ============
 export const WIDGET_EVENTS = {
@@ -832,57 +931,58 @@ export function createWidgetDefaults(type) {
     case 'line':
       return { ...base, color: '#000000', lineWidth: 1, x1: 0, y1: 0, x2: null, y2: null, dashed: false, dashLen: 0, gapLen: 0 };
     case 'polygon':
-      return { ...base, fillColor: '#7F7F7F', borderColor: '#000000', borderWidth: 1, alpha: 255, vertices: '40,5;70,30;60,75;20,75;10,30', text: '', textColor: '#000000', fontFamily: '', fontSize: 14, fontBpp: 4 };
+      return { ...base, fillColor: '#7F7F7F', borderColor: '#000000', borderWidth: 1, alpha: 255, vertices: '40,5;70,30;60,75;20,75;10,30', text: '', textColor: '#000000', fontFamily: '', fontSize: 14, fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false };
     case 'button':
-      return { ...base, text: '按钮', color: '#ffffff', textColor: '#000000', borderColor: '#000000', borderWidth: 2, radius: 0, align: 'CENTER', fontSize: 14, fontFamily: '', fontBpp: 4, pixmap: '', pixmapFormat: 'RGB565' };
+      return { ...base, text: '按钮', color: '#ffffff', textColor: '#000000', borderColor: '#000000', borderWidth: 2, radius: 0, align: 'CENTER', fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, pixmap: '', pixmapFormat: 'RGB565' };
     case 'switch':
       return { ...base, status: false, onColor: '#FFFFFF', bgColor: '#000000', knobColor: '#808080', borderColor: '#000000', borderWidth: 2, radius: 0, knobMargin: 1, pixmap: '', pixmapFormat: 'RGB565' };
     case 'checkbox':
-      return { ...base, text: '选项', color: '#000000', textColor: '#000000', boxColor: '#2196F3', checkColor: '#FFFFFF', status: false, radius: 0, fontSize: 14, fontFamily: '', fontBpp: 4 };
+      return { ...base, text: '选项', color: '#000000', textColor: '#000000', boxColor: '#2196F3', checkColor: '#FFFFFF', status: false, radius: 0, fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false };
     case 'slider':
       return { ...base, value: 50, direct: 0, fillColor: '#8b5cf6', trackColor: '#313149', knobColor: '#ffffff', borderWidth: 2, radius: 4, thickness: 10 };
     case 'numberkbd':
-      return { ...base, cellColor: '#FFFFFF', borderColor: '#000000', borderWidth: 2, radius: 0, fontSize: 14, fontFamily: '', fontBpp: 4, btnColor: '#FFFFFF', textColor: '#000000', btnMargin: 5, btnBorderWidth: 1, btnBorderColor: '#000000', btnRadius: 0, btnPixmap: '', pixmap: '' };
+      return { ...base, cellColor: '#FFFFFF', borderColor: '#000000', borderWidth: 2, radius: 0, fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, btnColor: '#FFFFFF', textColor: '#000000', btnMargin: 5, btnBorderWidth: 1, btnBorderColor: '#000000', btnRadius: 0, btnPixmap: '', pixmap: '' };
     case 'keyboard':
-      return { ...base, cellColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, mainAlpha: 255, borderAlpha: 255, fontSize: 14, fontFamily: '', fontBpp: 4, btnColor: '#404040', textColor: '#000000', btnRadius: 0, btnAlpha: 255, btnMainAlpha: 255, btnBorderColor: '#000000', btnBorderWidth: 0, btnBorderAlpha: 255, btnPixmap: '', pixmap: '', textarea: '' };
+      return { ...base, cellColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, mainAlpha: 255, borderAlpha: 255, fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, btnColor: '#404040', textColor: '#000000', btnRadius: 0, btnAlpha: 255, btnMainAlpha: 255, btnBorderColor: '#000000', btnBorderWidth: 0, btnBorderAlpha: 255, btnPixmap: '', pixmap: '', textarea: '' };
     case 'label':
-      return { ...base, text: '标签文本', textColor: '#000000', bgColor: 'transparent', align: 'LEFT_MID', fontSize: 14, fontFamily: '', fontBpp: 4, textOffsetX: 0, radius: 0, textBuffer: '', textFmt: '', textFmtDynamic: '', longMode: false, longModeSpeed: 3000 };
+      return { ...base, text: '标签文本', textColor: '#000000', bgColor: 'transparent', align: 'LEFT_MID', fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, textOffsetX: 0, radius: 0, textBuffer: '', textFmt: '', textFmtDynamic: '', longMode: false, longModeSpeed: 50 };
     case 'textbox':
-      return { ...base, text: 'textbox', textColor: '#000000', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 10, fontSize: 14, fontFamily: '', fontBpp: 4, lineMargin: 1, pixmap: '', pixmapFormat: 'RGB565' };
+      return { ...base, text: 'textbox', textColor: '#000000', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 10, fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, lineMargin: 1, pixmap: '', pixmapFormat: 'RGB565' };
     case 'textline':
-      return { ...base, text: 'textline', textColor: '#000000', bgColor: '#FFFFFF', bgTransparent: false, radius: 0, fontSize: 14, fontFamily: '', fontBpp: 4, edgeMargin: 0, lineMargin: 1 };
+      return { ...base, text: 'textline', textColor: '#000000', bgColor: '#FFFFFF', bgTransparent: false, radius: 0, fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, edgeMargin: 0, lineMargin: 1 };
     case 'textlist':
-      return { ...base, options: '选项1\n选项2\n选项3', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, fontSize: 12, fontFamily: '', fontBpp: 4, textColor: '#000000', selectedColor: '#808080', pixmap: '' };
+      return { ...base, options: '选项1\n选项2\n选项3', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, fontSize: 12, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, textColor: '#000000', selectedColor: '#808080', pixmap: '' };
     case 'progress':
       return { ...base, value: 50, fillColor: '#FFFFFF', trackColor: '#000000', borderColor: '#000000', borderWidth: 2, radius: 0, fillGap: 4, fillRadius: 0, fillWidth: 4 };
     case 'bar':
       return { ...base, value: 50, barColor: '#000000', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 2, radius: 0, barWidth: 20, barNum: 10, barMode: 0, barHatColor: '#808080', barHatHeight: 2, direct: 0 };
     case 'gauge':
-      return { ...base, value: 0, arcColor: '#FFFFFF', scaleColor: '#FFFFFF', pointerColor: '#FF0000', hubColor: '#FFFFFF', bgColor: '#000000', startAngle: 30, endAngle: 330, arcWidth: 2, scaleWidth: 1, scaleLength: 0, pointerWidth: 2, hubRadius: 0, scaleStart: 0, scaleStep: 10, scaleAngle: 15, textInterval: 3, scaleWarning: 32767, fontSize: 12, fontFamily: '', fontBpp: 4 };
+      return { ...base, value: 0, arcColor: '#FFFFFF', scaleColor: '#FFFFFF', pointerColor: '#FF0000', hubColor: '#FFFFFF', bgColor: '#000000', startAngle: 30, endAngle: 330, arcWidth: 2, scaleWidth: 1, scaleLength: 0, pointerWidth: 2, hubRadius: 0, scaleStart: 0, scaleStep: 10, scaleAngle: 15, textInterval: 3, scaleWarning: 32767, fontSize: 12, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false };
     case 'spectrum':
       return { ...base, barColor: '#000000', barHatColor: '#808080', barNum: 12, barMode: 2, barHatHeight: 3, barValues: '' };
     case 'battery':
-      return { ...base, level: 100, fillColor: '', lowColor: '#E74C3C', mediumColor: '#F39C12', highColor: '#2ECC71', bgColor: '#1E1E1E', borderColor: '#B4B4B4', vertical: true, charging: false, chargingColor: '#F1C40F', showPercentage: false, textColor: '#FFFFFF', fontSize: 14, fontFamily: '', fontBpp: 4, alpha: 140 };
+      return { ...base, level: 100, fillColor: '', lowColor: '#E74C3C', mediumColor: '#F39C12', highColor: '#2ECC71', bgColor: '#1E1E1E', borderColor: '#B4B4B4', vertical: true, charging: false, chargingColor: '#F1C40F', showPercentage: false, textColor: '#FFFFFF', fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, alpha: 140 };
     case 'icon':
       return { ...base, color: '#000000', align: 'CENTER', icon: '' };
     case 'led':
       return { ...base, onColor: '#FFFFFF', offColor: '#000000', bgColor: '#000000', radius: 10, status: false };
     case 'msgbox':
-      return { ...base, titleText: 'Message Box', titleTextColor: '#000000', msgText: 'NULL', msgColor: '#000000', leftBtnText: 'YES', leftBtnColor: '#C7C7C7', leftBtnTextColor: '#000000', rightBtnText: 'NO', rightBtnColor: '#C7C7C7', rightBtnTextColor: '#000000', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 2, radius: 0, titleHeight: 0, msgOffsetX: 0, msgOffsetY: 0, msgLineMargin: 1, mainAlpha: 255, borderAlpha: 255, pixmap: '', fontSize: 14, fontFamily: '', fontBpp: 4, exitAnswer: false };
+      return { ...base, titleText: 'Message Box', titleTextColor: '#000000', msgText: 'NULL', msgColor: '#000000', leftBtnText: 'YES', leftBtnColor: '#C7C7C7', leftBtnTextColor: '#000000', rightBtnText: 'NO', rightBtnColor: '#C7C7C7', rightBtnTextColor: '#000000', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 2, radius: 0, titleHeight: 0, msgOffsetX: 0, msgOffsetY: 0, msgLineMargin: 1, mainAlpha: 255, borderAlpha: 255, pixmap: '', fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, exitAnswer: false };
     case 'viewlist':
       return { ...base, bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, itemHeight: 20, itemMarginX: 1, itemMarginY: 1, pixmap: '' };
     case 'dropdown':
-      return { ...base, options: '选项1\n选项2\n选项3', optionDynamic: false, textColor: '#000000', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, fontSize: 14, fontFamily: '', fontBpp: 4, selectedColor: '#808080', visibleRows: 5 };
+      return { ...base, options: '选项1\n选项2\n选项3', optionDynamic: false, textColor: '#000000', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, selectedColor: '#808080', visibleRows: 5 };
     case 'box':
       return { ...base, bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, scrollbarColor: '#C8C8C8', showVScrollbar: true, showHScrollbar: true, elasticUp: 0, elasticDown: 0, elasticLeft: 0, elasticRight: 0, pixmap: '' };
     case 'win':
-      return { ...base, titleText: '窗口标题', titleBgColor: '#808080', titleTextColor: '#000000', closeBtnColor: '#FF5A50', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 0, radius: 0, pixmap: '', pixmapFormat: 'RGB565', fontSize: 14, fontFamily: '', fontBpp: 4, titleHeight: 0, titleAlign: 'LEFT_MID' };
+      return { ...base, titleText: '窗口标题', titleBgColor: '#808080', titleTextColor: '#000000', closeBtnColor: '#FF5A50', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 0, radius: 0, pixmap: '', pixmapFormat: 'RGB565', fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, titleHeight: 0, titleAlign: 'LEFT_MID' };
     case 'qrcode':
       return { ...base, cellColor: '#000000', bgColor: '#ffffff', cellRadius: 0, qrText: 'hello', scale: 4, zone: 1, version: 5, ecc: 0, logo: '', pixmapFormat: 'RGB565', logoRadius: 0 };
     case 'scope':
-      return { ...base, channelCount: 1, channelBuffers: '', channelWaveformColors: '#00FF00', maxDisplayPoints: 0, rangeMin: 0, rangeMax: 65535, autoScale: true, showYLabels: true, yLabelColor: '#FFFFFF', lineWidth: 2, gridLine: 0, bgColor: '#000000', gridColor: '#323232', borderColor: '#969696', borderWidth: 0, alpha: 255, fontSize: 14, fontFamily: '', fontBpp: 4 };
+      // 对齐 sgl_scope_create 默认：v_min=-32768, v_max=32767, border_width=1, bg=黑
+      return { ...base, channelCount: 1, channelWaveformColors: '#00FF00', dataBuffer: '', waveColorsBuffer: '', vMin: -32768, vMax: 32767, bgColor: '#000000', gridColor: '#808080', borderColor: '#969696', borderWidth: 1, alpha: 255 };
     case 'chart':
-      return { ...base, chartType: 'linechart', bgColor: '#000000', bgAlpha: 255, borderColor: '#000000', borderWidth: 2, radius: 0, minValue: 0, maxValue: 100, autoScale: true, showYLabels: true, gridColor: '#3C3C3C', gridDashed: true, textColor: '#000000', fontSize: 12, fontFamily: '', fontBpp: 4, seriesCount: 1, seriesData: '10,40,25,60,45,80,35', seriesColors: '#FFFFFF', seriesLineAlpha: '255', seriesLineWidth: '2', xLabels: '', startAngle: 0, innerRadiusRate: 0, radius: 0, smooth: false, sliceAlpha: '', legendEnable: true, legendPos: 2, legendDir: 0, legendTextColor: '#FFFFFF', legendAreaSize: 60, legendAlpha: 255, legendBoxSize: 10, legendPadding: 4, legendItemGap: 4, legendBg: false, legendBgColor: '#000000', legendBorderColor: '#000000', sliceCount: 3, sliceValues: '30;50;20', sliceColors: '#ff0000;#00ff00;#0000ff', sliceLabels: 'A;B;C', barSpacing: 4, orientation: 0, openAnim: false, openAnimDir: 0, openAnimDuration: 600, alpha: 255 };
+      return { ...base, chartType: 'linechart', bgColor: '#000000', bgAlpha: 255, borderColor: '#000000', borderWidth: 2, radius: 0, minValue: 0, maxValue: 100, autoScale: true, showYLabels: true, gridColor: '#3C3C3C', gridDashed: true, textColor: '#000000', fontSize: 12, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, seriesCount: 1, seriesData: '10,40,25,60,45,80,35', seriesColors: '#FFFFFF', seriesLineAlpha: '255', seriesLineWidth: '2', xLabels: '', startAngle: 0, innerRadiusRate: 0, radius: 0, smooth: false, sliceAlpha: '', legendEnable: true, legendPos: 2, legendDir: 0, legendTextColor: '#FFFFFF', legendAreaSize: 60, legendAlpha: 255, legendBoxSize: 10, legendPadding: 4, legendItemGap: 4, legendBg: false, legendBgColor: '#000000', legendBorderColor: '#000000', sliceCount: 3, sliceValues: '30;50;20', sliceColors: '#ff0000;#00ff00;#0000ff', sliceLabels: 'A;B;C', barSpacing: 4, orientation: 0, openAnim: false, openAnimDir: 0, openAnimDuration: 600, alpha: 255 };
     case 'canvas':
       return { ...base, painterCb: '', privateData: '' };
     case '2dball':
@@ -890,21 +990,21 @@ export function createWidgetDefaults(type) {
     case 'sprite':
       return { ...base, pixmap: '', pixmapFormat: 'ARGB4444', alpha: 255 };
     case 'statusbar':
-      return { ...base, bgColor: '#141414', bgAlpha: 128, radius: 0, leftMargin: 5, rightMargin: 5, slotSpace: 4, leftSlots: '', rightSlots: '', slotColor: '#ffffff', slotAlpha: 255, fontSize: 14, fontFamily: '', fontBpp: 4 };
+      return { ...base, bgColor: '#141414', bgAlpha: 128, radius: 0, leftMargin: 5, rightMargin: 5, slotSpace: 4, leftSlots: '', rightSlots: '', slotColor: '#ffffff', slotAlpha: 255, fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false };
     case 'launcher':
-      return { ...base, iconSize: 48, gridCol: 4, gridRow: 5, marginLeft: 20, marginTop: 40, marginRight: 20, marginBottom: 60, labelColor: '#e4e4e7', navigbarColor: '#F5DEB3', currentPage: 0, fontSize: 14, fontFamily: '', fontBpp: 4 };
+      return { ...base, iconSize: 48, gridCol: 4, gridRow: 5, marginLeft: 20, marginTop: 40, marginRight: 20, marginBottom: 60, labelColor: '#e4e4e7', navigbarColor: '#F5DEB3', currentPage: 0, fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false };
     case 'roller':
-      return { ...base, options: '选项1\n选项2\n选项3', optionDynamic: false, visibleRows: 3, infiniteMode: false, textColor: '#000000', selectedColor: '#808080', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, fontSize: 14, fontFamily: '', fontBpp: 4 };
+      return { ...base, options: '选项1\n选项2\n选项3', optionDynamic: false, visibleRows: 3, infiniteMode: false, textColor: '#000000', selectedColor: '#808080', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false };
     case 'analogclock':
-      return { ...base, hourPtrColor: '#ffffff', minPtrColor: '#FFFFFF', secPtrColor: '#FF0000', scaleColor: '#FFFFFF', textColor: '#FFFFFF', hubColor: '#FF0000', bgColor: '#000000', borderColor: '#FFFFFF', borderWidth: 0, hour: 0, minute: 0, second: 0, hourPtrWidth: 5, minPtrWidth: 5, secPtrWidth: 2, scaleWidth: 1, scaleLength: 8, hubRadius: 6, fontFamily: '', fontSize: 12, fontBpp: 4 };
+      return { ...base, hourPtrColor: '#ffffff', minPtrColor: '#FFFFFF', secPtrColor: '#FF0000', scaleColor: '#FFFFFF', textColor: '#FFFFFF', hubColor: '#FF0000', bgColor: '#000000', borderColor: '#FFFFFF', borderWidth: 0, hour: 0, minute: 0, second: 0, hourPtrWidth: 5, minPtrWidth: 5, secPtrWidth: 2, scaleWidth: 1, scaleLength: 8, hubRadius: 6, fontFamily: '', fontSize: 12, fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false };
     case 'img_ext':
       return { ...base, pixmap: '', pixmapFormat: 'RGB565', rotation: 0, scaleUniform: 0, pivotX: '', pivotY: '', readOps: '', alpha: 255 };
     case 'img':
       return { ...base, pixmap: '', pixmapFormat: 'RGB565', readOps: '', alpha: 255 };
     case 'arc_label':
-      return { ...base, text: '标签', textColor: '#000000', bgFlag: false, bgColor: '#FFFFFF', radius: 0, align: 'CENTER', fontSize: 14, fontFamily: '', fontBpp: 4, angle: 0, offsetX: 0, offsetY: 0, textBuffer: '', textFmt: '', textFmtDynamic: '', alpha: 255 };
+      return { ...base, text: '标签', textColor: '#000000', bgFlag: false, bgColor: '#FFFFFF', radius: 0, align: 'CENTER', fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, angle: 0, offsetX: 0, offsetY: 0, textBuffer: '', textFmt: '', textFmtDynamic: '', alpha: 255 };
     case 'label_ext':
-      return { ...base, text: '标签文本', textColor: '#000000', bgColor: 'transparent', bgFlag: false, align: 'LEFT_MID', fontSize: 14, fontFamily: '', fontBpp: 4, textOffsetX: 0, textOffsetY: 0, textRotation: 0, radius: 0, textBuffer: '', textFmt: '', textFmtDynamic: '', alpha: 255 };
+      return { ...base, text: '标签文本', textColor: '#000000', bgColor: 'transparent', bgFlag: false, align: 'LEFT_MID', fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, textOffsetX: 0, textOffsetY: 0, textRotation: 0, radius: 0, textBuffer: '', textFmt: '', textFmtDynamic: '', alpha: 255 };
     default:
       return { ...base, color: '#8b5cf6', bgColor: '#313149', borderColor: '#3d3d5c', borderWidth: 1, radius: 4 };
   }
@@ -918,44 +1018,44 @@ export const WIDGET_DEFAULTS = {
   ring: { color: '#FFFFFF', radiusIn: -1, radiusOut: -1, alpha: 255 },
   arc: { color: '#000000', bgColor: '#FFFFFF', alpha: 255, mode: 0, radiusIn: -1, radiusOut: -1, startAngle: 0, endAngle: 360 },
   line: { color: '#000000', lineWidth: 1, x1: 0, y1: 0, x2: null, y2: null, dashed: false, dashLen: 0, gapLen: 0, alpha: 255 },
-  polygon: { fillColor: '#7F7F7F', borderColor: '#000000', borderWidth: 1, alpha: 255, vertices: '40,5;70,30;60,75;20,75;10,30', text: '', textColor: '#000000', fontFamily: '', fontSize: 14, fontBpp: 4 },
-  button: { text: '按钮', color: '#ffffff', textColor: '#000000', borderColor: '#000000', borderWidth: 2, radius: 0, align: 'CENTER', fontSize: 14, fontFamily: '', fontBpp: 4, alpha: 255, pixmap: '', pixmapFormat: 'RGB565' },
+  polygon: { fillColor: '#7F7F7F', borderColor: '#000000', borderWidth: 1, alpha: 255, vertices: '40,5;70,30;60,75;20,75;10,30', text: '', textColor: '#000000', fontFamily: '', fontSize: 14, fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false },
+  button: { text: '按钮', color: '#ffffff', textColor: '#000000', borderColor: '#000000', borderWidth: 2, radius: 0, align: 'CENTER', fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, alpha: 255, pixmap: '', pixmapFormat: 'RGB565' },
   switch: { status: false, onColor: '#FFFFFF', bgColor: '#000000', knobColor: '#808080', borderColor: '#000000', borderWidth: 2, radius: 0, knobMargin: 1, alpha: 255, pixmap: '', pixmapFormat: 'RGB565' },
-  checkbox: { text: '选项', color: '#000000', textColor: '#000000', boxColor: '#2196F3', checkColor: '#FFFFFF', status: false, radius: 0, fontSize: 14, fontFamily: '', fontBpp: 4, alpha: 255 },
+  checkbox: { text: '选项', color: '#000000', textColor: '#000000', boxColor: '#2196F3', checkColor: '#FFFFFF', status: false, radius: 0, fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, alpha: 255 },
   slider: { value: 50, direct: 0, fillColor: '#000000', trackColor: '#808080', knobColor: '#000000', borderWidth: 2, radius: 4, thickness: 10, alpha: 255 },
-  numberkbd: { cellColor: '#FFFFFF', borderColor: '#000000', borderWidth: 2, radius: 0, fontFamily: '', fontSize: 14, fontBpp: 4, btnColor: '#FFFFFF', textColor: '#000000', btnMargin: 5, btnBorderWidth: 1, btnBorderColor: '#000000', btnRadius: 0, btnPixmap: '', pixmap: '', pixmapFormat: 'RGB565', alpha: 255 },
-  keyboard: { cellColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, mainAlpha: 255, borderAlpha: 255, fontFamily: '', fontSize: 14, fontBpp: 4, btnColor: '#404040', textColor: '#000000', btnRadius: 0, btnAlpha: 255, btnMainAlpha: 255, btnBorderColor: '#000000', btnBorderWidth: 0, btnBorderAlpha: 255, btnPixmap: '', pixmap: '', pixmapFormat: 'RGB565', textarea: '', alpha: 255 },
-  label: { text: '标签文本', textColor: '#000000', bgColor: 'transparent', align: 'CENTER', fontSize: 14, fontFamily: '', fontBpp: 4, textOffsetX: 0, radius: 0, textBuffer: '', textFmt: '', textFmtDynamic: '', alpha: 255 },
-  textbox: { text: 'textbox', textColor: '#000000', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 10, fontSize: 14, fontFamily: '', fontBpp: 4, lineMargin: 1, pixmap: '', pixmapFormat: 'RGB565', alpha: 255 },
-  textline: { text: 'textline', textColor: '#000000', bgColor: '#FFFFFF', bgTransparent: false, radius: 0, fontSize: 14, fontFamily: '', fontBpp: 4, edgeMargin: 0, lineMargin: 1, alpha: 255 },
-  textlist: { options: '选项1\n选项2\n选项3', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, fontSize: 12, fontFamily: '', fontBpp: 4, textColor: '#000000', selectedColor: '#808080', pixmap: '', alpha: 255 },
+  numberkbd: { cellColor: '#FFFFFF', borderColor: '#000000', borderWidth: 2, radius: 0, fontFamily: '', fontSize: 14, fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, btnColor: '#FFFFFF', textColor: '#000000', btnMargin: 5, btnBorderWidth: 1, btnBorderColor: '#000000', btnRadius: 0, btnPixmap: '', pixmap: '', pixmapFormat: 'RGB565', alpha: 255 },
+  keyboard: { cellColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, mainAlpha: 255, borderAlpha: 255, fontFamily: '', fontSize: 14, fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, btnColor: '#404040', textColor: '#000000', btnRadius: 0, btnAlpha: 255, btnMainAlpha: 255, btnBorderColor: '#000000', btnBorderWidth: 0, btnBorderAlpha: 255, btnPixmap: '', pixmap: '', pixmapFormat: 'RGB565', textarea: '', alpha: 255 },
+  label: { text: '标签文本', textColor: '#000000', bgColor: 'transparent', align: 'CENTER', fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, textOffsetX: 0, radius: 0, textBuffer: '', textFmt: '', textFmtDynamic: '', alpha: 255 },
+  textbox: { text: 'textbox', textColor: '#000000', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 10, fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, lineMargin: 1, pixmap: '', pixmapFormat: 'RGB565', alpha: 255 },
+  textline: { text: 'textline', textColor: '#000000', bgColor: '#FFFFFF', bgTransparent: false, radius: 0, fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, edgeMargin: 0, lineMargin: 1, alpha: 255 },
+  textlist: { options: '选项1\n选项2\n选项3', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, fontSize: 12, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, textColor: '#000000', selectedColor: '#808080', pixmap: '', alpha: 255 },
   progress: { value: 50, fillColor: '#FFFFFF', fillAlpha: 255, trackColor: '#000000', trackAlpha: 255, borderColor: '#000000', borderWidth: 2, radius: 0, fillGap: 4, fillRadius: 0, fillWidth: 4, pixmap: '', pixmapFormat: 'RGB565', alpha: 255 },
   bar: { value: 50, barColor: '#000000', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 2, radius: 0, barWidth: 20, barNum: 10, barMode: 0, barHatColor: '#808080', barHatHeight: 2, direct: 0, pixmap: '', pixmapFormat: 'RGB565', alpha: 255 },
-  gauge: { value: 0, arcColor: '#FFFFFF', scaleColor: '#FFFFFF', pointerColor: '#FF0000', hubColor: '#FFFFFF', bgColor: '#000000', startAngle: 30, endAngle: 330, arcWidth: 2, scaleWidth: 1, scaleLength: 0, pointerWidth: 2, hubRadius: 0, scaleStart: 0, scaleStep: 10, scaleAngle: 15, textInterval: 3, scaleWarning: 32767, fontSize: 12, fontFamily: '', fontBpp: 4, alpha: 255 },
+  gauge: { value: 0, arcColor: '#FFFFFF', scaleColor: '#FFFFFF', pointerColor: '#FF0000', hubColor: '#FFFFFF', bgColor: '#000000', startAngle: 30, endAngle: 330, arcWidth: 2, scaleWidth: 1, scaleLength: 0, pointerWidth: 2, hubRadius: 0, scaleStart: 0, scaleStep: 10, scaleAngle: 15, textInterval: 3, scaleWarning: 32767, fontSize: 12, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, alpha: 255 },
   spectrum: { barColor: '#000000', barHatColor: '#808080', barNum: 12, barMode: 2, barHatHeight: 3, barValues: '', alpha: 255 },
-  battery: { level: 100, fillColor: '', lowColor: '#E74C3C', mediumColor: '#F39C12', highColor: '#2ECC71', bgColor: '#1E1E1E', borderColor: '#B4B4B4', vertical: true, charging: false, chargingColor: '#F1C40F', showPercentage: false, textColor: '#FFFFFF', fontSize: 14, fontFamily: '', fontBpp: 4, alpha: 140 },
+  battery: { level: 100, fillColor: '', lowColor: '#E74C3C', mediumColor: '#F39C12', highColor: '#2ECC71', bgColor: '#1E1E1E', borderColor: '#B4B4B4', vertical: true, charging: false, chargingColor: '#F1C40F', showPercentage: false, textColor: '#FFFFFF', fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, alpha: 140 },
   icon: { color: '#000000', align: 'CENTER', icon: '', alpha: 255 },
   led: { onColor: '#FFFFFF', offColor: '#000000', bgColor: '#000000', radius: 0, status: false, alpha: 255 },
-  msgbox: { titleText: 'Message Box', titleTextColor: '#000000', msgText: 'NULL', msgColor: '#000000', leftBtnText: 'YES', leftBtnColor: '#C8C8C8', leftBtnTextColor: '#000000', rightBtnText: 'NO', rightBtnColor: '#C8C8C8', rightBtnTextColor: '#000000', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 2, radius: 0, titleHeight: 0, msgOffsetX: 0, msgOffsetY: 0, msgLineMargin: 1, mainAlpha: 255, borderAlpha: 255, pixmap: '', pixmapFormat: 'RGB565', fontFamily: '', fontSize: 14, fontBpp: 4, exitAnswer: false, alpha: 255 },
+  msgbox: { titleText: 'Message Box', titleTextColor: '#000000', msgText: 'NULL', msgColor: '#000000', leftBtnText: 'YES', leftBtnColor: '#C8C8C8', leftBtnTextColor: '#000000', rightBtnText: 'NO', rightBtnColor: '#C8C8C8', rightBtnTextColor: '#000000', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 2, radius: 0, titleHeight: 0, msgOffsetX: 0, msgOffsetY: 0, msgLineMargin: 1, mainAlpha: 255, borderAlpha: 255, pixmap: '', pixmapFormat: 'RGB565', fontFamily: '', fontSize: 14, fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, exitAnswer: false, alpha: 255 },
   viewlist: { bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, itemHeight: 20, itemMarginX: 1, itemMarginY: 1, pixmap: '', alpha: 255 },
-  dropdown: { options: '选项1\n选项2\n选项3', optionDynamic: false, textColor: '#000000', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, fontSize: 14, fontFamily: '', fontBpp: 4, selectedColor: '#808080', visibleRows: 5, alpha: 255 },
+  dropdown: { options: '选项1\n选项2\n选项3', optionDynamic: false, textColor: '#000000', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, selectedColor: '#808080', visibleRows: 5, alpha: 255 },
   scroll: { color: '#FFFFFF', borderColor: '#000000', borderWidth: 2, radius: 0, width: 10, value: 0, direct: 1, hidden: false, bindTarget: '', alpha: 255 },
   box: { bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, scrollbarColor: '#C8C8C8', showVScrollbar: true, showHScrollbar: true, elasticUp: 0, elasticDown: 0, elasticLeft: 0, elasticRight: 0, pixmap: '', alpha: 255 },
-  win: { titleText: '窗口标题', titleBgColor: '#808080', titleTextColor: '#000000', closeBtnColor: '#FF5A50', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 0, radius: 0, pixmap: '', pixmapFormat: 'RGB565', fontFamily: '', fontSize: 14, fontBpp: 4, titleHeight: 0, titleAlign: 'LEFT_MID', alpha: 255 },
+  win: { titleText: '窗口标题', titleBgColor: '#808080', titleTextColor: '#000000', closeBtnColor: '#FF5A50', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 0, radius: 0, pixmap: '', pixmapFormat: 'RGB565', fontFamily: '', fontSize: 14, fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, titleHeight: 0, titleAlign: 'LEFT_MID', alpha: 255 },
   qrcode: { cellColor: '#000000', bgColor: '#ffffff', cellRadius: 0, qrText: 'hello', scale: 4, zone: 1, version: 5, ecc: 0, logo: '', pixmapFormat: 'RGB565', logoRadius: 0, alpha: 255 },
-  scope: { channelCount: 1, channelBuffers: '', channelWaveformColors: '#00FF00', maxDisplayPoints: 0, rangeMin: 0, rangeMax: 65535, autoScale: true, showYLabels: true, yLabelColor: '#FFFFFF', lineWidth: 2, gridLine: 0, bgColor: '#000000', gridColor: '#323232', borderColor: '#969696', borderWidth: 0, alpha: 255, fontFamily: '', fontSize: 14, fontBpp: 4 },
-  chart: { chartType: 'linechart', bgColor: '#000000', bgAlpha: 255, borderColor: '#000000', minValue: 0, maxValue: 100, autoScale: true, showYLabels: true, gridColor: '#3C3C3C', gridDashed: true, textColor: '#000000', fontSize: 12, fontFamily: '', fontBpp: 4, seriesCount: 0, seriesData: '', seriesColors: '#FFFFFF', seriesLineAlpha: '', seriesLineWidth: '', xLabels: '', barSpacing: 4, orientation: 0, openAnim: false, openAnimDir: 0, openAnimDuration: 600, startAngle: 0, innerRadiusRate: 0, radius: 0, sliceAlpha: '', smooth: false, legendEnable: true, legendPos: 2, legendDir: 0, legendTextColor: '#FFFFFF', legendAreaSize: 60, legendAlpha: 255, legendBoxSize: 10, legendPadding: 4, legendItemGap: 4, legendBg: false, legendBgColor: '#000000', legendBorderColor: '#808080', sliceCount: 3, sliceValues: '30;50;20', sliceColors: '#ff0000;#00ff00;#0000ff', sliceLabels: 'A;B;C', alpha: 255 },
+  scope: { channelCount: 1, channelWaveformColors: '#00FF00', dataBuffer: '', waveColorsBuffer: '', vMin: -32768, vMax: 32767, bgColor: '#000000', gridColor: '#808080', borderColor: '#969696', borderWidth: 1, alpha: 255 },
+  chart: { chartType: 'linechart', bgColor: '#000000', bgAlpha: 255, borderColor: '#000000', minValue: 0, maxValue: 100, autoScale: true, showYLabels: true, gridColor: '#3C3C3C', gridDashed: true, textColor: '#000000', fontSize: 12, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, seriesCount: 0, seriesData: '', seriesColors: '#FFFFFF', seriesLineAlpha: '', seriesLineWidth: '', xLabels: '', barSpacing: 4, orientation: 0, openAnim: false, openAnimDir: 0, openAnimDuration: 600, startAngle: 0, innerRadiusRate: 0, radius: 0, sliceAlpha: '', smooth: false, legendEnable: true, legendPos: 2, legendDir: 0, legendTextColor: '#FFFFFF', legendAreaSize: 60, legendAlpha: 255, legendBoxSize: 10, legendPadding: 4, legendItemGap: 4, legendBg: false, legendBgColor: '#000000', legendBorderColor: '#808080', sliceCount: 3, sliceValues: '30;50;20', sliceColors: '#ff0000;#00ff00;#0000ff', sliceLabels: 'A;B;C', alpha: 255 },
   canvas: { painterCb: '', privateData: '', locked: false },
   '2dball': { color: '#FFFFFF', bgColor: '#000000', radius: 20, alpha: 255 },
   sprite: { pixmap: '', pixmapFormat: 'ARGB4444', alpha: 255 },
-  statusbar: { bgColor: '#000000', bgAlpha: 128, radius: 0, leftMargin: 5, rightMargin: 5, slotSpace: 4, leftSlots: '', rightSlots: '', slotColor: '#FFFFFF', slotAlpha: 255, fontFamily: '', fontSize: 14, fontBpp: 4, alpha: 255 },
-  launcher: { iconSize: 48, gridCol: 4, gridRow: 5, marginLeft: 20, marginTop: 40, marginRight: 20, marginBottom: 60, labelColor: '#e4e4e7', navigbarColor: '#F5DEB3', currentPage: 0, fontFamily: '', fontSize: 14, fontBpp: 4, alpha: 255 },
-  roller: { options: '选项1\n选项2\n选项3', optionDynamic: false, visibleRows: 3, infiniteMode: false, textColor: '#000000', selectedColor: '#808080', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, fontSize: 14, fontFamily: '', fontBpp: 4, alpha: 255 },
-  analogclock: { hourPtrColor: '#ffffff', minPtrColor: '#FFFFFF', secPtrColor: '#FF0000', scaleColor: '#FFFFFF', textColor: '#FFFFFF', hubColor: '#FF0000', bgColor: '#000000', borderColor: '#FFFFFF', borderWidth: 0, hour: 0, minute: 0, second: 0, hourPtrWidth: 5, minPtrWidth: 5, secPtrWidth: 2, scaleWidth: 1, scaleLength: 8, hubRadius: 6, fontFamily: '', fontSize: 12, fontBpp: 4, alpha: 255 },
+  statusbar: { bgColor: '#000000', bgAlpha: 128, radius: 0, leftMargin: 5, rightMargin: 5, slotSpace: 4, leftSlots: '', rightSlots: '', slotColor: '#FFFFFF', slotAlpha: 255, fontFamily: '', fontSize: 14, fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, alpha: 255 },
+  launcher: { iconSize: 48, gridCol: 4, gridRow: 5, marginLeft: 20, marginTop: 40, marginRight: 20, marginBottom: 60, labelColor: '#e4e4e7', navigbarColor: '#F5DEB3', currentPage: 0, fontFamily: '', fontSize: 14, fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, alpha: 255 },
+  roller: { options: '选项1\n选项2\n选项3', optionDynamic: false, visibleRows: 3, infiniteMode: false, textColor: '#000000', selectedColor: '#808080', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, alpha: 255 },
+  analogclock: { hourPtrColor: '#ffffff', minPtrColor: '#FFFFFF', secPtrColor: '#FF0000', scaleColor: '#FFFFFF', textColor: '#FFFFFF', hubColor: '#FF0000', bgColor: '#000000', borderColor: '#FFFFFF', borderWidth: 0, hour: 0, minute: 0, second: 0, hourPtrWidth: 5, minPtrWidth: 5, secPtrWidth: 2, scaleWidth: 1, scaleLength: 8, hubRadius: 6, fontFamily: '', fontSize: 12, fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, alpha: 255 },
   img_ext: { pixmap: '', pixmapFormat: 'RGB565', rotation: 0, scaleUniform: 0, pivotX: '', pivotY: '', readOps: '', alpha: 255 },
   img: { pixmap: '', pixmapFormat: 'RGB565', readOps: '', alpha: 255 },
-  arc_label: { text: '标签', textColor: '#000000', bgFlag: false, bgColor: '#FFFFFF', radius: 0, align: 'CENTER', fontSize: 14, fontFamily: '', fontBpp: 4, angle: 0, offsetX: 0, offsetY: 0, textBuffer: '', textFmt: '', textFmtDynamic: '', alpha: 255 },
-  label_ext: { text: '标签文本', textColor: '#000000', bgColor: 'transparent', bgFlag: false, align: 'CENTER', fontSize: 14, fontFamily: '', fontBpp: 4, textOffsetX: 0, textOffsetY: 0, textRotation: 0, radius: 0, textBuffer: '', textFmt: '', textFmtDynamic: '', alpha: 255 },
+  arc_label: { text: '标签', textColor: '#000000', bgFlag: false, bgColor: '#FFFFFF', radius: 0, align: 'CENTER', fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, angle: 0, offsetX: 0, offsetY: 0, textBuffer: '', textFmt: '', textFmtDynamic: '', alpha: 255 },
+  label_ext: { text: '标签文本', textColor: '#000000', bgColor: 'transparent', bgFlag: false, align: 'CENTER', fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, textOffsetX: 0, textOffsetY: 0, textRotation: 0, radius: 0, textBuffer: '', textFmt: '', textFmtDynamic: '', alpha: 255 },
 };
 
 // 判断属性值是否需要生成代码（图片属性专用：只有非空才生成）
@@ -1102,7 +1202,7 @@ export function generateSGLCode(project) {
 
   let code = `/* ============================================\n`;
   code += ` * SGL UI Designer - Auto Generated Code\n`;
-  code += ` * Project: ${escapeCComment(project.name)}\n`;
+  code += ` * Project: ${escapeCComment(project.name || 'untitled')}\n`;
   code += ` * Screen: ${project.screen_width}x${project.screen_height}\n`;
   code += ` * Color Depth: ${project.color_depth}\n`;
   code += ` * Generated: ${new Date().toLocaleString()}\n`;
@@ -1121,15 +1221,30 @@ export function generateSGLCode(project) {
   code += `#include "sgl.h"\n`;
 
   code += `\n/* USER CODE BEGIN includes */\n`;
-  code += `/* 用户可在此处添加额外的 #include、全局变量声明等，重新生成代码时本区域内容会被保留 */\n`;
+  code += `/* 在此添加额外 #include / 全局变量。务必写在 BEGIN/END 之间，重新生成或点击运行时才会保留 */\n`;
   code += `/* USER CODE END includes */\n`;
+
+  const textBuffers = collectTextBufferVars(project);
+  if (textBuffers.size > 0) {
+    code += `\n/* ============================================\n`;
+    code += ` * 标签文本缓冲区（label / label_ext / arc_label）\n`;
+    code += ` * ============================================ */\n`;
+    textBuffers.forEach(({ size, initText }, name) => {
+      if (initText) {
+        code += `char ${name}[${size}] = "${escapeStr(initText)}";\n`;
+      } else {
+        code += `char ${name}[${size}];\n`;
+      }
+    });
+    code += '\n';
+  }
 
   if (fonts.length > 0) {
     code += `\n/* ============================================\n`;
     code += ` * 字体字模声明（字模 C 文件由设计器自动生成到 fonts/ 子目录）\n`;
     code += ` * ============================================ */\n`;
     fonts.forEach(f => {
-      const fontId = getFontId(f.family, f.size, f.bpp);
+      const fontId = getFontId(f.family, f.size, f.bpp, f.compress || 0, f.spacing || 0, !!f.smartMono);
       code += `extern const sgl_font_t ${fontId};\n`;
     });
   }
@@ -1179,6 +1294,17 @@ export function generateSGLCode(project) {
     code += '\n';
   }
 
+  // 收集 img / img_ext 的外部读取回调（签名须为 void (*)(const size_t, uint8_t*, uint32_t)）
+  const readOpsCbs = new Set();
+  project.pages.forEach(page => {
+    if (!Array.isArray(page.widgets)) return;
+    page.widgets.forEach(w => {
+      if ((w.type === 'img_ext' || w.type === 'img') && w.readOps && String(w.readOps).trim()) {
+        readOpsCbs.add(String(w.readOps).trim());
+      }
+    });
+  });
+
   // 收集所有事件回调函数名，生成前向声明（基于 events 数组）
   const eventCbs = new Set();
   const eventWrappers = [];
@@ -1193,13 +1319,34 @@ export function generateSGLCode(project) {
     });
   });
 
+  if (readOpsCbs.size > 0) {
+    code += `/* === 外部 Flash 读取回调（与 sgl_img_ext_set_read_ops / sgl_img_set_read_ops 签名一致） === */\n`;
+    code += `/* 地址参数类型为 const size_t，勿写成 uint32_t，否则会触发 -Wincompatible-pointer-types */\n`;
+    readOpsCbs.forEach(cb => {
+      const safeCb = sanitizeId(cb);
+      code += `void ${safeCb}(const size_t addr, uint8_t *data, uint32_t len)\n{\n`;
+      code += `/* USER CODE BEGIN ${safeCb} */\n`;
+      code += `    (void)addr;\n`;
+      code += `    /* 仿真占位：返回全 0；实机请改为从 Flash/外部存储读取 */\n`;
+      code += `    if (data) {\n`;
+      code += `        uint32_t n = len;\n`;
+      code += `        while (n--) *data++ = 0x00;\n`;
+      code += `    }\n`;
+      code += `/* USER CODE END ${safeCb} */\n`;
+      code += `}\n\n`;
+    });
+  }
+
   if (eventCbs.size > 0) {
-    code += `/* === 事件回调函数（弱定义，用户可覆盖实现） === */\n`;
+    code += `/* === 事件回调函数（在 USER CODE 区内编写实现，重新生成/运行时会保留） === */\n`;
     eventCbs.forEach(cb => {
       const safeCb = sanitizeId(cb);
-      code += `sgl_weak_fn void ${safeCb}(sgl_event_t *e) { (void)e; }\n`;
+      code += `void ${safeCb}(sgl_event_t *e)\n{\n`;
+      code += `/* USER CODE BEGIN ${safeCb} */\n`;
+      code += `    (void)e;\n`;
+      code += `/* USER CODE END ${safeCb} */\n`;
+      code += `}\n\n`;
     });
-    code += `\n`;
   }
 
   // 生成事件分发包装函数
@@ -1279,7 +1426,12 @@ export function generateSGLCode(project) {
         // launcher 的 create 函数需要 attr、font、apps、app_num、cb 五个参数
         const attrName = `${objId}_attr`;
         const launcherFont = resolveEffectiveFontFamily(w.fontFamily);
-        const fontId = (launcherFont && launcherFont !== 'default' && w.fontSize != null) ? getFontId(launcherFont, w.fontSize, w.fontBpp || 4) : 'sgl_font_default';
+        const compress = (project && project.sgl_config && project.sgl_config.font_compressed) ? 1 : 0;
+        const spacing = Math.max(0, w.fontSpacing || 0);
+        const smartMono = !!w.fontSmartMono;
+        const fontId = (launcherFont && launcherFont !== 'default' && w.fontSize != null)
+          ? getFontId(launcherFont, w.fontSize, w.fontBpp || 4, compress, spacing, smartMono)
+          : 'sgl_font_default';
         code += `    sgl_launcher_attr_t ${attrName} = {\n`;
         code += `        .icon_size = ${w.iconSize || 48},\n`;
         code += `        .margin_left = ${w.marginLeft || 0},\n`;
@@ -1311,7 +1463,7 @@ export function generateSGLCode(project) {
       }
 
       // 组件特定属性设置
-      const setters = getSglSetters(w);
+      const setters = getSglSetters(w, project);
       setters.forEach(setter => {
         code += `    ${setter}\n`;
       });
@@ -1342,10 +1494,13 @@ export function generateSGLCode(project) {
     const pageId = sanitizeId(page.id);
     code += `    ui_page_${pageId}_create();\n`;
   });
+  code += `/* USER CODE BEGIN ui_init */\n`;
+  code += `/* 用户可在页面创建后添加初始化逻辑，重新生成/运行时本区域会保留 */\n`;
+  code += `/* USER CODE END ui_init */\n`;
   code += `}\n`;
 
   code += `\n/* USER CODE BEGIN functions */\n`;
-  code += `/* 用户可在此处添加自定义函数实现，重新生成代码时本区域内容会被保留 */\n`;
+  code += `/* 用户可在此处添加自定义函数实现，重新生成/运行时本区域内容会被保留 */\n`;
   code += `/* USER CODE END functions */\n`;
 
   return code;
@@ -1377,9 +1532,12 @@ export function collectFonts(project) {
       const familyName = effFamily.replace(/[/\\]/g, '/').split('/').pop();
       if (!familyName || familyName === 'default') return;
       const bpp = w.fontBpp || 4;
-      const key = `${familyName}|${w.fontSize}|${bpp}`;
+      const compress = (project.sgl_config && project.sgl_config.font_compressed) ? 1 : 0;
+      const spacing = Math.max(0, w.fontSpacing || 0);
+      const smartMono = !!w.fontSmartMono;
+      const key = `${familyName}|${w.fontSize}|${bpp}|${compress}|${spacing}|${smartMono ? 1 : 0}`;
       if (!fontMap.has(key)) {
-        fontMap.set(key, { family: familyName, path: effFamily, size: w.fontSize, bpp: bpp });
+        fontMap.set(key, { family: familyName, path: effFamily, size: w.fontSize, bpp, compress, spacing, smartMono });
       }
     });
   });
@@ -1548,15 +1706,95 @@ export function validateSpritePixmaps(project) {
   return issues;
 }
 
-function getFontId(family, size, bpp) {
+function getFontId(family, size, bpp, compress = 0, spacing = 0, smartMono = false) {
   // 与后端 font_id_from_family 一致：文件名中非字母数字字符替换为 _
   const familyName = family.replace(/[/\\]/g, '/').split('/').pop();
   const cleanFamily = familyName.replace(/[^0-9a-zA-Z]/g, '_');
-  return `sgl_font_${cleanFamily}_${size}_bpp${bpp}`;
+  let suffix = '';
+  if (compress > 0) suffix += '_compress';
+  if (smartMono) suffix += '_mono';
+  if (spacing > 0) suffix += `_sp${spacing}`;
+  return `sgl_font_${cleanFamily}_${size}_bpp${bpp}${suffix}`;
+}
+
+function getWidgetFontId(w, project) {
+  const fam = resolveEffectiveFontFamily(w.fontFamily);
+  if (!fam || fam === 'default') return null;
+  const compress = (project && project.sgl_config && project.sgl_config.font_compressed) ? 1 : 0;
+  const spacing = Math.max(0, w.fontSpacing || 0);
+  const smartMono = !!w.fontSmartMono;
+  return getFontId(fam, w.fontSize || 14, w.fontBpp || 4, compress, spacing, smartMono);
 }
 
 function sanitizeId(id) {
   return id.replace(/[^a-zA-Z0-9_]/g, '_').replace(/^[0-9]/, '_$&');
+}
+
+function isValidCIdentifier(name) {
+  return typeof name === 'string' && /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name);
+}
+
+/** 解析 textBuffer 属性：变量名,大小；缺省大小为 64 */
+function parseTextBufferSpec(textBuffer) {
+  if (textBuffer == null || String(textBuffer).trim() === '') return null;
+  const parts = String(textBuffer).split(',').map(s => s.trim());
+  const name = parts[0];
+  if (!isValidCIdentifier(name)) return null;
+  let size = 64;
+  if (parts.length >= 2 && parts[1] !== '') {
+    const parsed = parseInt(parts[1], 10);
+    if (!Number.isFinite(parsed) || parsed < 1) return null;
+    size = parsed;
+  }
+  return { name, size };
+}
+
+/** 收集 label 系列控件的文本缓冲区声明（同名取最大 size） */
+function collectTextBufferVars(project) {
+  const buffers = new Map();
+  const types = new Set(['label', 'label_ext', 'arc_label']);
+  if (!project?.pages) return buffers;
+  project.pages.forEach(page => {
+    if (!Array.isArray(page.widgets)) return;
+    page.widgets.forEach(w => {
+      if (!types.has(w.type)) return;
+      const spec = parseTextBufferSpec(w.textBuffer);
+      if (!spec) return;
+      const prev = buffers.get(spec.name);
+      if (prev) {
+        if (prev.size !== spec.size) {
+          const maxSize = Math.max(prev.size, spec.size);
+          codegenLog(`[WARN] 文本缓冲区 '${spec.name}' 在不同控件中大小不一致 (${prev.size}/${spec.size})，使用 ${maxSize}`, 'warn');
+          prev.size = maxSize;
+        }
+        if (!prev.initText && w.text && String(w.text).trim()) {
+          prev.initText = String(w.text);
+        }
+      } else {
+        buffers.set(spec.name, {
+          size: spec.size,
+          initText: (w.text && String(w.text).trim()) ? String(w.text) : ''
+        });
+      }
+    });
+  });
+  return buffers;
+}
+
+function appendLabelTextSetters(setters, w, defaults, apiPrefix, requireNonEmptyText) {
+  const spec = parseTextBufferSpec(w.textBuffer);
+  if (spec && shouldGenerateValue(w.textBuffer, defaults, 'textBuffer')) {
+    setters.push(`${apiPrefix}_set_text_buffer(${obj(w)}, ${spec.name}, ${spec.size});`);
+    if (shouldGenerateValue(w.textFmt, defaults, 'textFmt') && w.textFmt) {
+      setters.push(`${apiPrefix}_set_text_fmt(${obj(w)}, "${escapeStr(w.textFmt)}");`);
+    } else if (shouldGenerateValue(w.textFmtDynamic, defaults, 'textFmtDynamic') && w.textFmtDynamic) {
+      setters.push(`${apiPrefix}_set_text_fmt_dynamic(${obj(w)}, "${escapeStr(w.textFmtDynamic)}");`);
+    }
+    return;
+  }
+  if (!shouldGenerateValue(w.text, defaults, 'text')) return;
+  if (requireNonEmptyText && !w.text) return;
+  setters.push(`${apiPrefix}_set_text(${obj(w)}, "${escapeStr(w.text)}");`);
 }
 
 export function getWidgetVarName(w) {
@@ -1628,7 +1866,7 @@ function getSglCreateFn(type) {
   return map[type] || 'sgl_rect_create';
 }
 
-function getSglSetters(w) {
+function getSglSetters(w, project) {
   const setters = [];
   const defaults = WIDGET_DEFAULTS[w.type] || {};
 
@@ -1723,7 +1961,7 @@ function getSglSetters(w) {
         }
       }
       if (shouldGenerateFont(w, defaults)) {
-        const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
+        const fontId = getWidgetFontId(w, project);
         setters.push(`sgl_polygon_set_font(${obj(w)}, &${fontId});`);
       }
       if (shouldGenerateValue(w.text, defaults, 'text')) {
@@ -1734,7 +1972,7 @@ function getSglSetters(w) {
 
     case 'button':
       if (shouldGenerateFont(w, defaults)) {
-        const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
+        const fontId = getWidgetFontId(w, project);
         setters.push(`sgl_button_set_font(${obj(w)}, &${fontId});`);
       }
       if (shouldGenerateValue(w.text, defaults, 'text')) setters.push(`sgl_button_set_text(${obj(w)}, "${escapeStr(w.text)}");`);
@@ -1750,10 +1988,10 @@ function getSglSetters(w) {
 
     case 'label':
       if (shouldGenerateFont(w, defaults)) {
-        const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
+        const fontId = getWidgetFontId(w, project);
         setters.push(`sgl_label_set_font(${obj(w)}, &${fontId});`);
       }
-      if (shouldGenerateValue(w.text, defaults, 'text')) setters.push(`sgl_label_set_text(${obj(w)}, "${escapeStr(w.text)}");`);
+      appendLabelTextSetters(setters, w, defaults, 'sgl_label', false);
       if (shouldGenerateValue(w.textColor, defaults, 'textColor')) setters.push(`sgl_label_set_text_color(${obj(w)}, ${hexToSglColor(w.textColor)});`);
       if (shouldGenerateValue(w.bgColor, defaults, 'bgColor') && w.bgColor !== 'transparent') setters.push(`sgl_label_set_bg_color(${obj(w)}, ${hexToSglColor(w.bgColor)});`);
       if (shouldGenerateValue(w.align, defaults, 'align')) setters.push(`sgl_label_set_text_align(${obj(w)}, SGL_ALIGN_${mapSglAlign(w.align)});`);
@@ -1762,21 +2000,16 @@ function getSglSetters(w) {
         setters.push(`sgl_label_set_text_offset(${obj(w)}, ${w.textOffsetX || 0});`);
       }
       if (shouldGenerateValue(w.alpha, defaults, 'alpha')) setters.push(`sgl_label_set_alpha(${obj(w)}, ${w.alpha});`);
-      if (shouldGenerateValue(w.textBuffer, defaults, 'textBuffer') && w.textBuffer) {
-        const [bufName, bufSize] = w.textBuffer.split(',').map(s => s.trim());
-        if (bufName && bufSize) setters.push(`sgl_label_set_text_buffer(${obj(w)}, ${bufName}, ${bufSize});`);
-      }
-      if (shouldGenerateValue(w.textFmt, defaults, 'textFmt') && w.textFmt) setters.push(`sgl_label_set_text_fmt(${obj(w)}, "${escapeStr(w.textFmt)}");`);
-      if (shouldGenerateValue(w.textFmtDynamic, defaults, 'textFmtDynamic') && w.textFmtDynamic) setters.push(`sgl_label_set_text_fmt_dynamic(${obj(w)}, "${escapeStr(w.textFmtDynamic)}");`);
-      if (w.longMode) setters.push(`sgl_label_set_long_mode(${obj(w)}, ${w.longModeSpeed || 3000}, true);`);
+      // SGL: speed = 像素/秒（见 sgl_label.c @param speed pixel per second）
+      if (w.longMode) setters.push(`sgl_label_set_long_mode(${obj(w)}, ${Math.max(1, w.longModeSpeed || 50)}, true);`);
       break;
 
     case 'label_ext':
       if (shouldGenerateFont(w, defaults)) {
-        const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
+        const fontId = getWidgetFontId(w, project);
         setters.push(`sgl_label_ext_set_font(${obj(w)}, &${fontId});`);
       }
-      if (shouldGenerateValue(w.text, defaults, 'text')) setters.push(`sgl_label_ext_set_text(${obj(w)}, "${escapeStr(w.text)}");`);
+      appendLabelTextSetters(setters, w, defaults, 'sgl_label_ext', false);
       if (shouldGenerateValue(w.textColor, defaults, 'textColor')) setters.push(`sgl_label_ext_set_text_color(${obj(w)}, ${hexToSglColor(w.textColor)});`);
       if (shouldGenerateValue(w.bgColor, defaults, 'bgColor') && w.bgColor !== 'transparent') setters.push(`sgl_label_ext_set_bg_color(${obj(w)}, ${hexToSglColor(w.bgColor)});`);
       if (shouldGenerateValue(w.align, defaults, 'align')) setters.push(`sgl_label_ext_set_text_align(${obj(w)}, SGL_ALIGN_${mapSglAlign(w.align)});`);
@@ -1790,7 +2023,7 @@ function getSglSetters(w) {
 
     case 'textbox':
       if (shouldGenerateFont(w, defaults)) {
-        const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
+        const fontId = getWidgetFontId(w, project);
         setters.push(`sgl_textbox_set_text_font(${obj(w)}, &${fontId});`);
       }
       if (shouldGenerateValue(w.text, defaults, 'text')) setters.push(`sgl_textbox_set_text(${obj(w)}, "${escapeStr(w.text)}");`);
@@ -1819,7 +2052,7 @@ function getSglSetters(w) {
     case 'checkbox': {
       const cbTextColor = w.textColor || w.color || w.onColor;
       if (shouldGenerateFont(w, defaults)) {
-        const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
+        const fontId = getWidgetFontId(w, project);
         setters.push(`sgl_checkbox_set_font(${obj(w)}, &${fontId});`);
       }
       if (shouldGenerateValue(w.status, defaults, 'status')) setters.push(`sgl_checkbox_set_status(${obj(w)}, ${w.status ? 'true' : 'false'});`);
@@ -1873,7 +2106,7 @@ function getSglSetters(w) {
     case 'gauge':
       // 字体必须先设置：后续刻度数字绘制依赖 font 指针
       if (shouldGenerateFont(w, defaults)) {
-        const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
+        const fontId = getWidgetFontId(w, project);
         setters.push(`sgl_gauge_set_font(${obj(w)}, &${fontId});`);
       }
       if (shouldGenerateValue(w.value, defaults, 'value')) setters.push(`sgl_gauge_set_value(${obj(w)}, ${w.value != null ? w.value : 50});`);
@@ -1948,11 +2181,14 @@ function getSglSetters(w) {
           if (fonts.length > 0) fam = fonts[0].path || fonts[0].name || '';
         }
         if (fam) {
-          const fontId = getFontId(fam, w.fontSize || 14, w.fontBpp || 4);
+          const compress = (project && project.sgl_config && project.sgl_config.font_compressed) ? 1 : 0;
+          const spacing = Math.max(0, w.fontSpacing || 0);
+          const smartMono = !!w.fontSmartMono;
+          const fontId = getFontId(fam, w.fontSize || 14, w.fontBpp || 4, compress, spacing, smartMono);
           setters.push(`sgl_battery_set_font(${obj(w)}, &${fontId});`);
         }
       } else if (shouldGenerateFont(w, defaults)) {
-        const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
+        const fontId = getWidgetFontId(w, project);
         setters.push(`sgl_battery_set_font(${obj(w)}, &${fontId});`);
       }
       break;
@@ -1969,7 +2205,7 @@ function getSglSetters(w) {
     case 'msgbox':
       // 字体必须先设置：title/msg/btn 文本绘制均依赖 font 指针
       if (shouldGenerateFont(w, defaults)) {
-        const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
+        const fontId = getWidgetFontId(w, project);
         setters.push(`sgl_msgbox_set_font(${obj(w)}, &${fontId});`);
       }
       if (shouldGenerateValue(w.titleText, defaults, 'titleText')) setters.push(`sgl_msgbox_set_title_text(${obj(w)}, "${escapeStr(w.titleText)}");`);
@@ -2011,7 +2247,7 @@ function getSglSetters(w) {
       if (shouldGenerateValue(w.titleAlign, defaults, 'titleAlign')) setters.push(`sgl_win_set_title_text_align(${obj(w)}, SGL_ALIGN_${mapSglAlign(w.titleAlign)});`);
       if (shouldGeneratePixmap(w.pixmap)) setters.push(`sgl_win_set_pixmap(${obj(w)}, &${pixmapVarName(w.pixmap, w.pixmapFormat)});`);
       if (shouldGenerateFont(w, defaults)) {
-        const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
+        const fontId = getWidgetFontId(w, project);
         setters.push(`sgl_win_set_title_font(${obj(w)}, &${fontId});`);
       }
       // title_text 必须在 title_height 和 title_font 之后调用
@@ -2022,7 +2258,7 @@ function getSglSetters(w) {
 
     case 'dropdown':
       if (shouldGenerateFont(w, defaults)) {
-        const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
+        const fontId = getWidgetFontId(w, project);
         setters.push(`sgl_dropdown_set_text_font(${obj(w)}, &${fontId});`);
       }
       if (shouldGenerateValue(w.options, defaults, 'options')) {
@@ -2050,7 +2286,7 @@ function getSglSetters(w) {
       if (shouldGenerateValue(w.borderWidth, defaults, 'borderWidth')) setters.push(`sgl_numberkbd_set_border_width(${obj(w)}, ${w.borderWidth});`);
       if (shouldGenerateValue(w.borderColor, defaults, 'borderColor')) setters.push(`sgl_numberkbd_set_border_color(${obj(w)}, ${hexToSglColor(w.borderColor)});`);
       if (shouldGenerateFont(w, defaults)) {
-        const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
+        const fontId = getWidgetFontId(w, project);
         setters.push(`sgl_numberkbd_set_text_font(${obj(w)}, &${fontId});`);
       }
       if (shouldGenerateValue(w.textColor, defaults, 'textColor')) setters.push(`sgl_numberkbd_set_text_color(${obj(w)}, ${hexToSglColor(w.textColor)});`);
@@ -2065,7 +2301,7 @@ function getSglSetters(w) {
 
     case 'keyboard':
       if (shouldGenerateFont(w, defaults)) {
-        const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
+        const fontId = getWidgetFontId(w, project);
         setters.push(`sgl_keyboard_set_text_font(${obj(w)}, &${fontId});`);
       }
       if (shouldGenerateValue(w.cellColor, defaults, 'cellColor')) setters.push(`sgl_keyboard_set_color(${obj(w)}, ${hexToSglColor(w.cellColor)});`);
@@ -2091,7 +2327,7 @@ function getSglSetters(w) {
 
     case 'textline':
       if (shouldGenerateFont(w, defaults)) {
-        const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
+        const fontId = getWidgetFontId(w, project);
         setters.push(`sgl_textline_set_text_font(${obj(w)}, &${fontId});`);
       }
       if (shouldGenerateValue(w.text, defaults, 'text')) setters.push(`sgl_textline_set_text(${obj(w)}, "${escapeStr(w.text)}");`);
@@ -2106,7 +2342,7 @@ function getSglSetters(w) {
 
     case 'textlist':
       if (shouldGenerateFont(w, defaults)) {
-        const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
+        const fontId = getWidgetFontId(w, project);
         setters.push(`sgl_textlist_set_text_font(${obj(w)}, &${fontId});`);
       }
       if (shouldGenerateValue(w.options, defaults, 'options') && w.options) {
@@ -2141,10 +2377,17 @@ function getSglSetters(w) {
       if (shouldGenerateValue(w.color, defaults, 'color')) setters.push(`sgl_arc_set_color(${obj(w)}, ${hexToSglColor(w.color)});`);
       if (shouldGenerateValue(w.bgColor, defaults, 'bgColor')) setters.push(`sgl_arc_set_bg_color(${obj(w)}, ${hexToSglColor(w.bgColor)});`);
       if (shouldGenerateValue(w.alpha, defaults, 'alpha')) setters.push(`sgl_arc_set_alpha(${obj(w)}, ${w.alpha});`);
-      if (shouldGenerateValue(w.radiusIn, defaults, 'radiusIn') || shouldGenerateValue(w.radiusOut, defaults, 'radiusOut')) setters.push(`sgl_arc_set_radius(${obj(w)}, ${w.radiusIn || 0}, ${w.radiusOut || 0});`);
+      if (shouldGenerateValue(w.radiusIn, defaults, 'radiusIn') || shouldGenerateValue(w.radiusOut, defaults, 'radiusOut')) {
+        const rIn = (w.radiusIn === undefined || w.radiusIn === null || w.radiusIn === '') ? 0 : Number(w.radiusIn);
+        const rOut = (w.radiusOut === undefined || w.radiusOut === null || w.radiusOut === '') ? 0 : Number(w.radiusOut);
+        setters.push(`sgl_arc_set_radius(${obj(w)}, ${rIn}, ${rOut});`);
+      }
       if (shouldGenerateValue(w.mode, defaults, 'mode')) {
         const modeMacros = ['SGL_ARC_MODE_NORMAL', 'SGL_ARC_MODE_RING', 'SGL_ARC_MODE_NORMAL_SMOOTH', 'SGL_ARC_MODE_RING_SMOOTH'];
-        setters.push(`sgl_arc_set_mode(${obj(w)}, ${modeMacros[w.mode] || 'SGL_ARC_MODE_NORMAL'});`);
+        let modeIdx = Number(w.mode);
+        if (!Number.isFinite(modeIdx)) modeIdx = 0;
+        modeIdx = Math.max(0, Math.min(3, Math.trunc(modeIdx)));
+        setters.push(`sgl_arc_set_mode(${obj(w)}, ${modeMacros[modeIdx]});`);
       }
       if (shouldGenerateValue(w.startAngle, defaults, 'startAngle')) setters.push(`sgl_arc_set_start_angle(${obj(w)}, ${w.startAngle});`);
       if (shouldGenerateValue(w.endAngle, defaults, 'endAngle')) setters.push(`sgl_arc_set_end_angle(${obj(w)}, ${w.endAngle});`);
@@ -2180,40 +2423,55 @@ function getSglSetters(w) {
       if (shouldGenerateValue(w.alpha, defaults, 'alpha')) setters.push(`sgl_qrcode_set_alpha(${obj(w)}, ${w.alpha});`);
       break;
 
-    case 'scope':
-      if (shouldGenerateValue(w.channelCount, defaults, 'channelCount')) setters.push(`sgl_scope_set_channel_count(${obj(w)}, ${w.channelCount || 1});`);
-      if (shouldGenerateValue(w.channelBuffers, defaults, 'channelBuffers') && w.channelBuffers) {
-        w.channelBuffers.split(';').map(s => s.trim()).filter(s => s).forEach((buf, idx) => {
-          const [name, len] = buf.split(',').map(s => s.trim());
-          if (name && len) {
-            setters.push(`sgl_scope_set_channel_data_buffer(${obj(w)}, ${idx}, ${name}, ${len});`);
-          }
-        });
+    case 'scope': {
+      // 对齐 sgl_scope.h：set_buffers / set_vrange / 颜色边框 alpha
+      const chCount = Math.max(1, Math.min(4, Number(w.channelCount) || 1));
+      const borderW = (w.borderWidth != null) ? Number(w.borderWidth) : 1;
+      const plotW = Math.max(1, (Number(w.width) || 200) - 2 * Math.max(0, borderW));
+      const objName = obj(w);
+      const customData = isValidCIdentifier(w.dataBuffer) ? String(w.dataBuffer).trim() : '';
+      const customColors = isValidCIdentifier(w.waveColorsBuffer) ? String(w.waveColorsBuffer).trim() : '';
+      const dataName = customData || `${objName}_data`;
+      const colorsName = customColors || `${objName}_colors`;
+      const defaultCols = ['#00FF00', '#FF0000', '#0000FF', '#FFFF00'];
+      const cols = String(w.channelWaveformColors || '#00FF00').split(';').map(s => s.trim()).filter(Boolean);
+
+      if (!customData) {
+        setters.push(`static int16_t ${dataName}[${chCount} * ${plotW}];`);
       }
-      if (shouldGenerateValue(w.channelWaveformColors, defaults, 'channelWaveformColors') && w.channelWaveformColors) {
-        w.channelWaveformColors.split(';').map(s => s.trim()).filter(s => s).forEach((color, idx) => {
-          setters.push(`sgl_scope_set_channel_waveform_color(${obj(w)}, ${idx}, ${hexToSglColor(color)});`);
-        });
+      if (!customColors) {
+        const inits = [];
+        for (let i = 0; i < chCount; i++) {
+          inits.push(hexToSglColor(cols[i] || defaultCols[i] || '#00FF00'));
+        }
+        setters.push(`static sgl_color_t ${colorsName}[${chCount}] = { ${inits.join(', ')} };`);
       }
-      if (shouldGenerateValue(w.maxDisplayPoints, defaults, 'maxDisplayPoints')) setters.push(`sgl_scope_set_max_display_points(${obj(w)}, ${w.maxDisplayPoints});`);
-      if (shouldGenerateValue(w.rangeMin, defaults, 'rangeMin') || shouldGenerateValue(w.rangeMax, defaults, 'rangeMax')) {
-        setters.push(`sgl_scope_set_range(${obj(w)}, ${w.rangeMin || 0}, ${w.rangeMax || 100});`);
+      setters.push(`sgl_scope_set_buffers(${objName}, ${dataName}, ${colorsName}, ${chCount});`);
+
+      // 外部颜色数组时，用 setter 写入各通道颜色
+      if (customColors) {
+        for (let i = 0; i < chCount; i++) {
+          const c = cols[i] || defaultCols[i] || '#00FF00';
+          setters.push(`sgl_scope_set_channel_waveform_color(${objName}, ${i}, ${hexToSglColor(c)});`);
+        }
       }
-      if (shouldGenerateValue(w.autoScale, defaults, 'autoScale')) setters.push(`sgl_scope_enable_auto_scale(${obj(w)}, ${w.autoScale ? 'true' : 'false'});`);
-      if (shouldGenerateValue(w.showYLabels, defaults, 'showYLabels')) setters.push(`sgl_scope_show_y_labels(${obj(w)}, ${w.showYLabels ? 'true' : 'false'});`);
-      if (shouldGenerateValue(w.yLabelColor, defaults, 'yLabelColor')) setters.push(`sgl_scope_set_y_label_color(${obj(w)}, ${hexToSglColor(w.yLabelColor)});`);
-      if (shouldGenerateFont(w, defaults)) {
-        const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
-        setters.push(`sgl_scope_set_y_label_font(${obj(w)}, &${fontId});`);
+
+      const vMin = (w.vMin != null) ? Number(w.vMin) : ((w.rangeMin != null) ? Number(w.rangeMin) : -32768);
+      const vMax = (w.vMax != null) ? Number(w.vMax) : ((w.rangeMax != null) ? Number(w.rangeMax) : 32767);
+      if (shouldGenerateValue(w.vMin, defaults, 'vMin') || shouldGenerateValue(w.vMax, defaults, 'vMax')
+          || shouldGenerateValue(w.rangeMin, defaults, 'vMin') || shouldGenerateValue(w.rangeMax, defaults, 'vMax')) {
+        setters.push(`sgl_scope_set_vrange(${objName}, ${vMin}, ${vMax});`);
+      } else if (vMin !== -32768 || vMax !== 32767) {
+        setters.push(`sgl_scope_set_vrange(${objName}, ${vMin}, ${vMax});`);
       }
-      if (shouldGenerateValue(w.lineWidth, defaults, 'lineWidth')) setters.push(`sgl_scope_set_line_width(${obj(w)}, ${w.lineWidth});`);
-      if (shouldGenerateValue(w.gridLine, defaults, 'gridLine')) setters.push(`sgl_scope_set_grid_line(${obj(w)}, ${w.gridLine});`);
-      if (shouldGenerateValue(w.bgColor, defaults, 'bgColor')) setters.push(`sgl_scope_set_bg_color(${obj(w)}, ${hexToSglColor(w.bgColor)});`);
-      if (shouldGenerateValue(w.gridColor, defaults, 'gridColor')) setters.push(`sgl_scope_set_grid_color(${obj(w)}, ${hexToSglColor(w.gridColor)});`);
-      if (shouldGenerateValue(w.borderColor, defaults, 'borderColor')) setters.push(`sgl_scope_set_border_color(${obj(w)}, ${hexToSglColor(w.borderColor)});`);
-      if (shouldGenerateValue(w.borderWidth, defaults, 'borderWidth')) setters.push(`sgl_scope_set_border_width(${obj(w)}, ${w.borderWidth});`);
-      if (shouldGenerateValue(w.alpha, defaults, 'alpha')) setters.push(`sgl_scope_set_alpha(${obj(w)}, ${w.alpha});`);
+
+      if (shouldGenerateValue(w.bgColor, defaults, 'bgColor')) setters.push(`sgl_scope_set_bg_color(${objName}, ${hexToSglColor(w.bgColor)});`);
+      if (shouldGenerateValue(w.gridColor, defaults, 'gridColor')) setters.push(`sgl_scope_set_grid_color(${objName}, ${hexToSglColor(w.gridColor)});`);
+      if (shouldGenerateValue(w.borderColor, defaults, 'borderColor')) setters.push(`sgl_scope_set_border_color(${objName}, ${hexToSglColor(w.borderColor)});`);
+      if (shouldGenerateValue(w.borderWidth, defaults, 'borderWidth')) setters.push(`sgl_scope_set_border_width(${objName}, ${borderW});`);
+      if (shouldGenerateValue(w.alpha, defaults, 'alpha')) setters.push(`sgl_scope_set_alpha(${objName}, ${w.alpha});`);
       break;
+    }
 
     case 'chart': {
       const chartType = w.chartType || 'linechart';
@@ -2237,7 +2495,7 @@ function getSglSetters(w) {
           if (shouldGenerateValue(w.legendPos, defaults, 'legendPos')) setters.push(`${prefix}_set_legend_pos(${obj(w)}, ${w.legendPos});`);
           if (shouldGenerateValue(w.legendDir, defaults, 'legendDir')) setters.push(`${prefix}_set_legend_dir(${obj(w)}, ${w.legendDir});`);
           if (shouldGenerateFont(w, defaults)) {
-            const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
+            const fontId = getWidgetFontId(w, project);
             setters.push(`${prefix}_set_legend_font(${obj(w)}, &${fontId});`);
           }
           if (shouldGenerateValue(w.legendTextColor, defaults, 'legendTextColor')) setters.push(`${prefix}_set_legend_text_color(${obj(w)}, ${hexToSglColor(w.legendTextColor)});`);
@@ -2299,7 +2557,7 @@ function getSglSetters(w) {
         }
         // 字体配置：同时配置X轴和Y轴
         if (shouldGenerateFont(w, defaults)) {
-          const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
+          const fontId = getWidgetFontId(w, project);
           setters.push(`    ${prefix}_set_axis_label_font(${obj(w)}, ${axisY}, &${fontId});`);
           setters.push(`    ${prefix}_set_axis_label_font(${obj(w)}, ${axisX}, &${fontId});`);
         }
@@ -2368,7 +2626,7 @@ function getSglSetters(w) {
 
     case 'roller':
       if (shouldGenerateFont(w, defaults)) {
-        const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
+        const fontId = getWidgetFontId(w, project);
         setters.push(`sgl_roller_set_text_font(${obj(w)}, &${fontId});`);
       }
       if (shouldGenerateValue(w.options, defaults, 'options') && w.options) {
@@ -2391,7 +2649,7 @@ function getSglSetters(w) {
 
     case 'analogclock':
       if (shouldGenerateFont(w, defaults)) {
-        const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
+        const fontId = getWidgetFontId(w, project);
         setters.push(`sgl_analogclock_set_font(${obj(w)}, &${fontId});`);
       }
       if (shouldGenerateValue(w.hour, defaults, 'hour') || shouldGenerateValue(w.minute, defaults, 'minute') || shouldGenerateValue(w.second, defaults, 'second')) setters.push(`sgl_analogclock_set_time(${obj(w)}, ${w.hour || 0}, ${w.minute || 0}, ${w.second || 0});`);
@@ -2427,7 +2685,7 @@ function getSglSetters(w) {
       }
       if (shouldGenerateValue(w.slotSpace, defaults, 'slotSpace')) setters.push(`sgl_statusbar_set_slot_space(${obj(w)}, ${w.slotSpace});`);
       if (shouldGenerateFont(w, defaults)) {
-        const fontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
+        const fontId = getWidgetFontId(w, project);
         setters.push(`sgl_statusbar_set_font(${obj(w)}, &${fontId});`);
       }
       // 左侧槽位（用 ; 拼接存储，最多 4 个）
@@ -2508,10 +2766,10 @@ function getSglSetters(w) {
       // SGL sgl_arc_label_set_text 内部会调用 sgl_arc_label_update_area，用 label->font 计算文本区域
       // 若先 set_text 再 set_font，update_area 会用 create 时默认的 system font（可能为 NULL 或不含中文字符）导致崩溃
       if (shouldGenerateFont(w, defaults)) {
-        const alFontId = getFontId(resolveEffectiveFontFamily(w.fontFamily), w.fontSize, w.fontBpp || 4);
+        const alFontId = getWidgetFontId(w, project);
         setters.push(`sgl_arc_label_set_font(${obj(w)}, &${alFontId});`);
       }
-      if (shouldGenerateValue(w.text, defaults, 'text') && w.text) setters.push(`sgl_arc_label_set_text(${obj(w)}, "${escapeStr(w.text)}");`);
+      appendLabelTextSetters(setters, w, defaults, 'sgl_arc_label', true);
       if (shouldGenerateValue(w.textColor, defaults, 'textColor')) setters.push(`sgl_arc_label_set_text_color(${obj(w)}, ${hexToSglColor(w.textColor)});`);
       // SGL: set_bg_color 会自动设置 bg_flag=1
       // 旋转模式（angle!=0）下临时缓冲无条件用 bg_color 填充，若不设置 bg_color 则为 SGL 默认黑色，

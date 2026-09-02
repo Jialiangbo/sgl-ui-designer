@@ -228,8 +228,51 @@ function enqueueFontTask(taskFn) {
 }
 
 /** 获取字体加载失败的错误信息 */
-export function getFontError(fontPath, size, bpp) {
-  const key = `${fontPath}|${size}|${bpp}`;
+
+/** Normalize font variant options (spacing / smartMono / compress). */
+export function normalizeFontOpts(opts = {}) {
+  return {
+    spacing: Math.max(0, parseInt(opts.spacing, 10) || 0),
+    smartMono: !!opts.smartMono,
+    compress: !!opts.compress,
+  };
+}
+
+/** Build opts from widget + global SGL config. */
+export function fontOptsFromWidget(w) {
+  const cfg = (typeof AppState !== 'undefined' && AppState.project && AppState.project.sgl_config)
+    ? AppState.project.sgl_config
+    : null;
+  return normalizeFontOpts({
+    spacing: (w && w.fontSpacing) || 0,
+    smartMono: !!(w && w.fontSmartMono),
+    compress: !!(cfg && cfg.font_compressed),
+  });
+}
+
+/** Memory / preload key: path|size|bpp|spacing|mono|compress */
+export function makeFontDataKey(fontPath, size, bpp, opts = {}) {
+  const o = normalizeFontOpts(opts);
+  return `${fontPath}|${size}|${bpp}|${o.spacing}|${o.smartMono ? 1 : 0}|${o.compress ? 1 : 0}`;
+}
+
+export function parseFontDataKey(key) {
+  const parts = String(key || '').split('|');
+  if (parts.length < 3) {
+    return { fontPath: '', size: 14, bpp: 4, spacing: 0, smartMono: false, compress: false };
+  }
+  return {
+    fontPath: parts[0],
+    size: parseInt(parts[1], 10) || 14,
+    bpp: parseInt(parts[2], 10) || 4,
+    spacing: parseInt(parts[3] || '0', 10) || 0,
+    smartMono: parts[4] === '1',
+    compress: parts[5] === '1',
+  };
+}
+
+export function getFontError(fontPath, size, bpp, opts = {}) {
+  const key = makeFontDataKey(fontPath, size, bpp, opts);
   return _fontErrors.get(key) || null;
 }
 
@@ -244,13 +287,14 @@ export function getFontError(fontPath, size, bpp) {
  */
 // localStorage 字模缓存 key 前缀（v9: 强制清除 v8 旧缓存，解决字模位图内容损坏导致的乱码）
 // v11: 修复 TTC/SimSun 等 MONO 内嵌位图被误当 8bit 灰度导致文字不可读
-const FONT_CACHE_PREFIX = 'sgl_font_cache_v11_';
+const FONT_CACHE_PREFIX = 'sgl_font_cache_v12_';
 // 字体文件指纹（大小+修改时间）缓存：避免每次读缓存都 invoke Rust
 const FONT_FP_CACHE = new Map();
 
-function getFontCacheKey(fontPath, size, bpp, fingerprint) {
+function getFontCacheKey(fontPath, size, bpp, fingerprint, opts = {}) {
   const fp = fingerprint || '';
-  return `${FONT_CACHE_PREFIX}${fontPath.replace(/[/\\]/g, '_')}_${size}_${bpp}_${fp}`;
+  const o = normalizeFontOpts(opts);
+  return `${FONT_CACHE_PREFIX}${fontPath.replace(/[/\\]/g, '_')}_${size}_${bpp}_sp${o.spacing}_m${o.smartMono ? 1 : 0}_c${o.compress ? 1 : 0}_${fp}`;
 }
 
 async function getFontFileFingerprint(fontPath) {
@@ -267,10 +311,10 @@ async function getFontFileFingerprint(fontPath) {
   }
 }
 
-async function getCachedFontC(fontPath, size, bpp) {
+async function getCachedFontC(fontPath, size, bpp, opts = {}) {
   try {
     const fp = await getFontFileFingerprint(fontPath);
-    const cacheKey = getFontCacheKey(fontPath, size, bpp, fp);
+    const cacheKey = getFontCacheKey(fontPath, size, bpp, fp, opts);
     const cached = localStorage.getItem(cacheKey);
     if (cached) {
       const { symbols: cachedSymbols, cContent } = JSON.parse(cached);
@@ -282,12 +326,12 @@ async function getCachedFontC(fontPath, size, bpp) {
   return null;
 }
 
-function getCachedFontCSync(fontPath, size, bpp) {
-  // 同步版本：优先用已在内存中的 fingerprint，否则返回 null（不使用缓存）
+function getCachedFontCSync(fontPath, size, bpp, opts = {}) {
+  // sync: only when fingerprint already in memory
   try {
     const fp = FONT_FP_CACHE.get(fontPath);
     if (!fp) return null;
-    const cacheKey = getFontCacheKey(fontPath, size, bpp, fp);
+    const cacheKey = getFontCacheKey(fontPath, size, bpp, fp, opts);
     const cached = localStorage.getItem(cacheKey);
     if (cached) {
       const { symbols: cachedSymbols, cContent } = JSON.parse(cached);
@@ -299,10 +343,10 @@ function getCachedFontCSync(fontPath, size, bpp) {
   return null;
 }
 
-async function setCachedFontC(fontPath, size, bpp, symbols, cContent) {
+async function setCachedFontC(fontPath, size, bpp, symbols, cContent, opts = {}) {
   try {
     const fp = await getFontFileFingerprint(fontPath);
-    const cacheKey = getFontCacheKey(fontPath, size, bpp, fp);
+    const cacheKey = getFontCacheKey(fontPath, size, bpp, fp, opts);
     localStorage.setItem(cacheKey, JSON.stringify({ symbols, cContent }));
   } catch (e) {
     console.warn('保存字模缓存失败:', e);
@@ -327,8 +371,8 @@ function removeFontCacheByKey(fontPath, size, bpp) {
   console.log(`[removeFontCacheByKey] 清理 ${keysToRemove.length} 个缓存项: ${fontPath} size=${size} bpp=${bpp}`);
 }
 
-export async function hasLocalFontCache(fontPath, size, bpp, symbols) {
-  const cached = await getCachedFontC(fontPath, size, bpp);
+export async function hasLocalFontCache(fontPath, size, bpp, symbols, opts = {}) {
+  const cached = await getCachedFontC(fontPath, size, bpp, opts);
   if (!cached || !cached.cContent) return false;
   if (!symbols) return true;
   return symbols.split('').every(ch => cached.cachedSymbols.includes(ch));
@@ -351,11 +395,12 @@ export async function restoreFontCache(fontKeys) {
   for (let i = 0; i < fontKeys.length; i++) {
     const { fontPath, size, bpp, symbols } = fontKeys[i];
     if (!fontPath || fontPath === 'default') continue;
-    const key = `${fontPath}|${size}|${bpp}`;
+    const opts = normalizeFontOpts({ spacing: fontKeys[i].spacing, smartMono: fontKeys[i].smartMono, compress: fontKeys[i].compress });
+    const key = makeFontDataKey(fontPath, size, bpp, opts);
     if (window.SGLRenderer.getFontData(key)) { restored++; continue; }
     try {
       const fp = fps[i] || '';
-      const cacheKey = getFontCacheKey(fontPath, size, bpp, fp);
+      const cacheKey = getFontCacheKey(fontPath, size, bpp, fp, opts);
       const raw = localStorage.getItem(cacheKey);
       if (!raw) continue;
       const { symbols: cachedSymbols, cContent } = JSON.parse(raw);
@@ -400,11 +445,13 @@ export async function restoreFontCache(fontKeys) {
 export function restoreFontCacheFast(fontKeys) {
   if (!window.SGLRenderer || !window.SGLRenderer.parseFontCFile) return 0;
   let restored = 0;
-  for (const { fontPath, size, bpp, symbols } of fontKeys) {
+  for (const entry of fontKeys) {
+    const { fontPath, size, bpp, symbols } = entry;
     if (!fontPath || fontPath === 'default') continue;
-    const key = `${fontPath}|${size}|${bpp}`;
+    const opts = normalizeFontOpts({ spacing: entry.spacing, smartMono: entry.smartMono, compress: entry.compress });
+    const key = makeFontDataKey(fontPath, size, bpp, opts);
     if (window.SGLRenderer.getFontData(key)) { restored++; continue; }
-    const cached = getCachedFontCSync(fontPath, size, bpp);
+    const cached = getCachedFontCSync(fontPath, size, bpp, opts);
     if (cached && cached.cContent) {
       const needSymbols = symbols || '';
       const hasAllChars = !needSymbols || needSymbols.split('').every(ch => cached.cachedSymbols.includes(ch));
@@ -428,9 +475,10 @@ export function restoreFontCacheFast(fontKeys) {
   return restored;
 }
 
-export async function loadSglFontData(fontPath, size, bpp, symbols) {
+export async function loadSglFontData(fontPath, size, bpp, symbols, opts = {}) {
   if (!fontPath || fontPath === 'default') return null;
-  const key = `${fontPath}|${size}|${bpp}`;
+  const fontOpts = normalizeFontOpts(opts);
+  const key = makeFontDataKey(fontPath, size, bpp, fontOpts);
 
   // 已缓存
   if (window.SGLRenderer && window.SGLRenderer.getFontData(key)) {
@@ -445,18 +493,22 @@ export async function loadSglFontData(fontPath, size, bpp, symbols) {
 
   const promise = enqueueFontTask(async () => {
     try {
-      const fontName = `sgl_font_${fontPath.replace(/[/\\]/g, '/').split('/').pop().replace(/[^\w]/g, '_')}_${size}_bpp${bpp}`;
+      const needSymbols = symbols || '';
+      // 无字符时无法生成字模（后端/前端都会报「没有可渲染的字符」）；有旧缓存仍可恢复
       let cContent;
-      
-      // 先检查 localStorage 缓存（v2 带指纹）
-      const cached = await getCachedFontC(fontPath, size, bpp);
+      const cached = await getCachedFontC(fontPath, size, bpp, fontOpts);
       if (cached && cached.cContent) {
-        const needSymbols = symbols || '';
         const hasAllChars = !needSymbols || needSymbols.split('').every(ch => cached.cachedSymbols.includes(ch));
         if (hasAllChars) {
           cContent = cached.cContent;
         }
       }
+      if (!cContent && !needSymbols) {
+        console.log(`[font] loadSglFontData 跳过空字符集: ${fontPath} size=${size} bpp=${bpp}`);
+        return null;
+      }
+
+      const fontName = `sgl_font_${fontPath.replace(/[/\\]/g, '/').split('/').pop().replace(/[^\w]/g, '_')}_${size}_bpp${bpp}`;
       
       // 没有缓存或缓存不包含所需字符，调用后端生成
       if (!cContent) {
@@ -465,9 +517,11 @@ export async function loadSglFontData(fontPath, size, bpp, symbols) {
             fontPath,
             size,
             bpp,
-            symbols: symbols || '',
-            compress: false,
+            symbols: needSymbols,
+            compress: fontOpts.compress,
             fontName,
+            spacing: fontOpts.spacing,
+            smartMono: fontOpts.smartMono,
           });
         } catch (e) {
           console.warn('后端字模生成失败，回退到前端 Canvas 生成:', e);
@@ -475,10 +529,10 @@ export async function loadSglFontData(fontPath, size, bpp, symbols) {
           if (!familyName) {
             throw new Error('字体文件加载失败');
           }
-          cContent = generateFontC(familyName, size, bpp, symbols || '');
+          cContent = generateFontC(familyName, size, bpp, needSymbols, fontOpts.compress, fontName, fontOpts.spacing, fontOpts.smartMono);
         }
         // 缓存到 localStorage（v2 带指纹）
-        await setCachedFontC(fontPath, size, bpp, symbols || '', cContent);
+        await setCachedFontC(fontPath, size, bpp, needSymbols, cContent, fontOpts);
       }
       
       // 诊断日志：输出 C 文件内容长度和前 200 字符
@@ -579,10 +633,10 @@ export function validateFontData(fd) {
   return true;
 }
 
-export function getSglFontData(fontPath, size, bpp) {
+export function getSglFontData(fontPath, size, bpp, opts = {}) {
   if (!fontPath || fontPath === 'default') return null;
   if (!window.SGLRenderer) return null;
-  const key = `${fontPath}|${size}|${bpp}`;
+  const key = makeFontDataKey(fontPath, size, bpp, opts);
   const fd = window.SGLRenderer.getFontData(key);
   console.log(`[getSglFontData] key=${key} fd=${fd ? '存在' : 'null'}`, fd ? {
     bitmap_len: fd.bitmap?.length,
@@ -600,9 +654,9 @@ export function getSglFontData(fontPath, size, bpp) {
   return fd;
 }
 
-export function removeSglFontData(fontPath, size, bpp) {
+export function removeSglFontData(fontPath, size, bpp, opts = {}) {
   if (!window.SGLRenderer) return;
-  const key = `${fontPath}|${size}|${bpp}`;
+  const key = makeFontDataKey(fontPath, size, bpp, opts);
   window.SGLRenderer.removeFontData(key);
   console.log(`[removeSglFontData] 移除内存缓存: ${key}`);
 }
@@ -615,7 +669,7 @@ export function removeSglFontData(fontPath, size, bpp) {
 export async function preloadSglFontData(fonts, symbols) {
   if (!fonts || !window.SGLRenderer) return;
   await Promise.all(fonts.map(f =>
-    loadSglFontData(f.path, f.size || 14, f.bpp || 4, symbols)
+    loadSglFontData(f.path, f.size || 14, f.bpp || 4, symbols, { spacing: f.spacing || 0, smartMono: !!f.smartMono, compress: !!f.compress })
   ));
 }
 

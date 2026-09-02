@@ -15,7 +15,14 @@ import {
 } from './render_common.js';
 import { setLogger as setUpdaterLogger } from './updater.js';
 import { initAIPanel } from './ai_panel.js';
-import { setupGlobalInteraction, render as previewRender, setPreviewPageIndex } from './preview.js';
+import {
+  setupGlobalInteraction,
+  render as previewRender,
+  setPreviewPageIndex,
+  enterPreviewSimulator,
+  exitPreviewSimulator,
+  setPreviewDemoEnabled,
+} from './preview.js';
 import qrcodeGenerator from 'qrcode-generator';
 
 initNav('editor');
@@ -23,6 +30,7 @@ setupWindowControls();
 setupUpdateChecker();
 AppState.init();
 initAIPanel();
+let _previewMode = false;
 let _fontPreloadInProgress = false;
 let _renderCanvasTimer = null;
 function scheduleRenderCanvas() {
@@ -1894,14 +1902,10 @@ function renderWidgetVisual(el, w, renderSize) {
     }
 
     case 'arc': {
-      let arcRadiusInVal, arcRadiusOutVal;
-      // SGL: radius_out = width / 2（自动推导），radius_in = radius_out - 2（自动推导）
-      const arcDiameter = w.width;
-      if (w.radiusOut == null || w.radiusOut <= 0) {
-        arcRadiusOutVal = Math.round(arcDiameter / 2);
-      } else {
-        arcRadiusOutVal = w.radiusOut;
-      }
+      // SGL: radius_out = (x2-x1)/2，圆心 = (x1+x2)/2（闭区间），非整圆时外缘+AA 易削底
+      const autoRadius = (w.radiusOut == null || w.radiusOut <= 0);
+      let arcRadiusOutVal = autoRadius ? Math.trunc(w.width / 2) : w.radiusOut;
+      let arcRadiusInVal;
       if (w.radiusIn == null || w.radiusIn <= 0) {
         arcRadiusInVal = arcRadiusOutVal - 2;
       } else {
@@ -1917,21 +1921,37 @@ function renderWidgetVisual(el, w, renderSize) {
       const rOut = Math.max(1, arcRadiusOutVal);
       const rIn = Math.max(0, arcRadiusInVal);
 
-      // 用 SGLRenderer 像素级渲染
       const surf = sglSurface(w.width, w.height);
-      const cx = w.width / 2;
-      const cy = w.height / 2;
+      // 在像素面按闭区间居中；非整圆限制半径不越界，避免下方被 clip/overflow 削掉
+      const zSaved = surf.scale;
+      surf.scale = 1;
+      const pcx = Math.floor((surf.w - 1) / 2);
+      const pcy = Math.floor((surf.h - 1) / 2);
+      const prFit = Math.max(1, Math.min(pcx, surf.w - 1 - pcx, pcy, surf.h - 1 - pcy));
+      const isFullCircle = startAngle === 0 && endAngle === 360;
+      const prOutAuto = isFullCircle ? Math.max(prFit, Math.ceil(surf.w / 2)) : prFit;
+      const prFromLogic = Math.max(1, Math.round(rOut * zSaved));
+      const prOut = (autoRadius || prFromLogic >= prOutAuto - 1)
+        ? prOutAuto
+        : Math.min(prOutAuto, prFromLogic);
+      const thick = Math.max(1, Math.round((rOut - rIn) * zSaved));
+      const prIn = Math.max(0, prOut - thick);
+      // 对齐 SGL sgl_arc_construct_cb：用户角 0°=顶，draw 层 0°=底，非整圆时 +180
+      const mod360 = (a) => ((a % 360) + 360) % 360;
+      const drawStart = isFullCircle ? startAngle : mod360(startAngle + 180);
+      const drawEnd = isFullCircle ? endAngle : mod360(endAngle + 180);
       SGLR.drawFillArc(surf, {
-        cx, cy,
-        radius_in: rIn,
-        radius_out: rOut,
-        start_angle: startAngle,
-        end_angle: endAngle,
+        cx: pcx, cy: pcy,
+        radius_in: prIn,
+        radius_out: prOut,
+        start_angle: drawStart,
+        end_angle: drawEnd,
         mode: arcMode,
         color: SGLR.hexToColor(arcColor),
         bg_color: SGLR.hexToColor(bgColor),
         alpha: alpha,
       });
+      surf.scale = zSaved;
       SGLR.flushSurface(surf);
       break;
     }
@@ -6647,7 +6667,7 @@ function renderProjectPanel() {
 function renderProperties() {
   const w = AppState.selectedWidgetId ? AppState.getWidget(AppState.selectedWidgetId) : null;
   const page = AppState.getCurrentPage();
-  document.getElementById('status-project').textContent = '项目: ' + AppState.project.name;
+  document.getElementById('status-project').textContent = '项目: ' + (AppState.project.name || '未命名');
   document.getElementById('status-size').textContent = '屏幕: ' + AppState.project.screen_width + '×' + AppState.project.screen_height;
   document.getElementById('status-widgets').textContent = '组件: ' + (page ? page.widgets.length : 0);
   document.getElementById('status-selection').textContent = w ? `选中: ${SGL_WIDGET_TYPES.find(t => t.type === w.type)?.name || w.type} @ (${w.x},${w.y})` : '未选中';
@@ -7147,6 +7167,9 @@ async function saveProjectAction() {
   // 保存时不检查字体，直接保存
   const result = await AppState.saveProject();
   if (result.ok) {
+    // 空名称已用文件名填充时，立即刷新属性面板与状态栏
+    renderProjectPanel();
+    renderProperties();
     showToast('项目已保存到: ' + result.path.split(/[/\\]/).pop(), 'success');
     logMessage('项目已保存: ' + result.path, 'success');
   } else if (result.msg !== '取消保存') {
@@ -8097,6 +8120,12 @@ function requestFontUpdate() {
 }
 
 function renderAll() {
+  // 预览态只刷新独立的 preview-frame，不触碰编辑画布及其居中状态。
+  if (_previewMode) {
+    previewRender();
+    return;
+  }
+
   if (AppState.currentPageId !== lastRenderedPageId) {
     centerCanvas();
     lastRenderedPageId = AppState.currentPageId;
@@ -8192,8 +8221,6 @@ window.addEventListener('resize', () => {
 // ============================================================
 // 预览模式（复用 preview.js 的渲染和交互）
 // ============================================================
-let _previewMode = false;
-
 function _previewToggleUI(on) {
   const setHide = (el, hide) => { if (el) el.style.display = hide ? 'none' : ''; };
   // 保持整个编辑器布局不变，只切换「预览/编辑」按钮和画布区域显示
@@ -8211,7 +8238,6 @@ function _previewToggleUI(on) {
 }
 
 async function enterPreviewMode() {
-  console.log('[preview] enterPreviewMode called, _previewMode=', _previewMode);
   if (_previewMode) return;
 
   // 预览前检查：有文本控件缺少字体时弹出警告
@@ -8226,6 +8252,10 @@ async function enterPreviewMode() {
   const curIdx = AppState.project.pages.indexOf(AppState.getCurrentPage());
   if (curIdx >= 0) setPreviewPageIndex(curIdx);
   _previewToggleUI(true);
+  // 启用临时 runtime 交互；退出预览时统一清理，不写回工程数据。
+  enterPreviewSimulator();
+  // 假数据动画属于后续阶段，最小交互预览保持关闭。
+  setPreviewDemoEnabled(false);
   // 预览模式下字体加载完成后渲染到 preview-frame，而非编辑器 canvas
   setFontLoadCallback(() => previewRender());
   // 只绑定交互事件 + 渲染，不调用 initPreview（避免 initNav/setFontLoadCallback 污染编辑器）
@@ -8237,6 +8267,8 @@ async function enterPreviewMode() {
 function exitPreviewMode() {
   if (!_previewMode) return;
   _previewMode = false;
+  // 停止动画并清空预览 runtime，恢复进入预览前的编辑状态。
+  exitPreviewSimulator();
   _previewToggleUI(false);
   // 恢复编辑器的字体回调
   setFontLoadCallback(() => scheduleRenderCanvas());
@@ -8332,19 +8364,11 @@ async function takeScreenshot() {
   const btnEnter = document.getElementById('btn-enter-preview');
   const btnExit = document.getElementById('btn-exit-preview');
   const btnShot = document.getElementById('btn-screenshot');
-  if (btnEnter) btnEnter.addEventListener('click', () => {
-    showToast('预览按钮被点击', 'info');
-    enterPreviewMode();
-  });
-  if (btnExit) btnExit.addEventListener('click', () => {
-    showToast('编辑按钮被点击', 'info');
-    exitPreviewMode();
-  });
+  if (btnEnter) btnEnter.addEventListener('click', () => enterPreviewMode());
+  if (btnExit) btnExit.addEventListener('click', () => exitPreviewMode());
   if (btnShot) btnShot.addEventListener('click', () => { takeScreenshot().catch(e => console.error(e)); });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'F5') { e.preventDefault(); enterPreviewMode(); }
     if (_previewMode && e.key === 'Escape') exitPreviewMode();
   });
-  // DEBUG: expose AppState for browser automation testing
-  window.__appState = AppState;
 })();

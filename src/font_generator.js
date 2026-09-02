@@ -530,8 +530,30 @@ function generateSglFontC(fontName, fontData, cmap, bpp, compress) {
   out += ` * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\n`;
   out += ` * SOFTWARE.\n`;
   out += ` */\n\n`;
-  out += `#include <sgl_core.h>\n`;
+  out += `#include <sgl.h>\n`;
   out += `#include <sgl_font.h>\n\n`;
+
+  // 字符一览（对齐原版 sgl_font_conv，便于核对遗漏）
+  out += `/*\n`;
+  out += ` * Glyph inventory: ${glyphCount} glyphs\n`;
+  out += ` * Preview (printable):\n * `;
+  let col = 0;
+  for (let i = 0; i < glyphCount; i++) {
+    const code = fontData.glyphs[i].code;
+    if (code < 0x20 || (code >= 0x7F && code <= 0x9F)) continue;
+    const ch = String.fromCodePoint(code);
+    if (ch === '*' || ch === '/') continue;
+    out += ch;
+    col++;
+    if (col % 32 === 0) out += `\n * `;
+  }
+  if (col % 32 !== 0) out += `\n`;
+  else if (col === 0) out += `\n`;
+  out += ` *\n * Codepoint list:\n`;
+  for (let i = 0; i < glyphCount; i++) {
+    out += ` *   [${String(i).padStart(4)}] ${glyphCommentLabel(fontData.glyphs[i].code)}\n`;
+  }
+  out += ` */\n\n`;
 
   // Phase 3: font_bitmap[] (对齐 C: Phase 3 write font_bitmap[])
   out += `static const uint8_t font_bitmap[] = {\n`;
@@ -541,7 +563,7 @@ function generateSglFontC(fontName, fontData, cmap, bpp, compress) {
     const cg = compiled[i];
     if (cg.bitmapData.length === 0) continue;
     hasBitmapData = true;
-    out += `    /* U+${g.code.toString(16).toUpperCase().padStart(4, '0')} */\n`;
+    out += `    /* ${glyphCommentLabel(g.code)} */\n`;
     for (let b = 0; b < cg.bitmapData.length; b++) {
       if (b % 8 === 0) out += `    `;
       out += `0x${cg.bitmapData[b].toString(16).padStart(2, '0')}`;
@@ -571,10 +593,10 @@ function generateSglFontC(fontName, fontData, cmap, bpp, compress) {
         const gi = findGlyphIndex(fontData, code);
         if (gi >= 0) {
           const g = fontData.glyphs[gi];
-          out += `,\n    {.bitmap_index = ${compiled[gi].bitmapOffset}, .adv_w = ${g.advW}, .box_w = ${g.boxW}, .box_h = ${g.boxH}, .ofs_x = ${g.ofsX}, .ofs_y = ${g.ofsY}}`;
+          out += `,\n    {.bitmap_index = ${compiled[gi].bitmapOffset}, .adv_w = ${g.advW}, .box_w = ${g.boxW}, .box_h = ${g.boxH}, .ofs_x = ${g.ofsX}, .ofs_y = ${g.ofsY}} /* ${glyphCommentLabel(code)} */`;
         } else {
           // 对齐 C: Dummy entry for gap (bitmap_index = total_bitmap_size)
-          out += `,\n    {.bitmap_index = ${totalBitmapSize}, .adv_w = 0, .box_w = 0, .box_h = 0, .ofs_x = 0, .ofs_y = 0}`;
+          out += `,\n    {.bitmap_index = ${totalBitmapSize}, .adv_w = 0, .box_w = 0, .box_h = 0, .ofs_x = 0, .ofs_y = 0} /* gap ${glyphCommentLabel(code)} */`;
         }
       }
     } else {
@@ -584,10 +606,10 @@ function generateSglFontC(fontName, fontData, cmap, bpp, compress) {
         const gi = findGlyphIndex(fontData, code);
         if (gi >= 0) {
           const g = fontData.glyphs[gi];
-          out += `,\n    {.bitmap_index = ${compiled[gi].bitmapOffset}, .adv_w = ${g.advW}, .box_w = ${g.boxW}, .box_h = ${g.boxH}, .ofs_x = ${g.ofsX}, .ofs_y = ${g.ofsY}}`;
+          out += `,\n    {.bitmap_index = ${compiled[gi].bitmapOffset}, .adv_w = ${g.advW}, .box_w = ${g.boxW}, .box_h = ${g.boxH}, .ofs_x = ${g.ofsX}, .ofs_y = ${g.ofsY}} /* ${glyphCommentLabel(code)} */`;
         } else {
           // 对齐 C: Should not happen, but handle gracefully
-          out += `,\n    {.bitmap_index = ${totalBitmapSize}, .adv_w = 0, .box_w = 0, .box_h = 0, .ofs_x = 0, .ofs_y = 0}`;
+          out += `,\n    {.bitmap_index = ${totalBitmapSize}, .adv_w = 0, .box_w = 0, .box_h = 0, .ofs_x = 0, .ofs_y = 0} /* missing ${glyphCommentLabel(code)} */`;
         }
       }
     }
@@ -644,17 +666,18 @@ function generateSglFontC(fontName, fontData, cmap, bpp, compress) {
   }
   out += `};\n\n`;
 
-  // Phase 7: sgl_font_t (对齐 C: Phase 6 write sgl_font_t)
+  // Phase 7: sgl_font_t — 字段顺序必须与 sgl_core.h 中 sgl_font_t 声明一致
+  // (bitmap, table, font_table_size, font_height, unicode, unicode_num, base_line, bpp, compress)
   out += `const sgl_font_t ${fontName} = {\n`;
   out += `    .bitmap = font_bitmap,\n`;
   out += `    .table = font_table,\n`;
   out += `    .font_table_size = SGL_ARRAY_SIZE(font_table),\n`;
   out += `    .font_height = ${fontData.fontHeight},\n`;
+  out += `    .unicode = font_unicode,\n`;
+  out += `    .unicode_num = SGL_ARRAY_SIZE(font_unicode),\n`;
   out += `    .base_line = ${fontData.baseLine},\n`;
   out += `    .bpp = ${bpp},\n`;
   out += `    .compress = ${shouldCompress(bpp, compress) ? 1 : 0},\n`;
-  out += `    .unicode = font_unicode,\n`;
-  out += `    .unicode_num = SGL_ARRAY_SIZE(font_unicode),\n`;
   out += `};\n`;
 
   return out;
@@ -663,6 +686,27 @@ function generateSglFontC(fontName, fontData, cmap, bpp, compress) {
 // ============================================================
 // 6. 对外主接口
 // ============================================================
+
+/**
+ * C 注释用字形标注，例如 U+0041 'A' / U+4E2D '中'
+ */
+function glyphCommentLabel(code) {
+  if (code < 0x20 || (code >= 0x7F && code <= 0x9F)) {
+    return `U+${code.toString(16).toUpperCase().padStart(4, '0')}`;
+  }
+  let ch;
+  try {
+    ch = String.fromCodePoint(code);
+  } catch (_) {
+    return `U+${code.toString(16).toUpperCase().padStart(4, '0')}`;
+  }
+  if (ch === '*' || ch === '/') {
+    return `U+${code.toString(16).toUpperCase().padStart(4, '0')}`;
+  }
+  if (ch === "'") return "U+0027 '\\''";
+  if (ch === '\\') return "U+005C '\\\\'";
+  return `U+${code.toString(16).toUpperCase().padStart(4, '0')} '${ch}'`;
+}
 
 /**
  * 生成 SGL 字模 C 文件内容
@@ -679,18 +723,43 @@ function generateSglFontC(fontName, fontData, cmap, bpp, compress) {
  * @param {string} [fontName] - 可选，指定字体变量名（如 sgl_font_HarmonyOS_Sans_SC_Bold_ttf_14_bpp4）
  * @returns {string} SGL 字模 C 文件内容
  */
-export function generateFontC(fontFamily, size, bpp, symbols, compress = false, fontName = null) {
-  // Phase 1: 渲染所有字形 (对齐 C: font_render_init)
+
+/** Script group (align output_writer.c script_group) */
+function scriptGroup(code) {
+  if ((code >= 0x0020 && code <= 0x007E) || (code >= 0x00A0 && code <= 0x024F)) return 0;
+  if ((code >= 0x2E80 && code <= 0x9FFF) || (code >= 0xF900 && code <= 0xFAFF) || (code >= 0xFF00 && code <= 0xFFEF)) return 1;
+  if (code >= 0x0400 && code <= 0x04FF) return 2;
+  return 3;
+}
+
+/** Smart monospace (align output_writer.c apply_smart_mono) */
+function applySmartMono(fontData) {
+  const maxBoxW = [0, 0, 0, 0];
+  for (const g of fontData.glyphs) {
+    const grp = scriptGroup(g.code);
+    if (g.boxW > maxBoxW[grp]) maxBoxW[grp] = g.boxW;
+  }
+  for (const g of fontData.glyphs) {
+    const mw = maxBoxW[scriptGroup(g.code)];
+    g.advW = mw * 16;
+    g.ofsX = g.boxW > 0 ? Math.floor((mw - g.boxW) / 2) : 0;
+  }
+}
+
+function applySpacing(fontData, spacing) {
+  if (!spacing || spacing <= 0) return;
+  for (const g of fontData.glyphs) g.advW += spacing * 16;
+}
+
+export function generateFontC(fontFamily, size, bpp, symbols, compress = false, fontName = null, spacing = 0, smartMono = false) {
   const fontData = fontRender(fontFamily, size, symbols);
   if (fontData.glyphCount === 0) {
     throw new Error('没有可渲染的字符');
   }
-
-  // Phase 2: 构建 cmap 子表 (对齐 C: cmap_build)
+  if (smartMono) applySmartMono(fontData);
+  applySpacing(fontData, spacing);
   const codes = fontData.glyphs.map(g => g.code);
   const cmap = cmapBuild(codes);
-
-  // Phase 3: 生成 C 文件 (对齐 C: write_sgl_font)
   const name = fontName || `font_${Math.floor(Math.random() * 100000)}`;
   return generateSglFontC(name, fontData, cmap, bpp, compress);
 }

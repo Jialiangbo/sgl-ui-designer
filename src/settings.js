@@ -94,7 +94,7 @@ async function syncConfigFromFile() {
 }
 
 function refresh() {
-  $('status-project').textContent = '项目: ' + AppState.project.name;
+  $('status-project').textContent = '项目: ' + (AppState.project.name || '未命名');
   $('status-screen').textContent = '屏幕: ' + AppState.project.screen_width + '×' + AppState.project.screen_height;
 
   ensureSglConfig();
@@ -108,204 +108,6 @@ function refresh() {
     } else {
       el.value = val;
     }
-  });
-  renderAsciiFontList();
-}
-
-function bindChange(id, key, parser = v => v) {
-  $(id).addEventListener('change', e => {
-    AppState.project[key] = parser(e.target.value);
-    if (key === 'screen_width' || key === 'screen_height') {
-      const page = AppState.getCurrentPage();
-      if (page) { page.width = AppState.project.screen_width; page.height = AppState.project.screen_height; }
-    }
-    AppState.save();
-    showToast('已保存', 'success');
-  });
-}
-
-function ensureAsciiFonts() {
-  if (!Array.isArray(AppState.project.ascii_fonts)) {
-    AppState.project.ascii_fonts = [];
-  }
-  AppState.project.ascii_fonts = AppState.project.ascii_fonts
-    .map(item => {
-      if (typeof item === 'string') {
-        return { name: item, size: 16, bpp: AppState.project.ascii_font_bpp || 4, compress: 0 };
-      }
-      if (item.compress === undefined) item.compress = 0;
-      return item;
-    })
-    .filter(item => item && typeof item === 'object');
-}
-
-function renderAsciiFontList() {
-  const container = $('ascii-font-config-list');
-  if (!container) return;
-  const fonts = AppState.project.resources?.fonts || [];
-  ensureAsciiFonts();
-  const list = AppState.project.ascii_fonts;
-  if (_comboBoxDropLists.size > 0) {
-    const toRemove = [];
-    _comboBoxDropLists.forEach((_, comboWrap) => {
-      if (!container.contains(comboWrap)) toRemove.push(comboWrap);
-    });
-    toRemove.forEach(w => unregisterComboClickClose(w));
-  }
-  container.innerHTML = '';
-  if (fonts.length === 0) {
-    container.innerHTML = '<span style="color:var(--text-muted);font-size:12px;font-weight:normal;">资源面板中暂无字体</span>';
-    return;
-  }
-  if (list.length === 0) {
-    container.innerHTML = '<span style="color:var(--text-muted);font-size:12px;font-weight:normal;">点击“添加字体配置”生成 ASCII 字模</span>';
-  }
-
-  list.forEach((cfg, idx) => {
-    const row = document.createElement('div');
-    row.style.cssText = 'display:grid;grid-template-columns:1fr 80px 130px 70px 32px;gap:8px;align-items:end;background:var(--bg-primary);padding:10px;border:1px solid var(--border);border-radius:6px;';
-
-    const fontGroup = document.createElement('div');
-    fontGroup.className = 'form-group';
-    fontGroup.innerHTML = '<label class="form-label">字体</label>';
-    const fontSelect = document.createElement('select');
-    fontSelect.className = 'form-select';
-    fonts.forEach(font => {
-      const opt = document.createElement('option');
-      opt.value = font.path || font.name;
-      opt.textContent = font.name || '未命名字体';
-      fontSelect.appendChild(opt);
-    });
-    fontSelect.value = cfg.name || '';
-    fontSelect.addEventListener('change', () => {
-      cfg.name = fontSelect.value;
-      AppState.save();
-    });
-    fontGroup.appendChild(fontSelect);
-
-    const sizeOptions = [8, 10, 12, 14, 16, 18, 20, 24, 28, 32, 36, 40, 48, 56, 64];
-
-    const sizeGroup = document.createElement('div');
-    sizeGroup.className = 'form-group';
-    sizeGroup.innerHTML = '<label class="form-label">字号</label>';
-
-    const comboWrap = document.createElement('div');
-    comboWrap.style.cssText = 'position:relative;display:flex;align-items:center;';
-
-    const sizeInput = document.createElement('input');
-    sizeInput.type = 'number';
-    sizeInput.className = 'form-input';
-    sizeInput.value = cfg.size || 16;
-    sizeInput.min = 8;
-    sizeInput.style.cssText = 'width:100%;padding-right:28px;';
-
-    const dropBtn = document.createElement('button');
-    dropBtn.type = 'button';
-    dropBtn.className = 'btn btn-sm';
-    dropBtn.textContent = '▼';
-    dropBtn.style.cssText = 'position:absolute;right:2px;top:2px;bottom:2px;width:24px;padding:0;background:transparent;border:none;color:var(--text-muted);cursor:pointer;';
-
-    const dropList = document.createElement('div');
-    dropList.style.cssText = 'position:absolute;left:0;right:0;top:100%;margin-top:2px;max-height:160px;overflow:auto;background:var(--bg-secondary);border:1px solid var(--border);border-radius:4px;z-index:10;display:none;';
-    sizeOptions.forEach(sz => {
-      const item = document.createElement('div');
-      item.textContent = sz;
-      item.style.cssText = 'padding:6px 10px;cursor:pointer;font-size:13px;color:var(--text-primary);';
-      item.addEventListener('mouseenter', () => { item.style.background = 'var(--bg-hover, rgba(255,255,255,0.06))'; });
-      item.addEventListener('mouseleave', () => { item.style.background = ''; });
-      item.addEventListener('click', () => {
-        sizeInput.value = sz;
-        cfg.size = sz;
-        dropList.style.display = 'none';
-        AppState.save();
-      });
-      dropList.appendChild(item);
-    });
-
-    function toggleList(show) {
-      dropList.style.display = show ? 'block' : 'none';
-    }
-
-    dropBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      toggleList(dropList.style.display === 'none');
-    });
-
-    sizeInput.addEventListener('click', (e) => {
-      e.stopPropagation();
-      toggleList(true);
-    });
-
-    sizeInput.addEventListener('change', () => {
-      cfg.size = parseInt(sizeInput.value) || 16;
-      AppState.save();
-    });
-
-    registerComboClickClose(comboWrap, dropList);
-
-    comboWrap.appendChild(sizeInput);
-    comboWrap.appendChild(dropBtn);
-    comboWrap.appendChild(dropList);
-    sizeGroup.appendChild(comboWrap);
-
-    const bppGroup = document.createElement('div');
-    bppGroup.className = 'form-group';
-    bppGroup.innerHTML = '<label class="form-label">抗锯齿</label>';
-    const bppSelect = document.createElement('select');
-    bppSelect.className = 'form-select';
-    [1, 2, 4, 8].forEach(bpp => {
-      const opt = document.createElement('option');
-      opt.value = bpp;
-      opt.textContent = bpp + ' bit' + (bpp === 1 ? '（无抗锯齿）' : '');
-      bppSelect.appendChild(opt);
-    });
-    bppSelect.value = String(cfg.bpp || 4);
-    bppSelect.addEventListener('change', () => {
-      cfg.bpp = parseInt(bppSelect.value) || 4;
-      AppState.save();
-    });
-    bppGroup.appendChild(bppSelect);
-
-    const compressGroup = document.createElement('div');
-    compressGroup.className = 'form-group';
-    compressGroup.innerHTML = '<label class="form-label">RLE压缩</label>';
-    const compressSelect = document.createElement('select');
-    compressSelect.className = 'form-select';
-    [
-      { v: 0, t: '否' },
-      { v: 1, t: '是' }
-    ].forEach(o => {
-      const opt = document.createElement('option');
-      opt.value = o.v;
-      opt.textContent = o.t;
-      compressSelect.appendChild(opt);
-    });
-    compressSelect.value = String(cfg.compress || 0);
-    compressSelect.addEventListener('change', () => {
-      cfg.compress = parseInt(compressSelect.value) || 0;
-      AppState.save();
-    });
-    compressGroup.appendChild(compressSelect);
-
-    const delBtn = document.createElement('button');
-    delBtn.type = 'button';
-    delBtn.className = 'btn btn-sm';
-    delBtn.textContent = '×';
-    delBtn.title = '删除';
-    delBtn.style.cssText = 'height:36px;background:#ef4444;color:#fff;border:none;';
-    delBtn.addEventListener('click', () => {
-      list.splice(idx, 1);
-      AppState.project.ascii_fonts = list;
-      AppState.save();
-      renderAsciiFontList();
-    });
-
-    row.appendChild(fontGroup);
-    row.appendChild(sizeGroup);
-    row.appendChild(bppGroup);
-    row.appendChild(compressGroup);
-    row.appendChild(delBtn);
-    container.appendChild(row);
   });
 }
 
@@ -373,14 +175,23 @@ async function _init() {
         AppState.project.sgl_config[key] = el.checked ? 1 : 0;
       } else if (el.type === 'color') {
         AppState.project.sgl_config[key] = el.value;
-      } else if (el.tagName === 'SELECT' && el.dataset.key === 'heap_algo') {
-        AppState.project.sgl_config[key] = el.value;
+      } else if (el.tagName === 'SELECT') {
+        // 下拉框：heap_algo 为字符串，其余为整数（含合法的 0，如旋转 0°、开关关闭）
+        if (key === 'heap_algo') {
+          AppState.project.sgl_config[key] = el.value;
+        } else {
+          const parsed = parseInt(el.value, 10);
+          AppState.project.sgl_config[key] = Number.isFinite(parsed) ? parsed : 0;
+        }
       } else {
+        // number 输入：须为非负整数；尺寸类字段须 > 0
         const raw = el.value.trim();
         const parsed = parseInt(raw, 10);
-        if (raw === '' || !Number.isFinite(parsed) || parsed < 1) {
-          showToast(`配置项 ${key} 必须为大于 0 的整数`, 'error');
-          el.value = AppState.project.sgl_config[key] || 1;
+        const mustPositive = ['systick_ms', 'event_queue_size', 'dirty_area_num_max', 'heap_memory_size', 'focused_width'].includes(key);
+        const invalid = raw === '' || !Number.isFinite(parsed) || parsed < 0 || (mustPositive && parsed < 1);
+        if (invalid) {
+          showToast(`配置项 ${key} 须为${mustPositive ? '大于 0 的' : '非负'}整数`, 'error');
+          el.value = AppState.project.sgl_config[key] ?? (mustPositive ? 1 : 0);
           return;
         }
         AppState.project.sgl_config[key] = parsed;
@@ -430,17 +241,6 @@ async function _init() {
     });
   }
 
-  const addBtn = $('btn-add-ascii-font');
-  if (addBtn) {
-    addBtn.addEventListener('click', () => {
-      ensureAsciiFonts();
-      const fonts = AppState.project.resources?.fonts || [];
-      const first = fonts.length > 0 ? (fonts[0].path || fonts[0].name) : '';
-      AppState.project.ascii_fonts.push({ name: first, size: 16, bpp: 4, compress: 0 });
-      AppState.save();
-      renderAsciiFontList();
-    });
-  }
 
   document.querySelectorAll('.ai-provider-btn').forEach(btn => {
     btn.addEventListener('click', () => {

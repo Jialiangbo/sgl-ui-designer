@@ -49,6 +49,21 @@ struct Widget {
     font_family: Option<String>,
     #[serde(rename = "fontBpp")]
     font_bpp: Option<i32>,
+    /// 额外纳入字模的文本（设计时可不显示，导出时合并）
+    #[serde(default, rename = "fontGlyphExtra")]
+    font_glyph_extra: Option<String>,
+    /// 是否把可打印 ASCII (0x20-0x7E) 全部纳入字模
+    #[serde(default, rename = "fontIncludeAscii", deserialize_with = "deserialize_bool_or_string")]
+    font_include_ascii: Option<bool>,
+    /// Unicode 范围，如 `0x4E00-0x9FA5,A-Z,0-9`（多段用逗号/分号分隔）
+    #[serde(default, rename = "fontGlyphRanges")]
+    font_glyph_ranges: Option<String>,
+    /// 字符间距（像素，写入字模 adv_w，对齐 sgl_font_conv --spacing）
+    #[serde(default, rename = "fontSpacing")]
+    font_spacing: Option<i32>,
+    /// 智能等宽（按文种分组统一字宽，对齐 sgl_font_conv --smart-mono）
+    #[serde(default, rename = "fontSmartMono", deserialize_with = "deserialize_bool_or_string")]
+    font_smart_mono: Option<bool>,
     align: Option<String>,
     value: Option<i32>,
     #[serde(default, deserialize_with = "deserialize_bool_or_string")]
@@ -100,6 +115,9 @@ struct Widget {
     start_angle: Option<i32>,
     #[serde(rename = "endAngle")]
     end_angle: Option<i32>,
+    /// arc 绘制模式：0 NORMAL / 1 RING / 2 NORMAL_SMOOTH / 3 RING_SMOOTH
+    #[serde(default)]
+    mode: Option<i32>,
     #[serde(rename = "eventCb")]
     event_cb: Option<String>,
     #[serde(rename = "parentId", default)]
@@ -123,6 +141,8 @@ struct Widget {
     #[serde(default, rename = "infiniteMode")]
     infinite_mode: Option<bool>,
     // battery 控件属性
+    #[serde(default)]
+    level: Option<i32>,
     #[serde(default, rename = "lowColor")]
     low_color: Option<String>,
     #[serde(default, rename = "mediumColor")]
@@ -661,19 +681,120 @@ fn resolve_widget_font_spec(w: &Widget) -> Option<(String, i32, i32)> {
     Some((fam.clone(), sz, bpp))
 }
 
-fn collect_fonts(project: &Project) -> Vec<(String, String, i32, i32, i32, String)> {
-    // (font_name, font_path, size, bpp, compress, symbols)
+/// 解析单个码点：`0x4E00` / `U+4E00` / 十进制 / 单字符
+fn parse_glyph_codepoint(s: &str) -> Option<u32> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let hex = s
+        .strip_prefix("0x")
+        .or_else(|| s.strip_prefix("0X"))
+        .or_else(|| s.strip_prefix("U+"))
+        .or_else(|| s.strip_prefix("u+"));
+    if let Some(h) = hex {
+        return u32::from_str_radix(h, 16).ok();
+    }
+    if s.chars().count() == 1 {
+        return s.chars().next().map(|c| c as u32);
+    }
+    s.parse::<u32>().ok()
+}
+
+/// 将字模范围规格展开并插入集合。格式示例：`0x4E00-0x9FA5,A-Z,0-9,U+3000`
+fn insert_glyph_ranges(set: &mut std::collections::HashSet<char>, spec: &str) {
+    const MAX_RANGE_CHARS: usize = 30_000;
+    let mut added = 0usize;
+    for part in spec.split(|c| c == ',' || c == ';' || c == '\n' || c == '|') {
+        let part = part.trim();
+        if part.is_empty() || added >= MAX_RANGE_CHARS {
+            continue;
+        }
+        if let Some((a, b)) = part.split_once('-').or_else(|| part.split_once('~')) {
+            let (Some(start), Some(end)) = (parse_glyph_codepoint(a), parse_glyph_codepoint(b)) else {
+                continue;
+            };
+            let (lo, hi) = if start <= end { (start, end) } else { (end, start) };
+            for cp in lo..=hi {
+                if added >= MAX_RANGE_CHARS {
+                    break;
+                }
+                if let Some(ch) = char::from_u32(cp) {
+                    if (!ch.is_control() || ch == ' ') && set.insert(ch) {
+                        added += 1;
+                    }
+                }
+            }
+        } else if let Some(cp) = parse_glyph_codepoint(part) {
+            if let Some(ch) = char::from_u32(cp) {
+                if !ch.is_control() || ch == ' ' {
+                    set.insert(ch);
+                    added += 1;
+                }
+            }
+        } else {
+            for ch in part.chars() {
+                if added >= MAX_RANGE_CHARS {
+                    break;
+                }
+                if !ch.is_control() || ch == ' ' {
+                    if set.insert(ch) {
+                        added += 1;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// 控件属性中的额外字模覆盖（额外文本 / ASCII / 范围），写入同一字体条目的 HashSet，天然去重
+
+/// 控件字模变体：全局压缩 + 控件间距/等宽
+fn font_variant_for_widget(project: &Project, w: &Widget) -> Option<(String, i32, i32, i32, i32, bool)> {
+    let (fam, sz, bpp) = resolve_widget_font_spec(w)?;
+    let compress = if project.sgl_config.font_compressed != 0 { 1 } else { 0 };
+    let spacing = w.font_spacing.unwrap_or(0).max(0);
+    let smart_mono = w.font_smart_mono.unwrap_or(false);
+    Some((fam, sz, bpp, compress, spacing, smart_mono))
+}
+
+fn font_id_for_widget(project: &Project, w: &Widget) -> Option<String> {
+    let (fam, sz, bpp, compress, spacing, mono) = font_variant_for_widget(project, w)?;
+    Some(font_id_from_family(&fam, sz, bpp, compress, spacing, mono))
+}
+
+fn insert_widget_glyph_coverage(w: &Widget, set: &mut std::collections::HashSet<char>, ascii_symbols: &str) {
+    if w.font_include_ascii == Some(true) {
+        for ch in ascii_symbols.chars() {
+            set.insert(ch);
+        }
+    }
+    if let Some(ref extra) = w.font_glyph_extra {
+        for ch in extra.chars() {
+            if !ch.is_control() || ch == ' ' {
+                set.insert(ch);
+            }
+        }
+    }
+    if let Some(ref ranges) = w.font_glyph_ranges {
+        if !ranges.trim().is_empty() {
+            insert_glyph_ranges(set, ranges);
+        }
+    }
+}
+
+fn collect_fonts(project: &Project) -> Vec<(String, String, i32, i32, i32, i32, bool, String)> {
+    // (font_name, font_path, size, bpp, compress, spacing, smart_mono, symbols)
     use std::collections::{HashMap, HashSet};
-    // 控件字体默认不压缩，ASCII 字模配置可独立指定 compress
-    let mut map: HashMap<(String, i32, i32, i32), (String, HashSet<char>)> = HashMap::new();
+    // 合并键：字体 + 字号 + bpp + 全局压缩 + 控件间距/等宽
+    let mut map: HashMap<(String, i32, i32, i32, i32, bool), (String, HashSet<char>)> = HashMap::new();
 
     // 可打印 ASCII 字符（0x20-0x7E）
     const ASCII_SYMBOLS: &str = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
 
     for page in &project.pages {
         for w in &page.widgets {
-            if let Some((fam, sz, bpp)) = resolve_widget_font_spec(w) {
-                let compress = 0;
+            if let Some((fam, sz, bpp, compress, spacing, smart_mono)) = font_variant_for_widget(project, w) {
                 let font_path = resolve_font_path(&fam).unwrap_or_else(|| fam.clone());
                 let path_normalized = font_path.replace('\\', "/");
                 let file_name = path_normalized.rsplit('/').next().unwrap_or(&path_normalized).to_string();
@@ -682,13 +803,40 @@ fn collect_fonts(project: &Project) -> Vec<(String, String, i32, i32, i32, Strin
                     continue;
                 }
                 let entry = map
-                    .entry((font_key.clone(), sz, bpp, compress))
+                    .entry((font_key.clone(), sz, bpp, compress, spacing, smart_mono))
                     .or_insert((font_path, HashSet::new()));
                 // 收集该控件使用的文本字符（以下原有 if let text / options / title_text / numberkbd / keyboard / msgbox / leftBtnText / rightBtnText 的代码全部保留不变）
                 if let Some(ref text) = w.text {
                     for ch in text.chars() {
                         if !ch.is_control() || ch == ' ' {
                             entry.1.insert(ch);
+                        }
+                    }
+                }
+                // 动态文本：textBuffer / textFmt / textFmtDynamic 运行时写入的字符
+                // 设计时 text 常为空，若不收集则字模缺数字/符号，sgl_font_get_string_width 会踩空表
+                let has_dyn_text = w
+                    .text_buffer
+                    .as_deref()
+                    .map(|s| !s.is_empty())
+                    .unwrap_or(false)
+                    || w.text_fmt.as_deref().map(|s| !s.is_empty()).unwrap_or(false)
+                    || w
+                        .text_fmt_dynamic
+                        .as_deref()
+                        .map(|s| !s.is_empty())
+                        .unwrap_or(false);
+                if has_dyn_text {
+                    for ch in "0123456789.-+ %".chars() {
+                        entry.1.insert(ch);
+                    }
+                    for fmt_opt in [&w.text_fmt, &w.text_fmt_dynamic] {
+                        if let Some(ref fmt) = fmt_opt {
+                            for ch in fmt.chars() {
+                                if !ch.is_control() || ch == ' ' {
+                                    entry.1.insert(ch);
+                                }
+                            }
                         }
                     }
                 }
@@ -757,8 +905,8 @@ fn collect_fonts(project: &Project) -> Vec<(String, String, i32, i32, i32, Strin
                         }
                     }
                 }
-                // chart / gauge / scope 数值与标签
-                if w.widget_type == "chart" || w.widget_type == "gauge" || w.widget_type == "scope" {
+                // chart / gauge 数值与标签（scope 无文本，不收集字模）
+                if w.widget_type == "chart" || w.widget_type == "gauge" {
                     for ch in "0123456789.-".chars() {
                         entry.1.insert(ch);
                     }
@@ -783,63 +931,34 @@ fn collect_fonts(project: &Project) -> Vec<(String, String, i32, i32, i32, Strin
                         }
                     }
                 }
+                // 属性面板：额外文本 / 勾选 ASCII / Unicode 范围（与其它控件同字体同字号时在 HashSet 中去重合并）
+                insert_widget_glyph_coverage(w, &mut entry.1, ASCII_SYMBOLS);
             }
         }
     }
 
-    // 为设置列表中的资源配置生成 ASCII 字符集
-    // 每项可独立指定字体、字号、bpp、compress；如果控件中已使用同字体同尺寸同压缩，则合并 ASCII 字符
-    let ascii_chars: Vec<char> = ASCII_SYMBOLS.chars().collect();
-    for cfg in &project.ascii_fonts {
-        let Some(res) = project.resources.fonts.iter().find(|f| {
-            f.name == cfg.name || f.path == cfg.name
-        }) else {
-            continue;
-        };
-        let font_path = resolve_font_path(&res.path)
-            .or_else(|| resolve_font_path(&res.name))
-            .unwrap_or_else(|| res.path.clone());
-        let path_normalized = font_path.replace('\\', "/");
-        let file_name = path_normalized.rsplit('/').next().unwrap_or(&path_normalized).to_string();
-        let font_key: String = file_name.chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect();
-        if font_key == "default" {
-            continue;
-        }
-        let sz = if cfg.size > 0 { cfg.size } else { 16 };
-        let bpp = if cfg.bpp > 0 { cfg.bpp } else { 4 };
-        let compress = if cfg.compress > 0 { 1 } else { 0 };
-        let entry = map
-            .entry((font_key.clone(), sz, bpp, compress))
-            .or_insert((font_path, HashSet::new()));
-        for ch in &ascii_chars {
-            entry.1.insert(*ch);
-        }
-    }
-
     map.into_iter()
-        .map(|((name, sz, bpp, compress), (path, set))| {
+        .map(|((name, sz, bpp, compress, spacing, smart_mono), (path, set))| {
             let symbols: String = set.into_iter().collect();
-            (name, path, sz, bpp, compress, symbols)
+            (name, path, sz, bpp, compress, spacing, smart_mono, symbols)
         })
-        .filter(|(_, _, _, _, _, symbols)| !symbols.is_empty())
+        .filter(|(_, _, _, _, _, _, _, symbols)| !symbols.is_empty())
         .collect()
 }
 
-fn font_id_from_family(family: &str, size: i32, bpp: i32, compress: i32) -> String {
-    // 从完整路径提取文件名用于生成 font_id
+fn font_id_from_family(family: &str, size: i32, bpp: i32, compress: i32, spacing: i32, smart_mono: bool) -> String {
     let binding = family.replace('\\', "/");
     let name = binding.rsplit('/').next().unwrap_or(family);
     let clean: String = name.chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect();
-    let compress_suffix = if compress > 0 { "_compress" } else { "" };
-    format!("sgl_font_{}_{}_bpp{}{}", clean, size, bpp, compress_suffix)
+    let mut suffix = String::new();
+    if compress > 0 { suffix.push_str("_compress"); }
+    if smart_mono { suffix.push_str("_mono"); }
+    if spacing > 0 { suffix.push_str(&format!("_sp{}", spacing)); }
+    format!("sgl_font_{}_{}_bpp{}{}", clean, size, bpp, suffix)
 }
 
-fn font_filename(family: &str, size: i32, bpp: i32, compress: i32) -> String {
-    let binding = family.replace('\\', "/");
-    let name = binding.rsplit('/').next().unwrap_or(family);
-    let clean: String = name.chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect();
-    let compress_suffix = if compress > 0 { "_compress" } else { "" };
-    format!("sgl_font_{}_{}_bpp{}{}.c", clean, size, bpp, compress_suffix)
+fn font_filename(family: &str, size: i32, bpp: i32, compress: i32, spacing: i32, smart_mono: bool) -> String {
+    format!("{}.c", font_id_from_family(family, size, bpp, compress, spacing, smart_mono))
 }
 
 /// 写入 demo 资源目录的 *.cmake（显式列出源文件供 CMakelists.txt include）
@@ -1440,7 +1559,7 @@ fn generate_icon_files(project: &Project, icons_dir: &std::path::Path) -> Result
         out.push_str(" * icon 图标取模数据 (4bpp alpha 蒙版)\n");
         out.push_str(&format!(" * source: {}\n", name));
         out.push_str(" * ============================================ */\n");
-        out.push_str("#include <sgl_core.h>\n\n");
+        out.push_str("#include <sgl.h>\n\n");
         out.push_str(&format!("static const uint8_t {}_bitmap[] = {{\n    ", var));
         for (i, b) in bytes.iter().enumerate() {
             out.push_str(&format!("0x{:02X},", b));
@@ -1506,7 +1625,7 @@ fn generate_pixmap_files(project: &Project, pixmaps_dir: &std::path::Path) -> Re
         out.push_str("/* ============================================\n");
         out.push_str(" * 图片取模数据\n");
         out.push_str(" * ============================================ */\n");
-        out.push_str("#include <sgl_core.h>\n\n");
+        out.push_str("#include <sgl.h>\n\n");
         out.push_str(&format!("static const uint8_t {}_data[] = {{\n    ", var));
         for (i, b) in bytes.iter().enumerate() {
             out.push_str(&format!("0x{:02X},", b));
@@ -1529,6 +1648,83 @@ fn generate_pixmap_files(project: &Project, pixmaps_dir: &std::path::Path) -> Re
     }
 
     Ok(())
+}
+
+#[derive(Default)]
+struct TextBufferDecl {
+    size: u16,
+    init_text: Option<String>,
+}
+
+fn parse_text_buffer_spec(raw: &str) -> Option<(String, u16)> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let parts: Vec<&str> = trimmed.split(',').map(|s| s.trim()).collect();
+    let name = parts[0];
+    if name.is_empty()
+        || !name
+            .chars()
+            .next()
+            .map(|c| c.is_ascii_alphabetic() || c == '_')
+            .unwrap_or(false)
+        || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        return None;
+    }
+    let size = if parts.len() >= 2 && !parts[1].is_empty() {
+        parts[1].parse::<u16>().ok().filter(|&n| n >= 1)?
+    } else {
+        64
+    };
+    Some((name.to_string(), size))
+}
+
+fn collect_text_buffer_vars(project: &Project) -> std::collections::BTreeMap<String, TextBufferDecl> {
+    let mut buffers: std::collections::BTreeMap<String, TextBufferDecl> = std::collections::BTreeMap::new();
+    let types = ["label", "label_ext", "arc_label"];
+    for page in &project.pages {
+        for w in &page.widgets {
+            if !types.contains(&w.widget_type.as_str()) {
+                continue;
+            }
+            let Some(buf_raw) = w.text_buffer.as_deref() else {
+                continue;
+            };
+            let Some((name, size)) = parse_text_buffer_spec(buf_raw) else {
+                continue;
+            };
+            if let Some(existing) = buffers.get_mut(&name) {
+                existing.size = existing.size.max(size);
+                if existing.init_text.is_none() {
+                    if let Some(ref text) = w.text {
+                        if !text.trim().is_empty() {
+                            existing.init_text = Some(text.clone());
+                        }
+                    }
+                }
+            } else {
+                let init_text = w.text.as_ref().and_then(|t| {
+                    if t.trim().is_empty() {
+                        None
+                    } else {
+                        Some(t.clone())
+                    }
+                });
+                buffers.insert(name, TextBufferDecl { size, init_text });
+            }
+        }
+    }
+    buffers
+}
+
+fn escape_c_string_literal(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
 }
 
 #[tauri::command]
@@ -1590,22 +1786,15 @@ fn generate_code(project: Project, window: tauri::Window) -> Result<String, Stri
         // 再扫描一次所有控件，通过 resolve_widget_font_spec 补充未命中的
         // (如 win 控件 font_size 缺失时默认 14 可能因 widgets 合并规则被意外覆盖)
         let mut declared = std::collections::HashSet::new();
-        for (name, _path, sz, bpp, compress, _symbols) in &fonts {
-            let id = font_id_from_family(name, *sz, *bpp, *compress);
+        for (name, _path, sz, bpp, compress, spacing, smart_mono, _symbols) in &fonts {
+            let id = font_id_from_family(name, *sz, *bpp, *compress, *spacing, *smart_mono);
             if declared.insert(id.clone()) {
                 code.push_str(&format!("extern const sgl_font_t {};\n", id));
             }
         }
         for page in &project.pages {
             for w in &page.widgets {
-                if let Some((fam, sz, bpp)) = resolve_widget_font_spec(w) {
-                    // 用 clean 文件名作为 name（与 collect_fonts 统一）
-                    let fp = resolve_font_path(&fam).unwrap_or_else(|| fam.clone());
-                    let pn = fp.replace('\\', "/");
-                    let fname = pn.rsplit('/').next().unwrap_or(&pn).to_string();
-                    let key: String = fname.chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect();
-                    if key == "default" { continue; }
-                    let id = font_id_from_family(&key, sz, bpp, 0);
+                if let Some(id) = font_id_for_widget(&project, w) {
                     if declared.insert(id.clone()) {
                         code.push_str(&format!("extern const sgl_font_t {};\n", id));
                     }
@@ -1625,6 +1814,22 @@ fn generate_code(project: Project, window: tauri::Window) -> Result<String, Stri
     let icon_includes = generate_icon_includes(&project)?;
     if !icon_includes.is_empty() {
         code.push_str(&icon_includes);
+    }
+
+    let text_buffers = collect_text_buffer_vars(&project);
+    if !text_buffers.is_empty() {
+        code.push_str("/* ============================================\n");
+        code.push_str(" * 标签文本缓冲区（label / label_ext / arc_label）\n");
+        code.push_str(" * ============================================ */\n");
+        for (name, decl) in &text_buffers {
+            if let Some(ref init) = decl.init_text {
+                let escaped = escape_c_string_literal(init);
+                code.push_str(&format!("char {}[{}] = \"{}\";\n", name, decl.size, escaped));
+            } else {
+                code.push_str(&format!("char {}[{}];\n", name, decl.size));
+            }
+        }
+        code.push('\n');
     }
 
     // 收集所有事件回调函数名，生成前向声明
@@ -1692,7 +1897,7 @@ fn generate_code(project: Project, window: tauri::Window) -> Result<String, Stri
             code.push_str(&format!("    sgl_obj_set_pos({}, {}, {});\n", obj_id, w.x, w.y));
             code.push_str(&format!("    sgl_obj_set_size({}, {}, {});\n", obj_id, w.width, w.height));
 
-            emit_setters(&mut code, &w, &obj_id);
+            emit_setters(&mut code, &project, &w, &obj_id);
 
             // 事件回调绑定
             if let Some(ref cb) = w.event_cb {
@@ -1760,7 +1965,7 @@ fn get_create_fn(t: &str) -> &'static str {
     }
 }
 
-fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
+fn emit_setters(code: &mut String, project: &Project, w: &Widget, obj: &str) {
     let t = &w.widget_type;
     macro_rules! c {
         ($fn:expr, $v:expr) => {
@@ -1891,8 +2096,7 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             code.push_str(&format!("    sgl_line_set_pos({}, {}, {}, {}, {});\n", obj, abs_x1, abs_y1, abs_x2, abs_y2));
         }
         "button" => {
-            if let Some((fam, sz, bpp)) = resolve_widget_font_spec(w) {
-                let fid = font_id_from_family(&fam, sz, bpp, 0);
+            if let Some(fid) = font_id_for_widget(&project, w) {
                 code.push_str(&format!("    sgl_button_set_font({}, &{});\n", obj, fid));
             }
             cstr!("sgl_button_set_text", w.text);
@@ -1929,8 +2133,7 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             }
         }
         "label" => {
-            if let Some((fam, sz, bpp)) = resolve_widget_font_spec(w) {
-                let fid = font_id_from_family(&fam, sz, bpp, 0);
+            if let Some(fid) = font_id_for_widget(&project, w) {
                 code.push_str(&format!("    sgl_label_set_font({}, &{});\n", obj, fid));
             }
             // 文本缓冲区优先：设置 text_buffer 后用动态缓冲，否则用静态 text
@@ -1992,14 +2195,14 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             // SGL label 的 set_text_offset 只接受 offset_x 一个参数
             c!( "sgl_label_set_text_offset", w.text_offset_x.map(|x| x as i8));
             // long_mode（长文本滚动模式，需 CONFIG_SGL_ANIMATION）
+            // SGL: speed = 像素/秒
             if let Some(true) = w.long_mode {
-                let speed = w.long_mode_speed.unwrap_or(3000);
+                let speed = w.long_mode_speed.unwrap_or(50).max(1);
                 code.push_str(&format!("    sgl_label_set_long_mode({}, {}, true);\n", obj, speed));
             }
         }
         "label_ext" => {
-            if let Some((fam, sz, bpp)) = resolve_widget_font_spec(w) {
-                let fid = font_id_from_family(&fam, sz, bpp, 0);
+            if let Some(fid) = font_id_for_widget(&project, w) {
                 code.push_str(&format!("    sgl_label_ext_set_font({}, &{});\n", obj, fid));
             }
             let has_buffer = w.text_buffer.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
@@ -2063,8 +2266,7 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             }
         }
         "arc_label" => {
-            if let Some((fam, sz, bpp)) = resolve_widget_font_spec(w) {
-                let fid = font_id_from_family(&fam, sz, bpp, 0);
+            if let Some(fid) = font_id_for_widget(&project, w) {
                 code.push_str(&format!("    sgl_arc_label_set_font({}, &{});\n", obj, fid));
             }
             let has_buffer = w.text_buffer.as_deref().map(|s| !s.is_empty()).unwrap_or(false);
@@ -2145,8 +2347,7 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             cclr!("sgl_textbox_set_border_color", w.border_color);
             c!( "sgl_textbox_set_border_width", w.border_width.map(|v| v as u8));
             c!( "sgl_textbox_set_radius", w.radius.map(|v| v as u8));
-            if let Some((fam, sz, bpp)) = resolve_widget_font_spec(w) {
-                let fid = font_id_from_family(&fam, sz, bpp, 0);
+            if let Some(fid) = font_id_for_widget(&project, w) {
                 code.push_str(&format!("    sgl_textbox_set_text_font({}, &{});\n", obj, fid));
             }
         }
@@ -2198,8 +2399,7 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             cclr!("sgl_gauge_set_text_color", w.text_color);
             c!( "sgl_gauge_set_value", w.value.map(|v| v as i16));
             c!( "sgl_gauge_set_alpha", w.alpha.map(|v| v as u8));
-            if let Some((fam, sz, bpp)) = resolve_widget_font_spec(w) {
-                let fid = font_id_from_family(&fam, sz, bpp, 0);
+            if let Some(fid) = font_id_for_widget(&project, w) {
                 code.push_str(&format!("    sgl_gauge_set_font({}, &{});\n", obj, fid));
             }
         }
@@ -2213,12 +2413,35 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             c!( "sgl_bar_set_alpha", w.alpha.map(|v| v as u8));
         }
         "battery" => {
-            cclr!("sgl_battery_set_fill_color", w.color);
+            // 对齐 sgl_api.js / SGL battery API：level、fillColor（空=自动色）等
+            let level = w.level.or(w.value).unwrap_or(100) as u8;
+            code.push_str(&format!("    sgl_battery_set_level({}, {});\n", obj, level));
+            if let Some(ref fc) = w.fill_color {
+                if !fc.trim().is_empty() {
+                    cclr!("sgl_battery_set_fill_color", w.fill_color.clone());
+                }
+            }
+            cclr!("sgl_battery_set_low_color", w.low_color);
+            cclr!("sgl_battery_set_medium_color", w.medium_color);
+            cclr!("sgl_battery_set_high_color", w.high_color);
             cclr!("sgl_battery_set_bg_color", w.bg_color);
             cclr!("sgl_battery_set_border_color", w.border_color);
-            c!( "sgl_battery_set_level", w.value.map(|v| v as u8));
             if let Some(v) = w.vertical {
                 code.push_str(&format!("    sgl_battery_set_vertical({}, {});\n", obj, if v { 1 } else { 0 }));
+            }
+            if let Some(c) = w.charging {
+                code.push_str(&format!("    sgl_battery_set_charging({}, {});\n", obj, if c { "true" } else { "false" }));
+            }
+            cclr!("sgl_battery_set_charging_color", w.charging_color);
+            if let Some(sp) = w.show_percentage {
+                code.push_str(&format!("    sgl_battery_show_percentage({}, {});\n", obj, if sp { "true" } else { "false" }));
+            }
+            cclr!("sgl_battery_set_text_color", w.text_color);
+            c!( "sgl_battery_set_alpha", w.alpha.map(|v| v as u8));
+            if w.show_percentage == Some(true) {
+                if let Some(fid) = font_id_for_widget(&project, w) {
+                    code.push_str(&format!("    sgl_battery_set_font({}, &{});\n", obj, fid));
+                }
             }
         }
         "led" => {
@@ -2234,6 +2457,20 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             cclr!("sgl_arc_set_color", w.color);
             cclr!("sgl_arc_set_bg_color", w.bg_color);
             c!( "sgl_arc_set_alpha", w.alpha.map(|v| v as u8));
+            if let Some(m) = w.mode {
+                let mode_macro = match m {
+                    1 => "SGL_ARC_MODE_RING",
+                    2 => "SGL_ARC_MODE_NORMAL_SMOOTH",
+                    3 => "SGL_ARC_MODE_RING_SMOOTH",
+                    _ => "SGL_ARC_MODE_NORMAL",
+                };
+                code.push_str(&format!("    sgl_arc_set_mode({}, {});\n", obj, mode_macro));
+            }
+            if let (Some(r_in), Some(r_out)) = (w.radius_in, w.radius_out) {
+                code.push_str(&format!("    sgl_arc_set_radius({}, {}, {});\n", obj, r_in, r_out));
+            }
+            c!("sgl_arc_set_start_angle", w.start_angle);
+            c!("sgl_arc_set_end_angle", w.end_angle);
         }
         "ring" => {
             cclr!("sgl_ring_set_color", w.color);
@@ -2243,8 +2480,7 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             c!( "sgl_ring_set_alpha", w.alpha.map(|v| v as u8));
         }
         "checkbox" => {
-            if let Some((fam, sz, bpp)) = resolve_widget_font_spec(w) {
-                let fid = font_id_from_family(&fam, sz, bpp, 0);
+            if let Some(fid) = font_id_for_widget(&project, w) {
                 code.push_str(&format!("    sgl_checkbox_set_font({}, &{});\n", obj, fid));
             }
             if let Some(s) = w.status {
@@ -2292,8 +2528,7 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
                 }
             }
             // 标题字体（必须在 title_text 之前设置，因为 title_text 会触发 sgl_obj_update_area）
-            if let Some((fam, sz, bpp)) = resolve_widget_font_spec(w) {
-                let font_var = font_id_from_family(&fam, sz, bpp, 0);
+            if let Some(font_var) = font_id_for_widget(&project, w) {
                 code.push_str(&format!("    sgl_win_set_title_font({}, &{});\n", obj, font_var));
             }
             // title_text 必须在 title_height 和 title_font 之后调用
@@ -2309,8 +2544,7 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             c!( "sgl_msgbox_set_alpha", w.alpha.map(|v| v as u8));
         }
         "dropdown" => {
-            if let Some((fam, sz, bpp)) = resolve_widget_font_spec(w) {
-                let fid = font_id_from_family(&fam, sz, bpp, 0);
+            if let Some(fid) = font_id_for_widget(&project, w) {
                 code.push_str(&format!("    sgl_dropdown_set_text_font({}, &{});\n", obj, fid));
             }
             cclr!("sgl_dropdown_set_bg_color", w.color);
@@ -2322,8 +2556,7 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             c!( "sgl_dropdown_set_alpha", w.alpha.map(|v| v as u8));
         }
         "textline" => {
-            if let Some((fam, sz, bpp)) = resolve_widget_font_spec(w) {
-                let fid = font_id_from_family(&fam, sz, bpp, 0);
+            if let Some(fid) = font_id_for_widget(&project, w) {
                 code.push_str(&format!("    sgl_textline_set_text_font({}, &{});\n", obj, fid));
             }
             cstr!("sgl_textline_set_text", w.text);
@@ -2333,8 +2566,7 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             c!( "sgl_textline_set_alpha", w.alpha.map(|v| v as u8));
         }
         "textlist" => {
-            if let Some((fam, sz, bpp)) = resolve_widget_font_spec(w) {
-                let fid = font_id_from_family(&fam, sz, bpp, 0);
+            if let Some(fid) = font_id_for_widget(&project, w) {
                 code.push_str(&format!("    sgl_textlist_set_text_font({}, &{});\n", obj, fid));
             }
             cclr!("sgl_textlist_set_text_color", w.text_color);
@@ -2365,8 +2597,9 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             code.push_str(&format!("    sgl_canvas_set_private({}, {});\n", obj, private));
         }
         "scope" => {
+            // 完整 buffers/vrange 由前端 sgl_api.js 生成；此处补齐颜色边框（grid 用 grid_color）
             cclr!("sgl_scope_set_bg_color", w.bg_color);
-            cclr!("sgl_scope_set_grid_color", w.color);
+            cclr!("sgl_scope_set_grid_color", w.grid_color);
             cclr!("sgl_scope_set_border_color", w.border_color);
             c!( "sgl_scope_set_border_width", w.border_width.map(|v| v as u8));
             c!( "sgl_scope_set_alpha", w.alpha.map(|v| v as u8));
@@ -2399,8 +2632,7 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
                     code.push_str(&format!("    sgl_polygon_set_vertex_array({}, (int16_t[][2]){{{}}}, {});\n", obj, pairs, coords.len()));
                 }
             }
-            if let Some((fam, sz, bpp)) = resolve_widget_font_spec(w) {
-                let fid = font_id_from_family(&fam, sz, bpp, 0);
+            if let Some(fid) = font_id_for_widget(&project, w) {
                 code.push_str(&format!("    sgl_polygon_set_font({}, &{});\n", obj, fid));
             }
             if let Some(ref text) = w.text {
@@ -2420,8 +2652,7 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             c!( "sgl_numberkbd_set_border_width", w.border_width.map(|v| v as u8));
             cclr!("sgl_numberkbd_set_border_color", w.border_color);
             // numberkbd 必须有字体，否则仿真崩溃
-            if let Some((fam, sz, bpp)) = resolve_widget_font_spec(w) {
-                let fid = font_id_from_family(&fam, sz, bpp, 0);
+            if let Some(fid) = font_id_for_widget(&project, w) {
                 code.push_str(&format!("    sgl_numberkbd_set_text_font({}, &{});\n", obj, fid));
             }
             cclr!("sgl_numberkbd_set_text_color", w.text_color);
@@ -2438,8 +2669,7 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
             c!( "sgl_keyboard_set_border_width", w.border_width.map(|v| v as u8));
             c!( "sgl_keyboard_set_radius", w.radius.map(|v| v as u8));
             c!( "sgl_keyboard_set_alpha", w.alpha.map(|v| v as u8));
-            if let Some((fam, sz, bpp)) = resolve_widget_font_spec(w) {
-                let fid = font_id_from_family(&fam, sz, bpp, 0);
+            if let Some(fid) = font_id_for_widget(&project, w) {
                 code.push_str(&format!("    sgl_keyboard_set_text_font({}, &{});\n", obj, fid));
             }
         }
@@ -2655,8 +2885,7 @@ fn emit_setters(code: &mut String, w: &Widget, obj: &str) {
                     code.push_str(&format!("    {}_set_axis_grid_style({}, {}, {});\n", prefix, obj, axis_y, dashed));
                 }
                 // 字体：同时设置 X 轴和 Y 轴的 label_font，确保 SGL 仿真中两轴都有 margin
-                if let Some((fam, sz, bpp)) = resolve_widget_font_spec(w) {
-                    let fid = font_id_from_family(&fam, sz, bpp, 0);
+                if let Some(fid) = font_id_for_widget(&project, w) {
                     let axis_x = match chart_type {
                         "barchart" => "SGL_BARCHART_AXIS_X",
                         _ => "SGL_LINECHART_AXIS_X",
@@ -3212,7 +3441,7 @@ fn export_code(path: String, code: String, mut project: Project, font_files: Vec
     }
 
     let mut generated_font_files: Vec<FontCFile> = Vec::new();
-    for (_font_name, font_path_str, size, bpp, compress, symbols) in &_fonts {
+    for (_font_name, font_path_str, size, bpp, compress, spacing, smart_mono, symbols) in &_fonts {
         let font_abs_path = {
             if let Some(p) = resolved_font_paths.get(font_path_str) {
                 p.clone()
@@ -3230,7 +3459,7 @@ fn export_code(path: String, code: String, mut project: Project, font_files: Vec
             continue;
         }
 
-        let font_id = font_id_from_family(font_path_str, *size, *bpp, *compress);
+        let font_id = font_id_from_family(font_path_str, *size, *bpp, *compress, *spacing, *smart_mono);
         match font_generator::generate_font_c(
             &font_abs_path,
             *size,
@@ -3238,6 +3467,8 @@ fn export_code(path: String, code: String, mut project: Project, font_files: Vec
             symbols,
             *compress > 0,
             &font_id,
+            *spacing,
+            *smart_mono,
         ) {
             Ok(content) => {
                 generated_font_files.push(FontCFile {
@@ -3727,13 +3958,12 @@ fn export_code_to_project(mut project: Project, project_path: String, code: Stri
 
     // 写入 code/ui.c
     let ui_c = code_dir.join("ui.c");
-    // 若 ui.c 已存在，保留 USER CODE BEGIN/END 区域内的用户代码
-    let final_code = if ui_c.exists() {
-        let old_code = std::fs::read_to_string(&ui_c).unwrap_or_default();
-        merge_user_code(&code, &old_code)
-    } else {
-        code
-    };
+    // 保留 USER CODE 区域：同时读取 code/ui.c 与 sgl-port/demo/ui.c（用户常改后者）
+    let demo_ui_c = proj_dir
+        .join("sgl-port-windows-vscode")
+        .join("demo")
+        .join("ui.c");
+    let final_code = prepare_ui_c_with_user_code(&code, &ui_c, Some(&demo_ui_c));
     std::fs::write(&ui_c, &final_code).map_err(|e| format!("写入 ui.c 失败: {}", e))?;
 
     // 生成 sgl_config.h 到 code 目录
@@ -3765,7 +3995,7 @@ fn export_code_to_project(mut project: Project, project_path: String, code: Stri
     }
 
     let mut generated_font_files: Vec<FontCFile> = Vec::new();
-    for (_font_name, font_path_str, size, bpp, compress, symbols) in &collected_fonts {
+    for (_font_name, font_path_str, size, bpp, compress, spacing, smart_mono, symbols) in &collected_fonts {
         let font_abs_path = {
             if let Some(p) = resolved_font_paths.get(font_path_str) {
                 p.clone()
@@ -3783,7 +4013,7 @@ fn export_code_to_project(mut project: Project, project_path: String, code: Stri
             continue;
         }
 
-        let font_id = font_id_from_family(font_path_str, *size, *bpp, *compress);
+        let font_id = font_id_from_family(font_path_str, *size, *bpp, *compress, *spacing, *smart_mono);
         match font_generator::generate_font_c(
             &font_abs_path,
             *size,
@@ -3791,6 +4021,8 @@ fn export_code_to_project(mut project: Project, project_path: String, code: Stri
             symbols,
             *compress > 0,
             &font_id,
+            *spacing,
+            *smart_mono,
         ) {
             Ok(content) => {
                 generated_font_files.push(FontCFile {
@@ -4427,65 +4659,64 @@ fn generate_sgl_config_h(config: &SglConfig, path: &std::path::Path) -> Result<(
     std::fs::write(path, content).map_err(|e| format!("写入 sgl_config.h 失败: {}", e))
 }
 
-/// 合并用户代码：从旧 ui.c 中提取 USER CODE BEGIN/END 区域内的内容，写入新生成的代码对应位置
-/// 区域标记格式：/* USER CODE BEGIN <name> */ ... /* USER CODE END <name> */
-/// 重新生成代码时，旧文件中所有标记区域内的用户代码会被保留并合并到新代码中
-fn merge_user_code(new_code: &str, old_code: &str) -> String {
-    // 从旧代码中提取所有 USER CODE 区域：name -> 内容
+/// 从旧 ui.c 提取 USER CODE 区域：name -> 内容
+fn extract_user_code_blocks(old_code: &str) -> std::collections::HashMap<String, String> {
     use std::collections::HashMap;
     let mut user_blocks: HashMap<String, String> = HashMap::new();
-
     let begin_prefix = "/* USER CODE BEGIN ";
     let end_prefix = "/* USER CODE END ";
     let mut lines = old_code.lines().peekable();
     while let Some(line) = lines.next() {
-        let trimmed = line.trim();
+        let trimmed = line.trim().trim_end_matches('\r');
         if let Some(rest) = trimmed.strip_prefix(begin_prefix) {
-            // 提取区域名：USER CODE BEGIN name */
             if let Some(end_idx) = rest.find("*/") {
                 let name = rest[..end_idx].trim().to_string();
-                if !name.is_empty() {
-                    // 收集区域内容，直到遇到 USER CODE END name
-                    let end_marker = format!("{}{} */", end_prefix, name);
-                    let mut content_lines: Vec<String> = Vec::new();
-                    for inner_line in lines.by_ref() {
-                        if inner_line.trim() == end_marker.trim() {
-                            break;
-                        }
-                        content_lines.push(inner_line.to_string());
-                    }
-                    // 去除尾部空行
-                    while content_lines.last().map(|s| s.trim().is_empty()).unwrap_or(false) {
-                        content_lines.pop();
-                    }
-                    let content = content_lines.join("\n");
-                    user_blocks.insert(name, content);
+                if name.is_empty() {
+                    continue;
                 }
+                let end_marker = format!("{}{} */", end_prefix, name);
+                let mut content_lines: Vec<String> = Vec::new();
+                for inner_line in lines.by_ref() {
+                    let inner_trim = inner_line.trim().trim_end_matches('\r');
+                    if inner_trim == end_marker.trim() {
+                        break;
+                    }
+                    content_lines.push(inner_line.trim_end_matches('\r').to_string());
+                }
+                while content_lines.last().map(|s| s.trim().is_empty()).unwrap_or(false) {
+                    content_lines.pop();
+                }
+                while content_lines.first().map(|s| s.trim().is_empty()).unwrap_or(false) {
+                    content_lines.remove(0);
+                }
+                user_blocks.insert(name, content_lines.join("\n"));
             }
         }
     }
+    user_blocks
+}
 
-    // 若无用户代码，直接返回新代码
+/// 将用户代码块写入新生成代码的对应 USER CODE 区域。
+/// 新模板中 BEGIN/END 之间的占位内容全部丢弃，只保留提取到的用户代码。
+fn apply_user_code_blocks(new_code: &str, user_blocks: &std::collections::HashMap<String, String>) -> String {
     if user_blocks.is_empty() {
         return new_code.to_string();
     }
-
-    // 将用户代码合并到新代码对应位置
+    let begin_prefix = "/* USER CODE BEGIN ";
+    let end_prefix = "/* USER CODE END ";
     let mut result_lines: Vec<String> = Vec::new();
     let mut in_user_block = false;
-    let mut current_block_name: String = String::new();
+    let mut current_block_name = String::new();
 
     for line in new_code.lines() {
-        let trimmed = line.trim();
-        // 检测 USER CODE BEGIN name */
+        let trimmed = line.trim().trim_end_matches('\r');
         if let Some(rest) = trimmed.strip_prefix(begin_prefix) {
             if let Some(end_idx) = rest.find("*/") {
                 let name = rest[..end_idx].trim().to_string();
                 if !name.is_empty() {
                     in_user_block = true;
                     current_block_name = name.clone();
-                    result_lines.push(line.to_string());
-                    // 插入用户代码
+                    result_lines.push(line.trim_end_matches('\r').to_string());
                     if let Some(content) = user_blocks.get(&name) {
                         if !content.is_empty() {
                             result_lines.push(content.clone());
@@ -4495,22 +4726,234 @@ fn merge_user_code(new_code: &str, old_code: &str) -> String {
                 }
             }
         }
-        // 检测 USER CODE END name */
-        if in_user_block && trimmed.strip_prefix(end_prefix).is_some() {
-            in_user_block = false;
-            current_block_name.clear();
-            result_lines.push(line.to_string());
+        if in_user_block {
+            // 只认匹配当前区域名的 END；模板区内其它行全部跳过
+            if let Some(rest) = trimmed.strip_prefix(end_prefix) {
+                if let Some(end_idx) = rest.find("*/") {
+                    let end_name = rest[..end_idx].trim();
+                    if end_name == current_block_name {
+                        in_user_block = false;
+                        current_block_name.clear();
+                        result_lines.push(line.trim_end_matches('\r').to_string());
+                        continue;
+                    }
+                }
+            }
             continue;
         }
-        // 区域内原有的占位注释行跳过（避免重复）
-        if in_user_block && (trimmed.starts_with("/* ") || trimmed.starts_with("//")) {
-            // 跳过新代码中区域内的占位说明行
-            continue;
-        }
-        result_lines.push(line.to_string());
+        result_lines.push(line.trim_end_matches('\r').to_string());
     }
 
     result_lines.join("\n") + "\n"
+}
+
+fn user_block_has_real_code(content: &str) -> bool {
+    content.lines().any(|l| {
+        let t = l.trim();
+        !t.is_empty()
+            && !t.starts_with("/*")
+            && !t.starts_with("//")
+            && t != "(void)e;"
+            && t != "(void)addr;"
+    })
+}
+
+/// 从 new_code 中收集「独立函数体 USER CODE」区域名：
+/// 形如 void name(...) { /* USER CODE BEGIN name */
+fn collect_dedicated_fn_user_blocks(new_code: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let lines: Vec<&str> = new_code.lines().collect();
+    for i in 0..lines.len() {
+        let t = lines[i].trim();
+        if let Some(rest) = t.strip_prefix("/* USER CODE BEGIN ") {
+            if let Some(end_idx) = rest.find("*/") {
+                let name = rest[..end_idx].trim();
+                if name.is_empty() || name == "includes" || name == "functions" || name == "ui_init" {
+                    continue;
+                }
+                let mut j = i;
+                while j > 0 {
+                    j -= 1;
+                    if !lines[j].trim().is_empty() {
+                        break;
+                    }
+                }
+                if lines.get(j).map(|s| s.trim() == "{").unwrap_or(false) {
+                    let mut k = j;
+                    while k > 0 {
+                        k -= 1;
+                        if !lines[k].trim().is_empty() {
+                            break;
+                        }
+                    }
+                    let prev = lines.get(k).map(|s| s.trim()).unwrap_or("");
+                    if prev.starts_with("void ") && prev.contains(&format!("{}(", name)) {
+                        names.push(name.to_string());
+                    }
+                }
+            }
+        }
+    }
+    names
+}
+
+/// 从 functions 区域中抠出 `void name(...){...}`，返回 (函数体, 清理后的 functions)
+fn extract_c_function_body(functions: &str, name: &str) -> Option<(String, String)> {
+    let marker = format!("void {}", name);
+    let bytes = functions.as_bytes();
+    let text = functions;
+    let mut search_from = 0;
+    while let Some(rel) = text[search_from..].find(&marker) {
+        let start = search_from + rel;
+        let before_ok = start == 0
+            || text.as_bytes()[start - 1].is_ascii_whitespace()
+            || text.as_bytes()[start - 1] == b';'
+            || text.as_bytes()[start - 1] == b'\n';
+        if !before_ok {
+            search_from = start + marker.len();
+            continue;
+        }
+        let after_name = start + marker.len();
+        let rest = &text[after_name..];
+        let rest_trim_start = rest.trim_start_matches(|c: char| c == ' ' || c == '\t');
+        if !rest_trim_start.starts_with('(') {
+            search_from = after_name;
+            continue;
+        }
+        let Some(brace_rel) = text[after_name..].find('{') else {
+            search_from = after_name;
+            continue;
+        };
+        let body_open = after_name + brace_rel;
+        let mut depth = 0i32;
+        let mut i = body_open;
+        let mut body_close = None;
+        while i < bytes.len() {
+            let c = bytes[i] as char;
+            if c == '{' {
+                depth += 1;
+            } else if c == '}' {
+                depth -= 1;
+                if depth == 0 {
+                    body_close = Some(i);
+                    break;
+                }
+            }
+            i += 1;
+        }
+        let Some(body_close) = body_close else {
+            search_from = after_name;
+            continue;
+        };
+        let body = text[body_open + 1..body_close].trim();
+        let body_clean: Vec<&str> = body
+            .lines()
+            .filter(|l| {
+                let t = l.trim();
+                !(t.starts_with("/* USER CODE BEGIN") || t.starts_with("/* USER CODE END"))
+            })
+            .collect();
+        let body_str = body_clean.join("\n").trim().to_string();
+        let mut cleaned = String::new();
+        cleaned.push_str(text[..start].trim_end());
+        let after = text[body_close + 1..].trim_start();
+        if !cleaned.is_empty() && !after.is_empty() {
+            cleaned.push_str("\n\n");
+        }
+        cleaned.push_str(after);
+        return Some((body_str, cleaned.trim().to_string()));
+    }
+    None
+}
+
+fn strip_c_prototype(includes: &str, name: &str) -> String {
+    let mut out = Vec::new();
+    for line in includes.lines() {
+        let t = line.trim();
+        if t.starts_with("void ") && t.contains(&format!("{}(", name)) && t.ends_with(';') {
+            continue;
+        }
+        out.push(line);
+    }
+    out.join("\n").trim().to_string()
+}
+
+/// 旧项目常把 flash_read 写在 includes/functions 且签名为 uint32_t；
+/// 新模板改为独立 USER CODE + const size_t。迁移函数体并删除旧声明/定义。
+fn migrate_legacy_fn_user_blocks(
+    blocks: &mut std::collections::HashMap<String, String>,
+    new_code: &str,
+) {
+    let names = collect_dedicated_fn_user_blocks(new_code);
+    for name in names {
+        let dedicated_ok = blocks
+            .get(&name)
+            .map(|c| user_block_has_real_code(c))
+            .unwrap_or(false);
+        if !dedicated_ok {
+            if let Some(functions) = blocks.get("functions").cloned() {
+                if let Some((body, cleaned)) = extract_c_function_body(&functions, &name) {
+                    if user_block_has_real_code(&body) {
+                        blocks.insert(name.clone(), body);
+                    }
+                    blocks.insert("functions".into(), cleaned);
+                }
+            }
+        }
+        if let Some(includes) = blocks.get("includes").cloned() {
+            let cleaned = strip_c_prototype(&includes, &name);
+            blocks.insert("includes".into(), cleaned);
+        }
+    }
+}
+
+/// 合并用户代码：从旧 ui.c 中提取 USER CODE BEGIN/END 区域内的内容，写入新生成的代码对应位置
+/// 区域标记格式：/* USER CODE BEGIN <name> */ ... /* USER CODE END <name> */
+fn merge_user_code(new_code: &str, old_code: &str) -> String {
+    let mut blocks = extract_user_code_blocks(old_code);
+    migrate_legacy_fn_user_blocks(&mut blocks, new_code);
+    apply_user_code_blocks(new_code, &blocks)
+}
+
+/// 从多个旧文件合并用户代码（后者非空内容覆盖前者）。
+/// 典型来源：code/ui.c（导出目录）+ sgl-port/.../demo/ui.c（用户常在此修改）
+fn merge_user_code_from_sources(new_code: &str, old_sources: &[String]) -> String {
+    use std::collections::HashMap;
+    let mut merged: HashMap<String, String> = HashMap::new();
+    for old in old_sources {
+        if old.trim().is_empty() {
+            continue;
+        }
+        for (name, content) in extract_user_code_blocks(old) {
+            let has_real = user_block_has_real_code(&content);
+            if has_real || !merged.contains_key(&name) {
+                merged.insert(name, content);
+            }
+        }
+    }
+    migrate_legacy_fn_user_blocks(&mut merged, new_code);
+    apply_user_code_blocks(new_code, &merged)
+}
+
+/// 读取 code/ui.c 与 demo/ui.c（若存在），合并用户保护区后返回最终 ui.c 文本
+fn prepare_ui_c_with_user_code(new_code: &str, code_ui_c: &std::path::Path, demo_ui_c: Option<&std::path::Path>) -> String {
+    let mut sources: Vec<String> = Vec::new();
+    if code_ui_c.exists() {
+        if let Ok(s) = std::fs::read_to_string(code_ui_c) {
+            sources.push(s);
+        }
+    }
+    if let Some(demo) = demo_ui_c {
+        if demo.exists() {
+            if let Ok(s) = std::fs::read_to_string(demo) {
+                sources.push(s);
+            }
+        }
+    }
+    if sources.is_empty() {
+        return new_code.to_string();
+    }
+    merge_user_code_from_sources(new_code, &sources)
 }
 
 /// 复制导出的代码到 sgl-port 项目并编译
@@ -4728,7 +5171,7 @@ fn build_project(
 
     // 用 Rust 调用 FreeType 生成字模 C 文件
     let mut generated_font_files: Vec<FontCFile> = Vec::new();
-    for (_font_name, font_path_str, size, bpp, compress, symbols) in &collected_fonts {
+    for (_font_name, font_path_str, size, bpp, compress, spacing, smart_mono, symbols) in &collected_fonts {
         // 解析字体路径为绝对路径
         let font_abs_path = {
             // 先查映射表
@@ -4757,7 +5200,7 @@ fn build_project(
             ));
         }
 
-        let font_id = font_id_from_family(font_path_str, *size, *bpp, *compress);
+        let font_id = font_id_from_family(font_path_str, *size, *bpp, *compress, *spacing, *smart_mono);
         let _ = window.emit(
             "build-log",
             serde_json::json!({ "message": format!("生成字模: {} ({}px, {}bpp, compress={}, symbols_len={})", font_id, size, bpp, compress, symbols.chars().count()), "level": "info" }),
@@ -4770,6 +5213,8 @@ fn build_project(
             symbols,
             *compress > 0,
             &font_id,
+            *spacing,
+            *smart_mono,
         ) {
             Ok(content) => {
                 generated_font_files.push(FontCFile {
@@ -4806,13 +5251,25 @@ fn build_project(
 
     std::fs::create_dir_all(&code_dir).map_err(|e| format!("创建 code 目录失败: {}", e))?;
     let ui_c = code_dir.join("ui.c");
-    // 若 ui.c 已存在，保留 USER CODE BEGIN/END 区域内的用户代码
-    let final_code = if ui_c.exists() {
-        let old_code = std::fs::read_to_string(&ui_c).unwrap_or_default();
-        merge_user_code(&code, &old_code)
-    } else {
-        code
-    };
+    // 保留 USER CODE：合并 code/ui.c 与 demo/ui.c（运行前用户改 demo 也能保住）
+    let demo_ui_for_merge = sgl_port_dir.join("demo").join("ui.c");
+    let final_code = prepare_ui_c_with_user_code(&code, &ui_c, Some(&demo_ui_for_merge));
+    let preserved = extract_user_code_blocks(&final_code)
+        .values()
+        .filter(|c| c.lines().any(|l| {
+            let t = l.trim();
+            !t.is_empty() && !t.starts_with("/*") && !t.starts_with("//") && t != "(void)e;"
+        }))
+        .count();
+    if preserved > 0 {
+        let _ = window.emit(
+            "build-log",
+            serde_json::json!({
+                "message": format!("已保留 {} 处 USER CODE 用户代码（来自 code/ui.c 和/或 demo/ui.c）", preserved),
+                "level": "info"
+            }),
+        );
+    }
     std::fs::write(&ui_c, &final_code).map_err(|e| format!("写入 ui.c 失败: {}", e))?;
 
     // 写入字模 C 文件到 code/fonts/ 目录
@@ -5662,6 +6119,11 @@ mod tests {
             font_size,
             font_family: font_family.map(|s| s.to_string()),
             font_bpp,
+            font_glyph_extra: None,
+            font_include_ascii: None,
+            font_glyph_ranges: None,
+            font_spacing: None,
+            font_smart_mono: None,
             align: None,
             value: None,
             status: None,
@@ -5686,6 +6148,9 @@ mod tests {
             y_offset: None,
             radius_in: None,
             radius_out: None,
+            start_angle: None,
+            end_angle: None,
+            mode: None,
             event_cb: None,
             parent_id: None,
             x1: None,
@@ -5729,7 +6194,7 @@ mod tests {
 
         let fonts = collect_fonts(&project);
         assert_eq!(fonts.len(), 1);
-        let (name, _path, sz, bpp, _compress, symbols) = &fonts[0];
+        let (name, _path, sz, bpp, _compress, _spacing, _mono, symbols) = &fonts[0];
         assert_eq!(name, "simsun.ttc");
         assert_eq!(*sz, 24);
         assert_eq!(*bpp, 4);
@@ -5738,6 +6203,79 @@ mod tests {
         assert!(set.contains(&'定'));
         assert!(set.contains(&'取'));
         assert!(set.contains(&'消'));
+    }
+
+    #[test]
+    fn test_merge_user_code_preserves_blocks() {
+        let old = r#"
+#include "sgl.h"
+/* USER CODE BEGIN includes */
+#include "my_app.h"
+int g_flag = 1;
+/* USER CODE END includes */
+void ui_init(void)
+{
+    ui_page_create();
+/* USER CODE BEGIN ui_init */
+    g_flag = 2;
+/* USER CODE END ui_init */
+}
+void btn_cb(sgl_event_t *e)
+{
+/* USER CODE BEGIN btn_cb */
+    sgl_obj_set_hidden(e->obj, true);
+/* USER CODE END btn_cb */
+}
+"#;
+        let new = r#"
+#include "sgl.h"
+/* USER CODE BEGIN includes */
+/* placeholder */
+/* USER CODE END includes */
+void ui_init(void)
+{
+    ui_page_create();
+/* USER CODE BEGIN ui_init */
+/* placeholder */
+/* USER CODE END ui_init */
+}
+void btn_cb(sgl_event_t *e)
+{
+/* USER CODE BEGIN btn_cb */
+    (void)e;
+/* USER CODE END btn_cb */
+}
+"#;
+        let merged = super::merge_user_code(new, old);
+        assert!(merged.contains("#include \"my_app.h\""));
+        assert!(merged.contains("int g_flag = 1;"));
+        assert!(merged.contains("g_flag = 2;"));
+        assert!(merged.contains("sgl_obj_set_hidden(e->obj, true);"));
+        assert!(!merged.contains("(void)e;"), "template placeholder inside USER CODE should be replaced");
+        assert!(!merged.contains("placeholder"));
+    }
+
+    #[test]
+    fn test_merge_prefers_demo_over_code() {
+        let code_ui = r#"
+/* USER CODE BEGIN includes */
+#include "from_code.h"
+/* USER CODE END includes */
+"#;
+        let demo_ui = r#"
+/* USER CODE BEGIN includes */
+#include "from_demo.h"
+int demo_only = 1;
+/* USER CODE END includes */
+"#;
+        let new = r#"
+/* USER CODE BEGIN includes */
+/* USER CODE END includes */
+"#;
+        let merged = super::merge_user_code_from_sources(new, &[code_ui.to_string(), demo_ui.to_string()]);
+        assert!(merged.contains("#include \"from_demo.h\""));
+        assert!(merged.contains("int demo_only = 1;"));
+        assert!(!merged.contains("from_code.h"));
     }
 }
 
@@ -5756,12 +6294,23 @@ fn generate_font_c(
     symbols: String,
     compress: bool,
     font_name: String,
+    spacing: Option<i32>,
+    smart_mono: Option<bool>,
 ) -> Result<String, String> {
     let path = std::path::Path::new(&font_path);
     if !path.exists() {
         return Err(format!("字体文件不存在: {}", font_path));
     }
-    font_generator::generate_font_c(path, size, bpp, &symbols, compress, &font_name)
+    font_generator::generate_font_c(
+        path,
+        size,
+        bpp,
+        &symbols,
+        compress,
+        &font_name,
+        spacing.unwrap_or(0),
+        smart_mono.unwrap_or(false),
+    )
 }
 
 /// 返回字体文件指纹（大小+修改时间），用于前端缓存失效判定

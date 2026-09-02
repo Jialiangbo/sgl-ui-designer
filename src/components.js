@@ -15,8 +15,8 @@ function refreshCode() {
   AppState.init();
   code = generateSGLCode(AppState.project);
   document.getElementById('code-output').textContent = code;
-  document.getElementById('code-meta').textContent = `项目: ${AppState.project.name} · 屏幕 ${AppState.project.screen_width}×${AppState.project.screen_height} · SGL v2.0`;
-  document.getElementById('status-project').textContent = '项目: ' + AppState.project.name;
+  document.getElementById('code-meta').textContent = `项目: ${AppState.project.name || '未命名'} · 屏幕 ${AppState.project.screen_width}×${AppState.project.screen_height} · SGL v2.0`;
+  document.getElementById('status-project').textContent = '项目: ' + (AppState.project.name || '未命名');
   document.getElementById('status-pages').textContent = '页面: ' + AppState.project.pages.length;
   const totalWidgets = AppState.project.pages.reduce((acc, p) => acc + (p.widgets ? p.widgets.length : 0), 0);
   document.getElementById('status-total').textContent = '组件总数: ' + totalWidgets;

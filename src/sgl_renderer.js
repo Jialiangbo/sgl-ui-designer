@@ -949,9 +949,24 @@ function drawFillRing(surf, cx, cy, radiusIn, radiusOut, color, alpha) {
 
 // ============================================================
 // sgl_draw_fill_arc - 圆弧/扇形
-// 移植自 sgl_draw_arc.c:111-247
-// 角度系统：0° 在正上方，顺时针增加
+// 移植自 sgl_draw_arc.c / sgl_arc.c
+// 角度约定（与 sgl_arc.c 一致）：0° = 正下方（bottom），顺时针增加
+//   0→(0,+R) 底, 90→(-R,0) 左, 180→(0,-R) 顶, 270→(+R,0) 右
 // ============================================================
+
+/** 像素相对圆心的角度：0°=底，顺时针 [0,360) */
+function arcPixelAngleBottomCW(dx, dy) {
+  if (dx === 0 && dy === 0) return 0;
+  let a = Math.atan2(-dx, dy) * (180 / Math.PI);
+  if (a < 0) a += 360;
+  return a;
+}
+
+/** 移植 sgl_arc.c arc_angle_in_range：按顺时针从 start 扫到 end（可跨越 0°） */
+function arcAngleInRange(angle, angleS, angleE) {
+  if (angleS <= angleE) return angle >= angleS && angle <= angleE;
+  return angle >= angleS || angle <= angleE;
+}
 
 /**
  * SMOOTH 模式端点圆心计算（移植自 sgl_draw_arc.c:42-69 arc_dot_sin_cos）
@@ -1041,9 +1056,9 @@ function drawFillArc(surf, desc) {
   const prOut = Math.round(radius_out * z);
   const prIn = Math.round(radius_in * z);
 
-  // 整圆退化
+  // 整圆退化：直接传逻辑半径，避免 z≠1 时 pr/z 反推误差把半径放大 1px 导致四边削顶
   if (start_angle === 0 && end_angle === 360) {
-    drawFillRing(surf, cx, cy, prIn / z, prOut / z, color, alpha);
+    drawFillRing(surf, cx, cy, radius_in, radius_out, color, alpha);
     return;
   }
   if (start_angle === end_angle) return;
@@ -1055,20 +1070,7 @@ function drawFillArc(surf, desc) {
   const rate = in_r2 > in_r2_max ? Math.floor(0xff00 / (in_r2 - in_r2_max)) : 0;
   const rate2 = out_r2_max > out_r2 ? Math.floor(0xff00 / (out_r2_max - out_r2)) : 0;
 
-  // 角度范围
-  let arcSpan = end_angle - start_angle;
-  if (arcSpan < 0) arcSpan += 360;
-  const isLargeArc = arcSpan > 180 ? 1 : 0;
-
-  // 起止向量（SGL 角度系：0° 在上，顺时针）
-  // sx = sin(start), sy = -cos(start)
-  const sRad = start_angle * Math.PI / 180;
-  const eRad = end_angle * Math.PI / 180;
-  const sx = Math.sin(sRad), sy = -Math.cos(sRad);
-  const ex = Math.sin(eRad), ey = -Math.cos(eRad);
-
-  // SMOOTH 模式：计算弧形两端点的圆形渐变 dot（移植自 sgl_draw_arc.c:151-154）
-  // 用 SGL 整数 sin/cos (-32767~32767) 计算端点圆心位置，确保与 SGL 仿真像素级一致
+  // SMOOTH 端点 dot：SGL 传入 (sin, -cos)，最终落点为 0°=底（与 fold_point 一致）
   let arcDots = null;
   if ((mode === 2 || mode === 3) && prIn > 0) {
     const d0 = arcDotSinCos(pcx, pcy, prIn, prOut, sglSin(start_angle), -sglCos(start_angle));
@@ -1103,15 +1105,9 @@ function drawFillArc(surf, desc) {
         edge_alpha = Math.floor(((out_r2_max - real_r2) * rate2) >> 8);
       }
 
-      // 角度范围判断（叉积）
-      const ds = dx * sy - dy * sx;
-      const de = dy * ex - dx * ey;
-      let inRange;
-      if (isLargeArc) {
-        inRange = ds > 0 || de > 0;
-      } else {
-        inRange = ds >= 0 && de >= 0;
-      }
+      // 角度范围：0°=底、顺时针（与 sgl_arc.c arc_angle_in_range 一致）
+      // 不用 draw 里 (sin,-cos)+叉积：那套向量实际是 0°=顶，和文档/控件约定相反
+      const inRange = arcAngleInRange(arcPixelAngleBottomCW(dx, dy), start_angle, end_angle);
 
       if (inRange) {
         // 在弧形范围内
@@ -1150,8 +1146,16 @@ function drawFillArc(surf, desc) {
           } else {
             setEdgePixel(surf, x, y, mixed, edge_alpha, alpha);
           }
+        } else if (mode === 3) {
+          // RING_SMOOTH: dot_alpha==0 → tmp_color = mixer(color, bg_color, 0) = bg_color
+          // SGL 仍会写入像素；设计器此前跳过导致缺口不显示背景色
+          if (edge_alpha >= 255) {
+            setPixel(surf, x, y, bg_color, alpha);
+          } else {
+            setEdgePixel(surf, x, y, bg_color, edge_alpha, alpha);
+          }
         }
-        // dot_alpha == 0：tmp_color = mixer(color, bg, 0) = bg，最终像素不变，跳过
+        // NORMAL_SMOOTH && dot_alpha==0：bg=*blend，像素不变
       }
     }
   }

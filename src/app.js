@@ -1,5 +1,5 @@
 // ============ SGL UI Designer - 全局状态管理 ============
-import { SGL_WIDGET_TYPES, WIDGET_DEFAULTS, createWidgetDefaults, generateSGLCode, validateProjectFonts } from './sgl_api.js';
+import { SGL_WIDGET_TYPES, WIDGET_DEFAULTS, createWidgetDefaults, generateSGLCode, validateProjectFonts, addGlyphCoverageChars } from './sgl_api.js';
 import { invoke } from '@tauri-apps/api/core';
 import { open, save, message } from '@tauri-apps/plugin-dialog';
 import { registerFontFile } from './render_common.js';
@@ -7,7 +7,7 @@ import { generateFontC } from './font_generator.js';
 
 export const AppState = {
   project: {
-    name: '未命名项目',
+    name: '',
     version: '0.1.0',
     color_depth: '16bit',
     screen_width: 480,
@@ -124,11 +124,21 @@ export const AppState = {
 
   init() {
     this.load();
+    this.migrateProject();
+    this.ensurePagesArray();
     if (this.project.pages.length === 0) {
       this.addPage('主页面');
     }
     if (!this.currentPageId || !this.project.pages.some(p => p.id === this.currentPageId)) {
       this.currentPageId = this.project.pages.length > 0 ? this.project.pages[0].id : null;
+    }
+  },
+
+  /** 保证 project.pages 为数组（localStorage / Rust 回载可能损坏） */
+  ensurePagesArray() {
+    if (!this.project) return;
+    if (!Array.isArray(this.project.pages)) {
+      this.project.pages = [];
     }
   },
 
@@ -144,6 +154,7 @@ export const AppState = {
 
   // ============ 页面操作 ============
   addPage(name) {
+    this.ensurePagesArray();
     // 找到最大页面序号，避免删除后 ID 冲突
     let maxNum = 0;
     this.project.pages.forEach(p => {
@@ -610,7 +621,8 @@ export const AppState = {
     try {
       // 代码保存在项目文件同目录下
       const projectDir = this.projectPath.replace(/[/\\][^/\\]*$/, '');
-      const codePath = projectDir + '/ui_' + this.project.name + '.c';
+      const safeName = (this.project.name && String(this.project.name).trim()) || 'project';
+      const codePath = projectDir + '/ui_' + safeName + '.c';
       const code = generateSGLCode(this.project);
       // 前端生成字模 C 文件内容，传给后端直接写入（不再依赖 sgl_font_conv.exe）
       const fontFiles = await this.generateFontCFiles();
@@ -686,11 +698,15 @@ export const AppState = {
     // 3. 遍历 fontUsageMap，只生成被使用的字模
     const result = [];
     const processed = new Set(); // 已处理的 fontPath|size|bpp（去重）
+
     for (const [key, chars] of fontUsageMap.entries()) {
-      const [fontPath, sizeStr, bppStr] = key.split('|');
+      const [fontPath, sizeStr, bppStr, compressStr, spacingStr, monoStr] = key.split('|');
       const size = parseInt(sizeStr, 10);
       const bpp = parseInt(bppStr, 10);
-      const dedupeKey = `${fontPath}|${size}|${bpp}`;
+      const compress = parseInt(compressStr || '0', 10) || 0;
+      const spacing = parseInt(spacingStr || '0', 10) || 0;
+      const smartMono = monoStr === '1' || monoStr === 'true';
+      const dedupeKey = `${fontPath}|${size}|${bpp}|${compress}|${spacing}|${smartMono ? 1 : 0}`;
       if (processed.has(dedupeKey)) continue;
       processed.add(dedupeKey);
 
@@ -716,7 +732,11 @@ export const AppState = {
       // 字体变量名与后端 font_id_from_family 一致（控件字模不压缩）
       const fontFileName = font.path.replace(/[/\\]/g, '/').split('/').pop();
       const cleanName = fontFileName.replace(/[^0-9a-zA-Z]/g, '_');
-      const fontId = `sgl_font_${cleanName}_${size}_bpp${bpp}`;
+      let suffix = '';
+      if (compress > 0) suffix += '_compress';
+      if (smartMono) suffix += '_mono';
+      if (spacing > 0) suffix += `_sp${spacing}`;
+      const fontId = `sgl_font_${cleanName}_${size}_bpp${bpp}${suffix}`;
 
       try {
         const faceName = await registerFontFile(font.path);
@@ -724,7 +744,7 @@ export const AppState = {
           console.warn('字体加载失败:', font.path);
           continue;
         }
-        const cContent = generateFontC(faceName, size, bpp, symbols, false, fontId);
+        const cContent = generateFontC(faceName, size, bpp, symbols, compress > 0, fontId, spacing, smartMono);
         result.push({ fontId, fileName: `${fontId}.c`, content: cContent });
       } catch (err) {
         console.error('生成字模失败:', font.path, size, err);
@@ -740,7 +760,10 @@ export const AppState = {
       if (fam && fam !== 'default' && fam !== '') {
         const sz = w.fontSize || 14;
         const bpp = w.fontBpp || 4;
-        const key = `${fam}|${sz}|${bpp}`;
+        const spacing = Math.max(0, w.fontSpacing || 0);
+        const smartMono = !!w.fontSmartMono;
+        const compress = (this.project.sgl_config && this.project.sgl_config.font_compressed) ? 1 : 0;
+        const key = `${fam}|${sz}|${bpp}|${compress}|${spacing}|${smartMono ? 1 : 0}`;
         if (!fontUsageMap.has(key)) fontUsageMap.set(key, new Set());
         const chars = fontUsageMap.get(key);
         const texts = [w.text, w.titleText, w.options, w.leftSlots, w.rightSlots, w.xLabels,
@@ -748,7 +771,16 @@ export const AppState = {
         for (const t of texts) {
           if (t) for (const ch of String(t)) { if (ch.charCodeAt(0) >= 0x20) chars.add(ch); }
         }
-        if (w.type === 'chart' || w.type === 'gauge' || w.type === 'scope') {
+        // 动态文本：textBuffer / textFmt / textFmtDynamic 运行时写入的字符
+        // 设计时 text 常为空，若不收集则字模缺数字，算宽/绘制会失败
+        const hasDynText = !!(w.textBuffer || w.textFmt || w.textFmtDynamic);
+        if (hasDynText) {
+          for (const ch of '0123456789.-+ %') chars.add(ch);
+          for (const fmt of [w.textFmt, w.textFmtDynamic]) {
+            if (fmt) for (const ch of String(fmt)) { if (ch.charCodeAt(0) >= 0x20) chars.add(ch); }
+          }
+        }
+        if (w.type === 'chart' || w.type === 'gauge') {
           for (const ch of '0123456789.-') chars.add(ch);
         }
         if (w.type === 'battery' && w.showPercentage) {
@@ -760,6 +792,7 @@ export const AppState = {
         if (w.type === 'keyboard') {
           for (const ch of 'qwertyuiopasdfghjklzxcvbnmQWERTYUIOPASDFGHJKLZXCVBNM1234567890_-.,:+-/*=%!?#<>\\@${}[];\"\'') chars.add(ch);
         }
+        addGlyphCoverageChars(chars, w);
       }
       for (const child of (w.widgets || [])) {
         this._collectFontChars([child], fontUsageMap);
@@ -770,27 +803,49 @@ export const AppState = {
   // ============ 保存项目到文件 ============
   async saveProject() {
     try {
+      // 编辑器输入框若仍聚焦，先同步到 project.name，避免手填未触发 change 就被文件名覆盖
+      if (typeof document !== 'undefined') {
+        const nameInput = document.getElementById('prop-project-name');
+        if (nameInput) this.project.name = nameInput.value;
+      }
+
       let filePath = this.projectPath;
       if (!filePath) {
+        const defaultName = (this.project.name && String(this.project.name).trim()) || '未命名项目';
         filePath = await save({
           title: '保存项目',
-          defaultPath: this.project.name + '.sgl',
+          defaultPath: defaultName + '.sgl',
           filters: [{ name: 'SGL 项目文件', extensions: ['sgl', 'json'] }]
         });
         if (!filePath) return { ok: false, msg: '取消保存' };
         if (!filePath.endsWith('.sgl') && !filePath.endsWith('.json')) filePath += '.sgl';
       }
+
+      // 未填写项目名称时，用保存文件名（不含扩展名）填充；已填写则保留
+      const baseName = String(filePath).replace(/\\/g, '/').split('/').pop().replace(/\.(sgl|json)$/i, '');
+      let nameAutoFilled = false;
+      if ((!this.project.name || !String(this.project.name).trim()) && baseName) {
+        this.project.name = baseName;
+        nameAutoFilled = true;
+      }
+
       await invoke('save_project', { path: filePath, project: this.getProjectForRust() });
       // 每次保存后重新加载，同步 resources/fonts 相对路径与控件 fontFamily（避免绝对/相对路径不一致误报）
       const saved = await invoke('load_project', { path: filePath });
       if (saved) {
         this.project = saved;
         this.migrateProject();
-        this.listeners.forEach(fn => fn());
+        this.ensurePagesArray();
+        if ((!this.project.name || !String(this.project.name).trim()) && baseName) {
+          this.project.name = baseName;
+          nameAutoFilled = true;
+        }
       }
       this.projectPath = filePath;
       this.save();
-      return { ok: true, path: filePath };
+      // 自动填充名称后刷新属性面板/状态栏；其它保存也同步 UI
+      this.listeners.forEach(fn => fn());
+      return { ok: true, path: filePath, nameAutoFilled };
     } catch (e) {
       return { ok: false, msg: String(e) };
     }
@@ -806,9 +861,13 @@ export const AppState = {
       });
       if (!filePath) return { ok: false, msg: '取消打开' };
       const project = await invoke('load_project', { path: filePath });
-      if (project && project.pages) {
+      if (project && typeof project === 'object') {
         this.project = project;
         this.migrateProject();
+        this.ensurePagesArray();
+        if (this.project.pages.length === 0) {
+          this.addPage('主页面');
+        }
         this.projectPath = filePath;
         this.currentPageId = this.project.pages.length > 0 ? this.project.pages[0].id : null;
         this.selectedWidgetIds.clear();
@@ -864,7 +923,7 @@ export const AppState = {
       const proj = localStorage.getItem('sgl_project');
       if (proj) {
         const p = JSON.parse(proj);
-        if (p && p.pages) {
+        if (p && typeof p === 'object') {
           this.project = p;
           this.migrateProject();
           this.currentPageId = localStorage.getItem('sgl_current') || null;
@@ -883,6 +942,13 @@ export const AppState = {
   migrateProject() {
     const p = this.project;
     if (!p) return;
+    const DEFAULT_SCREEN_W = 480;
+    const DEFAULT_SCREEN_H = 320;
+    if (!Number.isFinite(p.screen_width) || p.screen_width < 80) p.screen_width = DEFAULT_SCREEN_W;
+    if (!Number.isFinite(p.screen_height) || p.screen_height < 80) p.screen_height = DEFAULT_SCREEN_H;
+    if (!p.screen_shape) p.screen_shape = 'rect';
+    if (!Array.isArray(p.pages)) p.pages = [];
+    else p.pages = p.pages.filter(pg => pg && typeof pg === 'object');
     // 旧版本可能存在的 ai_chat_history 字段（已迁移到独立文件）
     if ('ai_chat_history' in p) {
       delete p.ai_chat_history;
@@ -894,16 +960,9 @@ export const AppState = {
     if (!Array.isArray(p.ascii_fonts)) {
       p.ascii_fonts = [];
     }
-    // 迁移旧 ascii_fonts 字符串数组为对象数组，补充缺失的 compress 字段
-    p.ascii_fonts = p.ascii_fonts
-      .map(item => {
-        if (typeof item === 'string') {
-          return { name: item, size: 16, bpp: p.ascii_font_bpp || 4, compress: 0 };
-        }
-        if (item.compress === undefined) item.compress = 0;
-        return item;
-      })
-      .filter(item => item && typeof item === 'object');
+    // 控件属性已支持 ASCII/范围取模，清空旧的全局 ascii_fonts 配置
+    p.ascii_fonts = [];
+    if ('ascii_font_bpp' in p) delete p.ascii_font_bpp;
     if (!p.sgl_config) {
       p.sgl_config = {
         fbdev_pixel_depth: 16,
@@ -955,7 +1014,13 @@ export const AppState = {
     const fonts = p.resources.fonts || [];
     if (Array.isArray(p.pages)) {
       p.pages.forEach(page => {
-        if (!Array.isArray(page.widgets)) return;
+        if (!page || typeof page !== 'object') return;
+        if (!page.id) page.id = 'page_' + Math.random().toString(36).slice(2, 8);
+        if (!page.name) page.name = '页面';
+        if (!Number.isFinite(page.width) || page.width < 80) page.width = p.screen_width;
+        if (!Number.isFinite(page.height) || page.height < 80) page.height = p.screen_height;
+        if (!page.bg_color) page.bg_color = '#FFFFFF';
+        if (!Array.isArray(page.widgets)) page.widgets = [];
         page.widgets.forEach(w => {
           const defaults = createWidgetDefaults(w.type);
           if (defaults) {
@@ -996,6 +1061,15 @@ export const AppState = {
             w.width = w.radius * 2;
             w.height = w.radius * 2;
           }
+          // label longModeSpeed：旧版误标为整圈 ms（常 ≥1000），SGL 实际是 px/s
+          if (w.type === 'label' && w.longModeSpeed != null) {
+            const spd = Number(w.longModeSpeed);
+            if (Number.isFinite(spd) && spd > 500) {
+              const textLen = String(w.text || '').length * (w.fontSize || 14) * 0.6;
+              const dist = Math.max(1, (w.width || 100) + textLen);
+              w.longModeSpeed = Math.max(1, Math.min(500, Math.round(dist * 1000 / spd)));
+            }
+          }
           // sprite 控件：SGL 只支持 ARGB4444 格式，强制重置 pixmapFormat
           if (w.type === 'sprite') {
             w.pixmapFormat = 'ARGB4444';
@@ -1012,7 +1086,7 @@ export const AppState = {
     localStorage.removeItem('sgl_selected');
     localStorage.removeItem('sgl_proj_path');
     this.project = {
-      name: '未命名项目',
+      name: '',
       version: '0.1.0',
       color_depth: '16bit',
       screen_width: 480,
@@ -1147,6 +1221,17 @@ export async function setupWindowControls() {
     const t = e.target;
     if (t.closest('button, input, select, textarea, .nav-tab, .nav-tab-action, .header-actions, .window-controls, .toolbar-divider')) return;
     win.toggleMaximize();
+    // 与最大化按钮相同：布局滞后，延迟通知编辑器重算画布居中
+    const notify = () => {
+      try { window.dispatchEvent(new CustomEvent('sgl:window-layout')); } catch (_) { /* ignore */ }
+    };
+    notify();
+    setTimeout(notify, 16);
+    setTimeout(notify, 50);
+    setTimeout(notify, 100);
+    setTimeout(notify, 200);
+    setTimeout(notify, 400);
+    setTimeout(notify, 700);
   });
 
   const controls = document.createElement('div');
@@ -1165,6 +1250,13 @@ export async function setupWindowControls() {
   `;
   header.appendChild(controls);
 
+  // 通知编辑器等页面：窗口尺寸已变（最大化/还原后需重算画布居中）
+  const notifyWindowLayout = () => {
+    try {
+      window.dispatchEvent(new CustomEvent('sgl:window-layout'));
+    } catch (_) { /* ignore */ }
+  };
+
   // 初始化最大化图标状态
   const updateMaxIcon = async () => {
     try {
@@ -1179,14 +1271,31 @@ export async function setupWindowControls() {
   controls.querySelector('.win-maximize').addEventListener('click', async () => {
     await win.toggleMaximize();
     await updateMaxIcon();
+    // 布局往往滞后于 toggleMaximize，多次通知直到视口尺寸稳定
+    notifyWindowLayout();
+    setTimeout(notifyWindowLayout, 16);
+    setTimeout(notifyWindowLayout, 50);
+    setTimeout(notifyWindowLayout, 100);
+    setTimeout(notifyWindowLayout, 200);
+    setTimeout(notifyWindowLayout, 400);
+    setTimeout(notifyWindowLayout, 700);
   });
   controls.querySelector('.win-close').addEventListener('click', () => win.close());
 
-  // 监听窗口大小变化，同步最大化图标
+  // 监听窗口大小变化，同步最大化图标 + 通知布局
   try {
     const { listen } = await import('@tauri-apps/api/event');
-    await listen('tauri://resize', updateMaxIcon);
+    await listen('tauri://resize', () => {
+      updateMaxIcon();
+      notifyWindowLayout();
+    });
   } catch (_) { /* 非 Tauri 环境 */ }
+
+  // 最小化/还原、Alt+Tab 回来：WebView 有时不发 resize，用 focus/visibility 补一次
+  window.addEventListener('focus', notifyWindowLayout);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') notifyWindowLayout();
+  });
 }
 
 export function escapeHtml(str) {

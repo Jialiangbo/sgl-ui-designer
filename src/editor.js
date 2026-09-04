@@ -11,7 +11,8 @@ import {
   toAssetUrl, pixmapFormatHasAlpha, getOpaqueImageUrl, registerFontFile,
   getPixmapImageData, getCachedPixmapImageData, preloadPixmapImage,
   getSglFontData, loadSglFontData, getFontError, hasLocalFontCache, restoreFontCache, restoreFontCacheFast,
-  validateFontData, removeSglFontData
+  validateFontData, removeSglFontData, fontOptsFromWidget, makeFontDataKey, parseFontDataKey,
+  fontContainsUnicode, fontCoversSymbols
 } from './render_common.js';
 import { setLogger as setUpdaterLogger } from './updater.js';
 import { initAIPanel } from './ai_panel.js';
@@ -21,7 +22,7 @@ import {
   setPreviewPageIndex,
   enterPreviewSimulator,
   exitPreviewSimulator,
-  setPreviewDemoEnabled,
+  bindPreviewLayoutWatcher,
 } from './preview.js';
 import qrcodeGenerator from 'qrcode-generator';
 
@@ -32,7 +33,13 @@ AppState.init();
 initAIPanel();
 let _previewMode = false;
 let _fontPreloadInProgress = false;
+let _fontPreloadQueued = false;
 let _renderCanvasTimer = null;
+/** 文本相关属性变更后需重新取模 */
+const TEXT_FONT_PROPS = new Set([
+  'text', 'titleText', 'options', 'msgText', 'leftBtnText', 'rightBtnText',
+  'leftSlots', 'rightSlots', 'xLabels', 'sliceLabels', 'textarea',
+]);
 function scheduleRenderCanvas() {
   if (_renderCanvasTimer) clearTimeout(_renderCanvasTimer);
   _renderCanvasTimer = setTimeout(() => {
@@ -134,14 +141,14 @@ function widgetNeedsFont(widget) {
 }
 
 // 递归收集控件及其子控件需要生成的字模字符（只收集项目资源中存在的字体）
+// key 必须与 makeFontDataKey / loadSglFontData 一致（含 spacing/smartMono/compress）
 function collectWidgetFontChars(w, fontTextMap) {
   const fam = resolveEffectiveFontFamily(w.fontFamily);
   if (fam) {
     const sz = w.fontSize || 14;
     const bpp = w.fontBpp || 4;
-    // 使用资源中的规范路径作为 key，确保与 getSglFontData/loadSglFontData 一致
     const fontPath = resolveFontPath(fam) || fam;
-    const key = `${fontPath}|${sz}|${bpp}`;
+    const key = makeFontDataKey(fontPath, sz, bpp, fontOptsFromWidget(w));
     if (!fontTextMap.has(key)) fontTextMap.set(key, new Set());
     const chars = fontTextMap.get(key);
     const texts = [w.text, w.titleText, w.options, w.leftSlots, w.rightSlots, w.xLabels,
@@ -189,22 +196,7 @@ function collectWidgetText(w) {
 }
 
 function fontContainsChar(font, unicode) {
-  const code = font.unicode;
-  if (!code || code.length === 0) return false;
-  for (let i = 0; i < code.length; i++) {
-    const seg = code[i];
-    if (unicode >= seg.offset && unicode < seg.offset + seg.len) {
-      if (seg.list === null) {
-        return true;
-      }
-      for (let j = 0; j < seg.list.length; j++) {
-        if (seg.list[j] === unicode - seg.offset) {
-          return true;
-        }
-      }
-    }
-  }
-  return false;
+  return fontContainsUnicode(font, unicode);
 }
 
 // 字体加载进度遮罩
@@ -279,8 +271,23 @@ function hideFontLoadingOverlay() {
 }
 
 async function preloadSglFontData() {
-  if (_fontPreloadInProgress) return;
+  // 进行中再请求：排队，结束后用最新文本再跑一轮（避免输入过程中丢弃更新）
+  if (_fontPreloadInProgress) {
+    _fontPreloadQueued = true;
+    return;
+  }
   _fontPreloadInProgress = true;
+  try {
+    do {
+      _fontPreloadQueued = false;
+      await preloadSglFontDataOnce();
+    } while (_fontPreloadQueued);
+  } finally {
+    _fontPreloadInProgress = false;
+  }
+}
+
+async function preloadSglFontDataOnce() {
   try {
     if (!window.SGLRenderer || !window.SGLRenderer.parseFontCFile) {
       logMessage('SGLRenderer 未就绪，跳过字模预加载', 'warn');
@@ -298,49 +305,44 @@ async function preloadSglFontData() {
       logMessage('无控件使用自定义字体，跳过字模预加载', 'info');
       return;
     }
-    
+
+    const keyMeta = (key) => {
+      const fk = parseFontDataKey(key);
+      return {
+        fam: fk.fontPath,
+        size: fk.size,
+        bpp: fk.bpp,
+        opts: { spacing: fk.spacing, smartMono: fk.smartMono, compress: fk.compress },
+      };
+    };
+
     // 判断加载需求：检查内存缓存（含一致性校验）和 localStorage 缓存
     let needsBackendGen = false;
     let allInMemory = true;
     for (const [key, charSet] of fontTextMap) {
+      const symbols = Array.from(charSet).join('');
+      const { fam, size, bpp, opts } = keyMeta(key);
       const cachedFont = window.SGLRenderer.getFontData(key);
       if (cachedFont) {
-        // 1. 内存字模一致性校验（bitmap_index 范围），无效则视为没有缓存
         const isDataValid = validateFontData(cachedFont);
         if (!isDataValid) {
           console.log(`[preloadSglFontData] 内存字模一致性校验失败 key=${key}，移除并重新加载`);
           window.SGLRenderer.removeFontData(key);
           allInMemory = false;
-          const [fam, sz, bpp] = key.split('|');
-          const symbols = Array.from(charSet).join('');
-          if (!hasLocalFontCache(fam, parseInt(sz), parseInt(bpp), symbols)) {
+          if (!(await hasLocalFontCache(fam, size, bpp, symbols, opts))) {
             needsBackendGen = true;
           }
           continue;
         }
-        // 2. 检查是否包含所需字符
-        let memMissingChars = false;
-        for (const ch of charSet) {
-          const unicode = ch.charCodeAt(0);
-          if (!fontContainsChar(cachedFont, unicode)) {
-            memMissingChars = true;
-            break;
-          }
-        }
-        if (memMissingChars) {
-          const [fam, sz, bpp] = key.split('|');
-          const symbols = Array.from(charSet).join('');
-          if (!hasLocalFontCache(fam, parseInt(sz), parseInt(bpp), symbols)) {
+        if (!fontCoversSymbols(cachedFont, symbols)) {
+          allInMemory = false;
+          if (!(await hasLocalFontCache(fam, size, bpp, symbols, opts))) {
             needsBackendGen = true;
           }
-          allInMemory = false;
         }
       } else {
-        // 内存没有缓存
         allInMemory = false;
-        const [fam, sz, bpp] = key.split('|');
-        const symbols = Array.from(charSet).join('');
-        if (!hasLocalFontCache(fam, parseInt(sz), parseInt(bpp), symbols)) {
+        if (!(await hasLocalFontCache(fam, size, bpp, symbols, opts))) {
           needsBackendGen = true;
         }
       }
@@ -352,71 +354,47 @@ async function preloadSglFontData() {
       return;
     }
 
-    // 只有需要后端生成字模时才显示加载遮罩；仅从 localStorage 恢复时不显示
     if (needsBackendGen) {
       showFontLoadingOverlay(`正在加载 ${fontTextMap.size} 个字体，请稍候...`);
     }
-    
+
     logMessage(`开始预加载 ${fontTextMap.size} 个字模...`, 'info');
     const promises = [];
     let loadedCount = 0;
     const totalCount = fontTextMap.size;
-    
+
     for (const [key, charSet] of fontTextMap) {
+      const symbols = Array.from(charSet).join('');
+      const { fam, size, bpp, opts } = keyMeta(key);
+      const fontName = fam.split(/[/\\]/).pop() || fam;
       const cachedFont = window.SGLRenderer.getFontData(key);
-      if (!cachedFont) {
-        const [fam, sz, bpp] = key.split('|');
-        const symbols = Array.from(charSet).join('');
-        const fontName = fam.split(/[/\\]/).pop() || fam;
-        promises.push(
-          loadSglFontData(fam, parseInt(sz), parseInt(bpp), symbols).then(result => {
-            loadedCount++;
-            updateFontLoadingMessage(`正在加载字体 (${loadedCount}/${totalCount})...`);
-            if (result) {
-              logMessage(`字模加载成功: ${fontName} ${sz}px ${bpp}bpp`, 'success');
-            } else {
-              const errMsg = getFontError(fam, parseInt(sz), parseInt(bpp));
-              logMessage(`字模加载失败: ${fontName} ${sz}px ${bpp}bpp${errMsg ? ' - ' + errMsg : ''}`, 'error');
-            }
-            return result;
-          })
-        );
-      } else {
-        // 检查内存缓存一致性（bitmap index 范围 + 字符覆盖），任意不满足则重新加载
-        let needsReload = !validateFontData(cachedFont);
-        if (!needsReload) {
-          for (const ch of charSet) {
-            const unicode = ch.charCodeAt(0);
-            if (!fontContainsChar(cachedFont, unicode)) {
-              needsReload = true;
-              break;
-            }
-          }
-        }
-        if (needsReload) {
-          const [fam, sz, bpp] = key.split('|');
-          const symbols = Array.from(charSet).join('');
-          const fontName = fam.split(/[/\\]/).pop() || fam;
-          console.log(`[preloadSglFontData] 内存缓存无效，重新加载 key=${key}`);
-          window.SGLRenderer.removeFontData(key);
-          promises.push(
-            loadSglFontData(fam, parseInt(sz), parseInt(bpp), symbols).then(result => {
-              loadedCount++;
-              updateFontLoadingMessage(`正在加载字体 (${loadedCount}/${totalCount})...`);
-              if (result) {
-                logMessage(`字模更新成功: ${fontName} ${sz}px ${bpp}bpp`, 'success');
-              } else {
-                const errMsg = getFontError(fam, parseInt(sz), parseInt(bpp));
-                logMessage(`字模更新失败: ${fontName} ${sz}px ${bpp}bpp${errMsg ? ' - ' + errMsg : ''}`, 'error');
-              }
-              return result;
-            })
-          );
-        } else {
-          // 已缓存且有效，计入总数
-          loadedCount++;
-        }
+      const needsReload = !cachedFont
+        || !validateFontData(cachedFont)
+        || !fontCoversSymbols(cachedFont, symbols);
+
+      if (!needsReload) {
+        loadedCount++;
+        continue;
       }
+
+      if (cachedFont) {
+        console.log(`[preloadSglFontData] 内存缓存无效或不完整，重新加载 key=${key}`);
+        window.SGLRenderer.removeFontData(key);
+      }
+
+      promises.push(
+        loadSglFontData(fam, size, bpp, symbols, opts).then(result => {
+          loadedCount++;
+          updateFontLoadingMessage(`正在加载字体 (${loadedCount}/${totalCount})...`);
+          if (result) {
+            logMessage(`字模加载成功: ${fontName} ${size}px ${bpp}bpp`, 'success');
+          } else {
+            const errMsg = getFontError(fam, size, bpp, opts);
+            logMessage(`字模加载失败: ${fontName} ${size}px ${bpp}bpp${errMsg ? ' - ' + errMsg : ''}`, 'error');
+          }
+          return result;
+        })
+      );
     }
     if (promises.length > 0) {
       await Promise.all(promises);
@@ -429,8 +407,6 @@ async function preloadSglFontData() {
   } catch (err) {
     hideFontLoadingOverlay();
     throw err;
-  } finally {
-    _fontPreloadInProgress = false;
   }
 }
 
@@ -2024,7 +2000,7 @@ function renderWidgetVisual(el, w, renderSize) {
         // 文本：有字模用 SGL 像素级渲染（与 SGL 运行时一致）
         if (btnHasFont) {
           const coords = { x1: 0, y1: 0, x2: w.width - 1, y2: w.height - 1 };
-          const sglFont = getSglFontData(btnFontPath, btnFontSize, btnFontBpp);
+          const sglFont = getSglFontData(btnFontPath, btnFontSize, btnFontBpp, fontOptsFromWidget(w));
           const txtCol = SGLR.hexToColor(btnTextColor);
           if (sglFont) {
             const pos = SGLR.getTextPosSGL(coords, btnText, sglFont, 0, sglAlign(btnAlign));
@@ -2065,7 +2041,7 @@ function renderWidgetVisual(el, w, renderSize) {
         // 文本：有字模用 SGL 像素级渲染
         if (btnHasFont) {
           const coords = { x1: 0, y1: 0, x2: w.width - 1, y2: w.height - 1 };
-          const sglFont = getSglFontData(btnFontPath, btnFontSize, btnFontBpp);
+          const sglFont = getSglFontData(btnFontPath, btnFontSize, btnFontBpp, fontOptsFromWidget(w));
           const txtCol = SGLR.hexToColor(btnTextColor);
           if (sglFont) {
             const pos = SGLR.getTextPosSGL(coords, btnText, sglFont, 0, sglAlign(btnAlign));
@@ -2098,6 +2074,7 @@ function renderWidgetVisual(el, w, renderSize) {
       const lblAlign = p('align', 'CENTER');
       const lblBg = p('bgColor', 'transparent');
       const lblRot = p('textRotation', 0);
+      const lblLongMode = !!p('longMode', false);
       if (lblRot) {
         // 旋转文本 SGLRenderer 不支持，保留 CSS 渲染
         el.style.background = (lblBg && lblBg !== 'transparent') ? lblBg : 'transparent';
@@ -2137,11 +2114,12 @@ function renderWidgetVisual(el, w, renderSize) {
         if (lblBg && lblBg !== 'transparent') {
           SGLR.drawFillRect(surf, 0, 0, w.width - 1, w.height - 1, lblRadius, SGLR.hexToColor(lblBg), alpha);
         }
-        if (lblHasFont) {
+        // longMode 用 DOM 跑马灯，不画静态 canvas 字
+        if (lblHasFont && !lblLongMode) {
           // SGL drawString to buf32 (before flushSurface)
           const coords = { x1: 0, y1: 0, x2: w.width - 1, y2: w.height - 1 };
           const lblFontPath = resolveFontPath(lblFontFamily);
-          const sglFont = getSglFontData(lblFontPath, lblFontSize, lblFontBpp);
+          const sglFont = getSglFontData(lblFontPath, lblFontSize, lblFontBpp, fontOptsFromWidget(w));
           if (sglFont) {
             // 有字模：像素级渲染（与 SGL 运行时一致）
             const pos = SGLR.getTextPosSGL(coords, lblText, sglFont, 0, sglAlign(lblAlign));
@@ -2153,18 +2131,37 @@ function renderWidgetVisual(el, w, renderSize) {
           }
         }
         SGLR.flushSurface(surf);
-        if (!lblHasFont) {
-          // no font: DOM span (system default)
-          overlayText({
-            text: lblText,
-            color: p('textColor', p('color', '#000000')),
-            fontSize: lblFontSize,
-            fontFamily: lblFontFamily,
-            align: lblAlign,
-            x: 0, y: 0, w: w.width, h: w.height,
-            offX: lblOffX,
-            offY: lblOffY
-          });
+        if (!lblHasFont || lblLongMode) {
+          if (lblLongMode) {
+            const speed = Math.max(1, p('longModeSpeed', 50));
+            const wrap = document.createElement('div');
+            wrap.style.cssText = `position:absolute;left:${lblOffX * z}px;top:${lblOffY * z}px;right:${Math.max(0, -lblOffX) * z}px;bottom:${Math.max(0, -lblOffY) * z}px;display:flex;pointer-events:none;box-sizing:border-box;overflow:hidden;`;
+            Object.assign(wrap.style, flexAlign(lblAlign));
+            const span = document.createElement('span');
+            span.textContent = lblText;
+            span.style.color = p('textColor', p('color', '#000000'));
+            span.style.fontSize = (lblFontSize * z) + 'px';
+            span.style.fontFamily = getCssFontStack(lblFontFamily) || 'system-ui, "Segoe UI", sans-serif';
+            span.style.whiteSpace = 'nowrap';
+            span.style.filter = 'var(--sgl-bpp-filter,none)';
+            // 编辑态用 CSS 动画近似滚动（预览态用真实 px/s）
+            const dur = Math.max(2, Math.round((lblText.length * lblFontSize + w.width) / speed));
+            span.style.animation = `sgl-label-longmode ${dur}s linear infinite`;
+            wrap.appendChild(span);
+            el.appendChild(wrap);
+          } else {
+            // no font: DOM span (system default)
+            overlayText({
+              text: lblText,
+              color: p('textColor', p('color', '#000000')),
+              fontSize: lblFontSize,
+              fontFamily: lblFontFamily,
+              align: lblAlign,
+              x: 0, y: 0, w: w.width, h: w.height,
+              offX: lblOffX,
+              offY: lblOffY
+            });
+          }
         }
       }
       break;
@@ -2203,7 +2200,7 @@ function renderWidgetVisual(el, w, renderSize) {
 
       // 有字模：SGL drawStringSGL 像素级逐行渲染（与 SGL 运行时一致）
       if (tbHasFont && tbText) {
-        const sglFont = getSglFontData(tbFontPath, tbFontSize, tbFontBpp);
+        const sglFont = getSglFontData(tbFontPath, tbFontSize, tbFontBpp, fontOptsFromWidget(w));
         const availW = Math.max(1, w.width - 2 * pad);
         const txtCol = SGLR.hexToColor(tbTextColor);
         // 手动拆分文本为多行（按换行符 + 宽度换行）
@@ -2417,7 +2414,7 @@ function renderWidgetVisual(el, w, renderSize) {
       // 文字：有字模用 SGL drawStringSGL 像素级渲染（与 SGL 运行时一致）
       const textX = boxW + 2;
       if (cbHasFont && cbText && cbText.trim() !== '') {
-        const sglFont = getSglFontData(cbFontPath, cbFontSize, cbFontBpp);
+        const sglFont = getSglFontData(cbFontPath, cbFontSize, cbFontBpp, fontOptsFromWidget(w));
         const txtCol = SGLR.hexToColor(cbTextColor);
         // LEFT_MID 对齐: x=textX, y=alignY
         if (sglFont) {
@@ -2644,7 +2641,7 @@ function renderWidgetVisual(el, w, renderSize) {
 
       // 获取 SGL 字模数据（用于精确的 font_height 和 string_width）
       const gFontFamily = p('fontFamily', '');
-      const sglFont = getSglFontData(gFontFamily, fontSize, fontBpp);
+      const sglFont = getSglFontData(gFontFamily, fontSize, fontBpp, fontOptsFromWidget(w));
       // SGL: sgl_font_get_height(gauge->font) → font->font_height
       const sglFontH = sglFont ? SGLR.fontGetHeight(sglFont) : fontSize;
       // SGL: sgl_font_get_string_width 的 JS 等价函数
@@ -3088,7 +3085,7 @@ function renderWidgetVisual(el, w, renderSize) {
       const winBorderCol = p('borderColor', '#000000');
       // SGL: title_h = sgl_max3(obj->radius, win->title_h, sgl_font_get_height(win->title_font))
       // 必须优先使用已加载的真实字模 font_height，否则设计器与仿真 title_h 不一致会导致文本错位
-      const winSglFontForMetrics = getSglFontData(winFontFamilyVal, winFontSize, winFontBppVal);
+      const winSglFontForMetrics = getSglFontData(winFontFamilyVal, winFontSize, winFontBppVal, fontOptsFromWidget(w));
       const winFontHeight = winSglFontForMetrics ? winSglFontForMetrics.font_height : winFontSize;
       const winTitleH = Math.max(winRadius, p('titleHeight', 0), winFontHeight);
 
@@ -3165,7 +3162,7 @@ function renderWidgetVisual(el, w, renderSize) {
         };
         const titleAlignId = sglAlign(winTitleAlign);
         // 复用前面计算 title_h 时获取的字模数据
-        const winSglFont = winSglFontForMetrics || getSglFontData(winFontFamilyVal, winFontSize, winFontBppVal);
+        const winSglFont = winSglFontForMetrics || getSglFontData(winFontFamilyVal, winFontSize, winFontBppVal, fontOptsFromWidget(w));
         let titleDrawX, titleDrawY;
         if (winSglFont) {
           // 使用真实字模宽高计算位置 + 字模数据渲染
@@ -3251,7 +3248,7 @@ function renderWidgetVisual(el, w, renderSize) {
       // 3. 选中项文本：有字模用 SGL drawStringSGL 像素级渲染
       const ddText = ddOptions.length > 0 ? ddOptions[0] : '';
       if (ddHasFont && ddText) {
-        const sglFont = getSglFontData(ddFontPath, ddFontSize, ddFontBpp);
+        const sglFont = getSglFontData(ddFontPath, ddFontSize, ddFontBpp, fontOptsFromWidget(w));
         // LEFT_MID 对齐: x=item_pad, y=(option_h - font_h + 1) / 2
         const textY = Math.floor((ddOptionH - ddFontHeight + 1) / 2);
         if (sglFont) {
@@ -3677,7 +3674,7 @@ function renderWidgetVisual(el, w, renderSize) {
       const nkFontBpp = p('fontBpp', 4);
       const nkCssFamily = nkHasFont ? nkFontFamily : 'system-ui, -apple-system, "Segoe UI", sans-serif';
       const nkTextColorCss = p('textColor', '#000000');
-      const nkSglFont = nkHasFont ? getSglFontData(p('fontFamily', ''), nkFontSize, nkFontBpp) : null;
+      const nkSglFont = nkHasFont ? getSglFontData(p('fontFamily', ''), nkFontSize, nkFontBpp, fontOptsFromWidget(w)) : null;
       // 用 "0" 字符宽度计算水平居中偏移（与 SGL 一致：有字模时用字模宽度，否则用 measureText）
       const zeroWidth = nkSglFont ? SGLR.fontGetStringWidth('0', nkSglFont) : SGLR.measureTextWidth('0', nkFontSize, nkCssFamily);
       const fontHeight = nkSglFont ? SGLR.fontGetHeight(nkSglFont) : nkFontSize;
@@ -3810,7 +3807,7 @@ function renderWidgetVisual(el, w, renderSize) {
       }
 
       // 有字模: drawStringSGL 像素级渲染到 buf32（flush 前），与 SGL 运行时一致
-      const kbSglFont = kbHasFont ? getSglFontData(p('fontFamily', ''), kbFontSize, kbFontBpp) : null;
+      const kbSglFont = kbHasFont ? getSglFontData(p('fontFamily', ''), kbFontSize, kbFontBpp, fontOptsFromWidget(w)) : null;
       if (kbSglFont) {
         const kbFontHeight = SGLR.fontGetHeight(kbSglFont);
         textBtns.forEach(b => {
@@ -3892,158 +3889,101 @@ function renderWidgetVisual(el, w, renderSize) {
     }
 
     case 'scope': {
-      // SGL scope: 严格移植自 sgl_scope.c scope_construct_cb
-      // 默认: bg=黑(0,0,0), grid=(50,50,50), border_width=0, border_color=(150,150,150)
-      //       min=0, max=0xFFFF, line_width=2, grid_style=0(实线), alpha=255
-      //       waveform_colors[0]=绿(0,255,0), y_label_color=白
+      // 对齐 sgl_scope.c :: sgl_scope_construct_cb
+      // 默认: bg=黑, grid=SGL_COLOR_GRAY(#808080), border_width=1, border=主题边框色,
+      //       v_min=-32768, v_max=32767, alpha 仅作用于波形；网格 alpha 固定 90
+      // 绘制: 背景+边框 → plot 区内 1/4·2/4·3/4 网格 → 每通道每列一点并用竖线连接
       const spBg = SGLR.hexToColor(p('bgColor', '#000000'));
-      const spBorderWidth = p('borderWidth', 0);
-      const spBorderColor = SGLR.hexToColor(p('borderColor', '#969696'));
-      const spGridColor = SGLR.hexToColor(p('gridColor', '#323232'));
-      const spAlpha = alpha;
-      const spLineWidth = p('lineWidth', 2);
-      // SGL grid_style: 0=实线, >0=虚线 (gap 长度, dash=gap, 周期 2*gap)
-      const spGridStyle = p('gridLine', 0);
-      const spRangeMin = Number(p('rangeMin', 0));
-      const spRangeMax = Number(p('rangeMax', 65535));
-      const spAutoScale = p('autoScale', false);
-      const spShowYLabels = p('showYLabels', false);
-      const spYLabelColor = p('yLabelColor', '#FFFFFF');
+      const spBorderWidth = Math.max(0, p('borderWidth', 1));
+      const spBorderColor = SGLR.hexToColor(p('borderColor', '#000000'));
+      const spGridColor = SGLR.hexToColor(p('gridColor', '#808080'));
+      const spWaveAlpha = alpha;
+      const spVMin = Number(p('vMin', p('rangeMin', -32768)));
+      const spVMax = Number(p('vMax', p('rangeMax', 32767)));
       const spChannelCount = Math.max(1, Math.min(4, p('channelCount', 1) || 1));
+      const spRadius = p('radius', 0);
 
       const surf = sglSurface(w.width, w.height);
       const W = w.width, H = w.height;
 
-      // 1. 背景 + 边框（radius=0）
+      // 1. 背景 + 边框（SGL: bg.alpha/border_alpha 固定 255）
       SGLR.drawRect(surf, 0, 0, W - 1, H - 1, {
-        alpha: spAlpha,
+        alpha: 255,
         border: spBorderWidth,
-        border_alpha: spAlpha,
+        border_alpha: 255,
         border_mask: 0,
         color: spBg,
         border_color: spBorderColor,
-        radius: 0
+        radius: spRadius
       });
 
-      // SGL 坐标系: x1=0, x2=W-1, y1=0, y2=H-1, width=W, height=H (闭区间)
-      const x1 = 0, y1 = 0, x2 = W - 1, y2 = H - 1;
-      const width = x2 - x1;       // SGL: width = x2 - x1
-      const height = y2 - y1;      // SGL: height = y2 - y1
-
-      // 2. 计算 display_min / display_max (SGL autoScale 逻辑)
-      // 设计时无真实数据, autoScale 时用 [0, 100] 模拟范围
-      let displayMin = spRangeMin;
-      let displayMax = spRangeMax;
-      let actualMin = displayMin;
-      let actualMax = displayMax;
-
-      // 3. 中心十字线 (SGL: x_center = (x1+x2)/2, y_center 按 display 范围中点)
-      // SGL: y_center = y1 + (height * (display_max - (min+max)/2)) / (max-min)
-      const xCenter = Math.trunc((x1 + x2) / 2);
-      const yCenter = y1 + Math.trunc((height * (displayMax - Math.trunc((displayMin + displayMax) / 2))) / (displayMax - displayMin));
-      if (spGridStyle > 0) {
-        SGLR.drawDashedLine(surf, x1, yCenter, x2, yCenter, spGridStyle, spGridStyle, spGridColor, spAlpha);
-        SGLR.drawDashedLine(surf, xCenter, y1, xCenter, y2, spGridStyle, spGridStyle, spGridColor, spAlpha);
-      } else {
-        SGLR.drawHLine(surf, x1, x2, yCenter, 1, spGridColor, spAlpha);
-        SGLR.drawVLine(surf, xCenter, y1, y2, 1, spGridColor, spAlpha);
+      const bw = spBorderWidth;
+      const plotX1 = bw, plotY1 = bw;
+      const plotX2 = W - 1 - bw, plotY2 = H - 1 - bw;
+      const cap = plotX2 - plotX1 + 1;
+      const plotH = plotY2 - plotY1 + 1;
+      if (cap <= 0 || plotH <= 0) {
+        SGLR.flushSurface(surf);
+        break;
       }
 
-      // 4. 9 条垂直网格线 (SGL: i=1..9, x_pos = x1 + width*i/10, 整数除法)
-      for (let i = 1; i < 10; i++) {
-        const xPos = x1 + Math.trunc(width * i / 10);
-        if (spGridStyle > 0) {
-          SGLR.drawDashedLine(surf, xPos, y1, xPos, y2, spGridStyle, spGridStyle, spGridColor, spAlpha);
-        } else {
-          SGLR.drawVLine(surf, xPos, y1, y2, 1, spGridColor, spAlpha);
-        }
+      // 2. 四分网格（SGL_SCOPE_GRID_ALPHA = 90）
+      const gridAlpha = 90;
+      for (let g = 1; g < 4; g++) {
+        const xPos = plotX1 + Math.trunc(cap * g / 4);
+        const yPos = plotY1 + Math.trunc(plotH * g / 4);
+        SGLR.drawVLine(surf, xPos, plotY1, plotY2, 1, spGridColor, gridAlpha);
+        SGLR.drawHLine(surf, plotX1, plotX2, yPos, 1, spGridColor, gridAlpha);
       }
 
-      // 5. 9 条水平网格线 (SGL: i=1..9, y_pos = y1 + height*i/10, 整数除法)
-      for (let i = 1; i < 10; i++) {
-        const yPos = y1 + Math.trunc(height * i / 10);
-        if (spGridStyle > 0) {
-          SGLR.drawDashedLine(surf, x1, yPos, x2, yPos, spGridStyle, spGridStyle, spGridColor, spAlpha);
-        } else {
-          SGLR.drawHLine(surf, x1, x2, yPos, 1, spGridColor, spAlpha);
-        }
+      const span = spVMax - spVMin;
+      if (span <= 0) {
+        SGLR.flushSurface(surf);
+        break;
       }
+      // Q16: scale_q16 = ((h-1) << 16) / span
+      const scaleQ16 = Math.floor(((plotH - 1) << 16) / span);
+      const mapY = (v) => {
+        let y = plotY2 - Math.floor(((v - spVMin) * scaleQ16) >> 16);
+        if (y < plotY1) y = plotY1;
+        if (y > plotY2) y = plotY2;
+        return y;
+      };
 
-      // 6. 波形绘制 (SGL: 从右向左, 多通道, Y 轴反转)
-      // 解析通道数据: channelBuffers 格式 "ch0_data;ch1_data" 每通道用逗号分隔数值
-      const chBufStr = p('channelBuffers', '') || '';
       const chColStr = p('channelWaveformColors', '#00FF00') || '#00FF00';
       const chCols = chColStr.split(';').map(s => s.trim()).filter(s => s);
-      // SGL 默认通道颜色: ch0=绿, ch1=红, ch2=蓝, ch3=黄
       const defaultChCols = ['#00FF00', '#FF0000', '#0000FF', '#FFFF00'];
+      // 可选设计态数据：channelBuffers "ch0,..|ch1,.."；无数据则画演示正弦
+      const chBufStr = p('channelBuffers', '') || '';
       const channels = chBufStr ? chBufStr.split('|') : [];
 
-      const rangeSpan = Math.max(1, displayMax - displayMin);
-
-      if (channels.length > 0) {
-        // 有用户数据: 按用户数据绘制 (与 preview.js 一致)
-        channels.forEach((bufStr, ci) => {
-          const points = bufStr.split(',').map(s => parseFloat(s.trim())).filter(v => !isNaN(v));
-          if (points.length < 2) return;
-          const col = SGLR.hexToColor(chCols[ci] || defaultChCols[ci] || '#00FF00');
-          const n = points.length;
-          // SGL: start.x = x2, start.y = y2 - (value-min)*height/(max-min)
-          let prevX = x2;
-          let prevV = Math.max(displayMin, Math.min(displayMax, points[n - 1]));
-          let prevY = y2 - Math.trunc((prevV - displayMin) * height / rangeSpan);
-          for (let i = 1; i < n; i++) {
-            const idx = n - 1 - i;
-            const curV = Math.max(displayMin, Math.min(displayMax, points[idx]));
-            const curX = x2 - Math.trunc(i * width / (n - 1));
-            const curY = y2 - Math.trunc((curV - displayMin) * height / rangeSpan);
-            SGLR.drawLine(surf, prevX, prevY, curX, curY, spLineWidth, col, spAlpha);
-            prevX = curX;
-            prevY = curY;
-          }
-        });
-      } else {
-        // 无用户数据: 模拟正弦波 (值域映射到 [displayMin, displayMax])
-        const dataPoints = Math.min(W, 64);
-        const pts = [];
-        for (let i = 0; i < dataPoints; i++) {
-          // 归一化 [0,1] -> 映射到 [displayMin, displayMax]
-          const norm = Math.sin(i * 0.2) * 0.4 + 0.5;
-          const v = Math.trunc(displayMin + norm * rangeSpan);
-          const px = x2 - Math.trunc(i * width / (dataPoints - 1));
-          const py = y2 - Math.trunc((v - displayMin) * height / rangeSpan);
-          pts.push({ x: px, y: py });
+      for (let ch = 0; ch < spChannelCount; ch++) {
+        const col = SGLR.hexToColor(chCols[ch] || defaultChCols[ch] || '#00FF00');
+        let samples = null;
+        if (channels[ch]) {
+          const pts = channels[ch].split(',').map(s => parseFloat(s.trim())).filter(v => !isNaN(v));
+          if (pts.length > 0) samples = pts;
         }
-        const col = SGLR.hexToColor(chCols[0] || defaultChCols[0] || '#00FF00');
-        for (let i = 1; i < pts.length; i++) {
-          SGLR.drawLine(surf, pts[i-1].x, pts[i-1].y, pts[i].x, pts[i].y, spLineWidth, col, spAlpha);
+        let prevY = null;
+        for (let sc = 0; sc < cap; sc++) {
+          let v;
+          if (samples) {
+            const idx = Math.min(samples.length - 1, Math.floor(sc * samples.length / cap));
+            v = samples[idx];
+          } else {
+            const phase = (sc / Math.max(1, cap - 1)) * Math.PI * 4 + ch * 0.7;
+            v = Math.trunc(spVMin + (Math.sin(phase) * 0.4 + 0.5) * span);
+          }
+          const y = mapY(v);
+          const x = plotX1 + sc;
+          if (prevY == null) prevY = y;
+          // 与 SGL 一致：相邻采样用竖线连接，不做斜线抗锯齿
+          SGLR.drawVLine(surf, x, Math.min(prevY, y), Math.max(prevY, y), 1, col, spWaveAlpha);
+          prevY = y;
         }
       }
 
       SGLR.flushSurface(surf);
-
-      // 7. Y 轴标签 (SGL: showYLabels && y_label_font 时画 max/min/mid)
-      // 设计时无字体也能预览, 用 DOM span 模拟
-      if (spShowYLabels) {
-        const labelColor = spYLabelColor || '#FFFFFF';
-        const labelText = (txt) => {
-          const wrap = document.createElement('div');
-          wrap.style.cssText = `position:absolute;left:2px;top:0;width:50px;height:${H}px;pointer-events:none;box-sizing:border-box;overflow:hidden;`;
-          const top = document.createElement('span');
-          top.style.cssText = `position:absolute;left:0;top:2px;color:${labelColor};font-size:11px;font-family:monospace;white-space:nowrap;`;
-          top.textContent = String(actualMax);
-          const mid = document.createElement('span');
-          mid.style.cssText = `position:absolute;left:0;top:${Math.trunc(yCenter - 6)}px;color:${labelColor};font-size:11px;font-family:monospace;white-space:nowrap;`;
-          mid.textContent = String(Math.trunc((actualMax + actualMin) / 2));
-          const bot = document.createElement('span');
-          bot.style.cssText = `position:absolute;left:0;bottom:2px;color:${labelColor};font-size:11px;font-family:monospace;white-space:nowrap;`;
-          bot.textContent = String(actualMin);
-          wrap.appendChild(top);
-          wrap.appendChild(mid);
-          wrap.appendChild(bot);
-          el.appendChild(wrap);
-        };
-        labelText();
-      }
       break;
     }
 
@@ -4199,7 +4139,7 @@ function renderWidgetVisual(el, w, renderSize) {
       let chartFontHeight = chartFontSize;
       if (chartHasFont) {
         const fontPath = resolveFontPath(chartFontFamily);
-        const sglFont = getSglFontData(fontPath, chartFontSize, chartFontBpp);
+        const sglFont = getSglFontData(fontPath, chartFontSize, chartFontBpp, fontOptsFromWidget(w));
 
         if (sglFont && sglFont.font_height) {
           chartFontHeight = sglFont.font_height;
@@ -4568,7 +4508,7 @@ function renderWidgetVisual(el, w, renderSize) {
 
       if (sbHasFont) {
         // 有字模：SGL drawStringSGL 像素级渲染槽位文本
-        const sglFont = getSglFontData(sbFontPath, sbFontSize, sbFontBpp);
+        const sglFont = getSglFontData(sbFontPath, sbFontSize, sbFontBpp, fontOptsFromWidget(w));
         const cssFamily = getCssFontStack(sbEffFamily);
 
         // 左侧槽位（从左到右）
@@ -4797,7 +4737,7 @@ function renderWidgetVisual(el, w, renderSize) {
           const alTbCanvas = document.createElement('canvas');
           const alTbSurf = SGLR.createSurface(alTbCanvas, alBufW, alBufH, z);
           alTbCanvas.style.cssText = `position:absolute;left:0;top:0;width:${alTbSurf.w}px;height:${alTbSurf.h}px;pointer-events:none;`;
-          const alTbSglFont = getSglFontData(alFontFamily, alFontSize, alFontBpp);
+          const alTbSglFont = getSglFontData(alFontFamily, alFontSize, alFontBpp, fontOptsFromWidget(w));
           if (alTbSglFont) {
             // 有字模：像素级渲染（与 SGL 运行时一致）
             SGLR.drawStringSGL(alTbSurf, alMargin, alMargin, alText, alTextCol, alAlpha, alTbSglFont);
@@ -4825,7 +4765,7 @@ function renderWidgetVisual(el, w, renderSize) {
         if (alHasFont) {
           // 有字模：SGL drawStringSGL 像素级渲染（与 SGL 运行时一致）
           const coords = { x1: 0, y1: 0, x2: w.width - 1, y2: w.height - 1 };
-          const alSglFont = getSglFontData(alFontFamily, alFontSize, alFontBpp);
+          const alSglFont = getSglFontData(alFontFamily, alFontSize, alFontBpp, fontOptsFromWidget(w));
           if (alSglFont) {
             const pos = SGLR.getTextPosSGL(coords, alText, alSglFont, 0, sglAlign(alAlign));
             SGLR.drawStringSGL(surf, pos.x + alOffsetX, pos.y + alOffsetY, alText, alTextCol, alAlpha, alSglFont);
@@ -5004,6 +4944,26 @@ function getAllDescendantIds(wId, page) {
   return descendants;
 }
 
+/** 适合作为父对象的容器类型（与 SGL 常用容器对齐；其它类型仍可选，但排在后面） */
+const PARENT_CONTAINER_TYPES = new Set([
+  'rect', 'rect_ext', 'box', 'win', 'viewlist', 'msgbox',
+]);
+
+function isParentContainerType(type) {
+  return PARENT_CONTAINER_TYPES.has(type);
+}
+
+/** 将子控件相对坐标限制在父对象可视区域内 */
+function clampChildPosInParent(child, parent, x, y) {
+  if (!child || !parent) return { x, y };
+  const maxX = Math.max(0, (parent.width || 0) - (child.width || 0));
+  const maxY = Math.max(0, (parent.height || 0) - (child.height || 0));
+  return {
+    x: Math.max(0, Math.min(Math.round(x), maxX)),
+    y: Math.max(0, Math.min(Math.round(y), maxY)),
+  };
+}
+
 // 鼠标事件
 document.addEventListener('mousemove', (e) => {
   if (isDragging && AppState.selectedWidgetIds.size > 0) {
@@ -5033,10 +4993,15 @@ document.addEventListener('mousemove', (e) => {
           if (ww && !ww.locked) {
             let newX = pos.x + sdx;
             let newY = pos.y + sdy;
-            // 如果有父控件，允许自由坐标（子控件可以超出父控件区域，超出部分由clip-path裁剪）
+            // 有父控件：拖动限制在父对象区域内（与 SGL 可视裁剪一致，避免“拖出父外”）
             const page = AppState.getCurrentPage();
             if (page && ww.parentId) {
-              // 不限制坐标范围，超出父控件区域的部分由渲染时的 clip-path 自动裁剪
+              const parent = page.widgets.find(p => p.id === ww.parentId);
+              if (parent) {
+                const clamped = clampChildPosInParent(ww, parent, newX, newY);
+                newX = clamped.x;
+                newY = clamped.y;
+              }
             }
             AppState.moveWidget(pos.id, newX, newY);
             // 子控件不需要显式移动：它们的相对位置不变，
@@ -5398,7 +5363,7 @@ function renderWidgetProps() {
     // 折线图专用
     const lineOnlyProps = ['seriesLineAlpha', 'seriesLineWidth'];
     // 柱状图专用
-    const barOnlyProps = ['barSpacing', 'orientation', 'openAnimDuration'];
+    const barOnlyProps = ['barSpacing', 'categoryGap', 'orientation', 'openAnimDuration'];
     // 饼图专用
     const pieOnlyProps = ['startAngle', 'innerRadiusRate', 'radius', 'sliceAlpha', 'smooth', 'legendEnable', 'legendPos', 'legendDir', 'legendTextColor', 'legendAreaSize', 'legendAlpha', 'legendBoxSize', 'legendPadding', 'legendItemGap', 'legendBg', 'legendBgColor', 'legendBorderColor', 'sliceCount', 'sliceValues', 'sliceColors', 'sliceLabels'];
 
@@ -5432,19 +5397,42 @@ function renderWidgetProps() {
     html += `<button type="button" class="lock-icon-btn ${w.locked ? 'locked' : ''}" data-prop="locked" data-bool="1" title="${w.locked ? '解锁控件' : '锁定控件'}">${lockIconSvg}</button>`;
   }
   html += `</div>`;
-  html += `<div class="form-row"><div class="form-group"><label class="form-label">X</label><input type="number" class="form-input" data-prop="x" value="${escapeAttr(String(w.x != null ? w.x : 0))}" /></div><div class="form-group"><label class="form-label">Y</label><input type="number" class="form-input" data-prop="y" value="${escapeAttr(String(w.y != null ? w.y : 0))}" /></div></div>`;
+  const hasParent = !!(w.parentId);
+  const xyHint = hasParent ? '（相对父）' : '';
+  html += `<div class="form-row"><div class="form-group"><label class="form-label">X${xyHint}</label><input type="number" class="form-input" data-prop="x" value="${escapeAttr(String(w.x != null ? w.x : 0))}" /></div><div class="form-group"><label class="form-label">Y${xyHint}</label><input type="number" class="form-input" data-prop="y" value="${escapeAttr(String(w.y != null ? w.y : 0))}" /></div></div>`;
   html += `<div class="form-row" style="margin-bottom:8px;"><div class="form-group"><label class="form-label">宽度</label><input type="number" class="form-input" data-prop="width" value="${escapeAttr(String(w.width != null ? w.width : 20))}" min="20" /></div><div class="form-group"><label class="form-label">高度</label><input type="number" class="form-input" data-prop="height" value="${escapeAttr(String(w.height != null ? w.height : 20))}" min="20" /></div></div>`;
 
-  // 父对象选择器：空选项 = 当前页面
+  // 父对象选择器：空选项 = 当前页面；排除自身与子孙（防环）；容器优先
   const currentPage = AppState.project.pages.find(p => p.id === AppState.currentPageId);
   const pageName = currentPage ? currentPage.name : '页面';
-  const siblings = currentPage ? currentPage.widgets.filter(w2 => w2.id !== w.id) : [];
+  const descendantIds = new Set(currentPage ? getAllDescendantIds(w.id, currentPage) : []);
+  const candidates = currentPage
+    ? currentPage.widgets.filter(w2 => w2.id !== w.id && !descendantIds.has(w2.id))
+    : [];
+  const containers = candidates.filter(s => isParentContainerType(s.type));
+  const others = candidates.filter(s => !isParentContainerType(s.type));
+  const parentOpt = (s) => {
+    const label = `${s.name || s.id} (${s.type})`;
+    return `<option value="${escapeAttr(s.id)}" ${w.parentId === s.id ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+  };
   html += `<div class="form-group"><label class="form-label">📦 父对象</label>`;
   html += `<select class="form-select" data-prop="parentId">`;
   html += `<option value="">📄 ${escapeHtml(pageName)}（顶级）</option>`;
-  siblings.forEach(s => {
-    html += `<option value="${escapeAttr(s.id)}" ${w.parentId === s.id ? 'selected' : ''}>${escapeHtml(s.id)} (${escapeHtml(s.type)})</option>`;
-  });
+  if (containers.length) {
+    html += `<optgroup label="推荐容器">`;
+    containers.forEach(s => { html += parentOpt(s); });
+    html += `</optgroup>`;
+  }
+  if (others.length) {
+    html += `<optgroup label="其他控件">`;
+    others.forEach(s => { html += parentOpt(s); });
+    html += `</optgroup>`;
+  }
+  // 当前父已失效（如成环被排除）时仍保留一项，避免下拉空白
+  if (w.parentId && !candidates.some(s => s.id === w.parentId)) {
+    const orphan = currentPage && currentPage.widgets.find(p => p.id === w.parentId);
+    if (orphan) html += parentOpt(orphan);
+  }
   html += `</select></div>`;
 
   // 根据 properties 列表 + PROP_META 动态渲染属性（跳过 locked，已在位置与尺寸标题处显示）
@@ -5740,15 +5728,17 @@ function renderWidgetProps() {
         html += `<option value="${ep}" ${evt.type === ep ? 'selected' : ''}>${meta.label}</option>`;
       });
       html += `</select>`;
-      // 回调函数名输入
-      html += `<input type="text" class="form-input event-cb-input" data-event-idx="${idx}" placeholder="回调函数名" value="${escapeAttr(evt.callback || '')}" style="flex:1;font-size:11px;padding:4px 6px;" />`;
+      // 回调：真机用 C 函数名；预览可用 preview:goto/set/toggle（不写工程数据）
+      html += `<input type="text" class="form-input event-cb-input" data-event-idx="${idx}" placeholder="preview:goto:页面名 或 C回调名" value="${escapeAttr(evt.callback || '')}" title="预览专用：preview:goto:页面名 | preview:set:控件变量:文本 | preview:toggle:控件变量&#10;导出代码时仍按普通 C 回调名生成" style="flex:1;font-size:11px;padding:4px 6px;" />`;
       // 删除按钮
       html += `<button type="button" class="remove-event-btn" data-event-idx="${idx}" style="background:none;color:#ef4444;border:none;cursor:pointer;font-size:14px;padding:2px 4px;">✕</button>`;
       html += `</div>`;
     });
 
     if (events.length === 0) {
-      html += `<div style="font-size:11px;color:var(--text-muted);padding:4px 0;">点击"添加事件"为控件绑定事件回调</div>`;
+      html += `<div style="font-size:11px;color:var(--text-muted);padding:4px 0;">添加事件后可填 C 回调，或预览脚本如 preview:goto:设置页</div>`;
+    } else {
+      html += `<div style="font-size:10px;color:var(--text-muted);padding:2px 0 6px;">预览脚本：preview:goto:页名 · preview:set:变量:文本 · preview:toggle:变量（仅预览生效）</div>`;
     }
   }
 
@@ -5884,6 +5874,19 @@ function renderWidgetProps() {
         const wgt = AppState.getWidget(w.id);
         if (wgt) {
           w[prop] = val;
+
+          // 有父对象时，X/Y 限制在父区域内
+          if ((prop === 'x' || prop === 'y') && w.parentId) {
+            const page = AppState.getCurrentPage();
+            const parent = page && page.widgets.find(p => p.id === w.parentId);
+            if (parent) {
+              const clamped = clampChildPosInParent(w, parent, w.x, w.y);
+              w.x = clamped.x;
+              w.y = clamped.y;
+              if (prop === 'x') input.value = String(clamped.x);
+              if (prop === 'y') input.value = String(clamped.y);
+            }
+          }
           
           // 当修改 alpha 属性时，同时更新 borderAlpha 和 mainAlpha
           if (prop === 'alpha' && w.type === 'rect') {
@@ -6075,6 +6078,9 @@ function renderWidgetProps() {
           renderLayerList();
           renderProperties();
           AppState.save();
+          if (TEXT_FONT_PROPS.has(prop)) {
+            requestFontUpdate();
+          }
           
           // 如果是 dashed 属性变化，需要重新渲染属性面板以显示/隐藏虚线参数
           if (prop === 'dashed') {
@@ -6149,21 +6155,33 @@ function renderWidgetProps() {
         if (val === 'true') val = true;
         else if (val === 'false') val = false;
 
-        // parentId 变更：设置父对象时把子控件置于父对象中心, 移除父对象时保留当前绝对位置
+        // parentId 变更：保持屏幕绝对位置换算相对坐标；取消父时相对→绝对
         if (prop === 'parentId') {
           const wgt = AppState.getWidget(w.id);
           const page = AppState.getCurrentPage();
           if (wgt && page) {
             if (val && val !== '') {
-              // 设置父对象：把子控件置于父对象中心位置 (相对坐标)
+              const descendantIds = new Set(getAllDescendantIds(wgt.id, page));
+              if (descendantIds.has(val)) {
+                showToast('不能将子孙控件设为父对象（会形成环）');
+                input.value = wgt.parentId || '';
+                return;
+              }
               const parent = page.widgets.find(p => p.id === val);
               if (parent) {
-                // 居中: 相对 x = (父宽 - 子宽) / 2, 相对 y = (父高 - 子高) / 2
-                const relX = Math.trunc((parent.width - wgt.width) / 2);
-                const relY = Math.trunc((parent.height - wgt.height) / 2);
-                // 子控件继承父控件的 zOrder, 确保作为同一层级组
+                // 保持当前屏幕位置：相对坐标 = 绝对坐标 - 父绝对坐标，再限制在父区域内
+                const childAbs = getWidgetAbsPos(wgt, page);
+                const parentAbs = getWidgetAbsPos(parent, page);
+                let relX = childAbs.x - parentAbs.x;
+                let relY = childAbs.y - parentAbs.y;
+                const clamped = clampChildPosInParent(wgt, parent, relX, relY);
                 const newZOrder = (parent.zOrder != null ? parent.zOrder : 0);
-                AppState.updateWidget(w.id, { parentId: val, x: relX, y: relY, zOrder: newZOrder });
+                AppState.updateWidget(w.id, {
+                  parentId: val,
+                  x: clamped.x,
+                  y: clamped.y,
+                  zOrder: newZOrder,
+                });
               }
             } else {
               // 移除父对象：将相对位置转换为绝对位置，保留视觉位置不变
@@ -6171,7 +6189,6 @@ function renderWidgetProps() {
                 const oldParent = page.widgets.find(p => p.id === wgt.parentId);
                 if (oldParent) {
                   const parentAbs = getWidgetAbsPos(oldParent, page);
-                  // 新绝对位置 = 当前相对位置 + 父对象绝对位置
                   const absX = wgt.x + parentAbs.x;
                   const absY = wgt.y + parentAbs.y;
                   AppState.updateWidget(w.id, { parentId: '', x: absX, y: absY });
@@ -6211,13 +6228,15 @@ function renderWidgetProps() {
             registerFontFile(fam).then(() => {
               const w2 = AppState.getWidget(w.id);
               if (w2) {
-                loadSglFontData(resolveFontPath(fam), w2.fontSize || 14, w2.fontBpp || 4, symbols).then(() => {
+                loadSglFontData(resolveFontPath(fam), w2.fontSize || 14, w2.fontBpp || 4, symbols, fontOptsFromWidget(w2)).then(() => {
                   renderCanvas();
                 });
               }
             });
           }
           renderCanvas();
+        } else if (TEXT_FONT_PROPS.has(prop)) {
+          requestFontUpdate();
         }
 
         // dashed 属性变化时重新渲染属性面板（显示/隐藏虚线参数）
@@ -6264,6 +6283,7 @@ function renderWidgetProps() {
         wgt.options = opts.join('\n');
         renderCanvas();
         AppState.save();
+        requestFontUpdate();
       });
       input.addEventListener('blur', () => {
         const wgt = AppState.getWidget(w.id);
@@ -6272,6 +6292,7 @@ function renderWidgetProps() {
         const opts = (typeof wgt.options === 'string' ? wgt.options : '').split('\n');
         opts[idx] = input.value;
         AppState.updateWidget(w.id, { options: opts.join('\n') });
+        requestFontUpdate();
       });
     });
   }
@@ -6316,6 +6337,7 @@ function renderWidgetProps() {
         wgt[propName] = slots.join(';');
         renderCanvas();
         AppState.save();
+        requestFontUpdate();
       });
       input.addEventListener('blur', () => {
         const wgt = AppState.getWidget(w.id);
@@ -6324,6 +6346,7 @@ function renderWidgetProps() {
         const slots = parseSlots(wgt[propName]);
         slots[idx] = input.value;
         AppState.updateWidget(w.id, { [propName]: slots.join(';') });
+        requestFontUpdate();
       });
     });
   });
@@ -6773,6 +6796,17 @@ document.getElementById('btn-add-font').addEventListener('click', async () => {
     }
     renderWidgetProps();
     logMessage(`已添加 ${paths.length} 个字体资源`, 'success');
+    // 项目已保存：立即落盘并复制字体到 resources/fonts（与图片同逻辑，避免仍指向外部绝对路径）
+    if (AppState.projectPath) {
+      const saveResult = await AppState.saveProject();
+      if (saveResult && saveResult.ok) {
+        logMessage('已将字体复制到项目 resources/fonts 目录', 'success');
+      } else if (saveResult && saveResult.msg) {
+        logMessage('字体已添加，但保存/复制失败: ' + saveResult.msg, 'warn');
+      }
+    } else {
+      logMessage('提示: 请先保存项目，字体会在保存时复制到 resources/fonts', 'info');
+    }
     // 像新打开工程一样加载新字体的字模数据，完成后会自动 scheduleRenderCanvas 重新渲染
     await preloadSglFontData();
   } catch (err) {
@@ -6799,6 +6833,16 @@ document.getElementById('btn-add-image').addEventListener('click', async () => {
     });
     AppState.notify();
     logMessage(`已添加 ${paths.length} 个图片资源`, 'success');
+    if (AppState.projectPath) {
+      const saveResult = await AppState.saveProject();
+      if (saveResult && saveResult.ok) {
+        logMessage('已将图片复制到项目 resources/images 目录', 'success');
+      } else if (saveResult && saveResult.msg) {
+        logMessage('图片已添加，但保存/复制失败: ' + saveResult.msg, 'warn');
+      }
+    } else {
+      logMessage('提示: 请先保存项目，图片会在保存时复制到 resources/images', 'info');
+    }
   } catch (err) {
     logMessage('添加图片失败: ' + err, 'error');
   }
@@ -7413,6 +7457,7 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     const step = e.shiftKey ? 10 : 1;
     AppState.beginBatch();
+    const page = AppState.getCurrentPage();
     AppState.selectedWidgetIds.forEach(id => {
       const w = AppState.getWidget(id);
       if (w && !w.locked) {
@@ -7421,6 +7466,14 @@ document.addEventListener('keydown', (e) => {
         if (e.key === 'ArrowDown') ny += step;
         if (e.key === 'ArrowLeft') nx -= step;
         if (e.key === 'ArrowRight') nx += step;
+        if (page && w.parentId) {
+          const parent = page.widgets.find(p => p.id === w.parentId);
+          if (parent) {
+            const clamped = clampChildPosInParent(w, parent, nx, ny);
+            nx = clamped.x;
+            ny = clamped.y;
+          }
+        }
         AppState.moveWidget(id, nx, ny);
       }
     });
@@ -8254,14 +8307,14 @@ async function enterPreviewMode() {
   _previewToggleUI(true);
   // 启用临时 runtime 交互；退出预览时统一清理，不写回工程数据。
   enterPreviewSimulator();
-  // 假数据动画属于后续阶段，最小交互预览保持关闭。
-  setPreviewDemoEnabled(false);
+  // 视口缩放后重算预览居中（不改编辑画布 pan/zoom）
+  bindPreviewLayoutWatcher();
   // 预览模式下字体加载完成后渲染到 preview-frame，而非编辑器 canvas
   setFontLoadCallback(() => previewRender());
   // 只绑定交互事件 + 渲染，不调用 initPreview（避免 initNav/setFontLoadCallback 污染编辑器）
   setupGlobalInteraction();
   previewRender();
-  showToast('已进入预览模式，点击"编辑"或按 Esc 退出', 'info');
+  showToast('已进入预览：左右滑动换页，Esc 退出', 'info');
 }
 
 function exitPreviewMode() {
@@ -8368,7 +8421,7 @@ async function takeScreenshot() {
   if (btnExit) btnExit.addEventListener('click', () => exitPreviewMode());
   if (btnShot) btnShot.addEventListener('click', () => { takeScreenshot().catch(e => console.error(e)); });
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'F5') { e.preventDefault(); enterPreviewMode(); }
+    if (e.key === 'F5') { e.preventDefault(); enterPreviewMode(); return; }
     if (_previewMode && e.key === 'Escape') exitPreviewMode();
   });
 })();

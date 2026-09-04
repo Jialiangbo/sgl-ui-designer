@@ -298,6 +298,8 @@ struct Widget {
     x_labels: Option<String>,
     #[serde(default, rename = "barSpacing")]
     bar_spacing: Option<i32>,
+    #[serde(default, rename = "categoryGap")]
+    category_gap: Option<i32>,
     #[serde(default)]
     orientation: Option<i32>,
     #[serde(default, rename = "openAnim")]
@@ -356,6 +358,65 @@ struct Widget {
     auto_scale: Option<bool>,
     #[serde(default, rename = "showYLabels")]
     show_y_labels: Option<bool>,
+    // gauge / analogclock 共用
+    #[serde(default, rename = "arcColor")]
+    arc_color: Option<String>,
+    #[serde(default, rename = "scaleColor")]
+    scale_color: Option<String>,
+    #[serde(default, rename = "pointerColor")]
+    pointer_color: Option<String>,
+    #[serde(default, rename = "hubColor")]
+    hub_color: Option<String>,
+    #[serde(default, rename = "arcWidth")]
+    arc_width: Option<i32>,
+    #[serde(default, rename = "scaleWidth")]
+    scale_width: Option<i32>,
+    #[serde(default, rename = "scaleLength")]
+    scale_length: Option<i32>,
+    #[serde(default, rename = "pointerWidth")]
+    pointer_width: Option<i32>,
+    #[serde(default, rename = "hubRadius")]
+    hub_radius: Option<i32>,
+    #[serde(default, rename = "scaleStart")]
+    scale_start: Option<i32>,
+    #[serde(default, rename = "scaleStep")]
+    scale_step: Option<i32>,
+    #[serde(default, rename = "scaleAngle")]
+    scale_angle: Option<i32>,
+    #[serde(default, rename = "textInterval")]
+    text_interval: Option<i32>,
+    #[serde(default, rename = "scaleWarning")]
+    scale_warning: Option<i32>,
+    // led / dropdown / roller 共用
+    #[serde(default, rename = "offColor")]
+    off_color: Option<String>,
+    #[serde(default, rename = "selectedColor")]
+    selected_color: Option<String>,
+    #[serde(default, rename = "visibleRows")]
+    visible_rows: Option<i32>,
+    #[serde(default, rename = "optionDynamic", deserialize_with = "deserialize_bool_or_string")]
+    option_dynamic: Option<bool>,
+    // launcher 控件属性
+    #[serde(default, rename = "iconSize")]
+    icon_size: Option<i32>,
+    #[serde(default, rename = "gridCol")]
+    grid_col: Option<i32>,
+    #[serde(default, rename = "gridRow")]
+    grid_row: Option<i32>,
+    #[serde(default, rename = "marginLeft")]
+    margin_left: Option<i32>,
+    #[serde(default, rename = "marginTop")]
+    margin_top: Option<i32>,
+    #[serde(default, rename = "marginRight")]
+    margin_right: Option<i32>,
+    #[serde(default, rename = "marginBottom")]
+    margin_bottom: Option<i32>,
+    #[serde(default, rename = "labelColor")]
+    label_color: Option<String>,
+    #[serde(default, rename = "navigbarColor")]
+    navigbar_color: Option<String>,
+    #[serde(default, rename = "currentPage")]
+    current_page: Option<i32>,
 }
 
 // 兼容前端传来的字符串布尔值（"true"/"false"）
@@ -418,6 +479,9 @@ struct FontCFile {
     #[serde(rename = "fileName")]
     file_name: String,
     content: String,
+    /// 外闪字模 bitmap 原始字节（写入同名 .bin）
+    #[serde(default, skip_serializing)]
+    bitmap_bin: Option<Vec<u8>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -494,6 +558,15 @@ struct SglConfig {
     pixmap_bilinear_interp: i32,
     #[serde(rename = "font_small_table", default)]
     font_small_table: i32,
+    /// CONFIG_SGL_FLASH_FONT：字模 bitmap 存外闪
+    #[serde(rename = "flash_font", default)]
+    flash_font: i32,
+    /// 单字形临时缓冲字节数
+    #[serde(rename = "flash_font_glyph_buf_size", default = "default_flash_font_glyph_buf_size")]
+    flash_font_glyph_buf_size: i32,
+    /// 外闪字模打包起始地址（十六进制字符串，如 0x00100000）
+    #[serde(rename = "flash_font_base_addr", default = "default_flash_font_base_addr")]
+    flash_font_base_addr: String,
 }
 
 fn default_focused_color() -> String {
@@ -506,6 +579,27 @@ fn default_focused_width() -> i32 {
 
 fn default_dirty_area_trace_color() -> String {
     "#000000".to_string()
+}
+
+fn default_flash_font_glyph_buf_size() -> i32 {
+    512
+}
+
+fn default_flash_font_base_addr() -> String {
+    "0x00100000".to_string()
+}
+
+fn parse_flash_font_base_addr(s: &str) -> u32 {
+    let t = s.trim();
+    if t.is_empty() {
+        return 0x0010_0000;
+    }
+    let hex = t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")).unwrap_or(t);
+    u32::from_str_radix(hex, 16).unwrap_or(0x0010_0000)
+}
+
+fn align4_u32(v: u32) -> u32 {
+    (v + 3) & !3
 }
 
 /// 将 sgl_rgb(0xRR, 0xGG, 0xBB) 格式解析为 #RRGGBB hex 字符串
@@ -750,9 +844,16 @@ fn insert_glyph_ranges(set: &mut std::collections::HashSet<char>, spec: &str) {
 /// 控件属性中的额外字模覆盖（额外文本 / ASCII / 范围），写入同一字体条目的 HashSet，天然去重
 
 /// 控件字模变体：全局压缩 + 控件间距/等宽
+/// 开启 CONFIG_SGL_FLASH_FONT 时强制不压缩（format 与 EXT_FLASH 互斥）
 fn font_variant_for_widget(project: &Project, w: &Widget) -> Option<(String, i32, i32, i32, i32, bool)> {
     let (fam, sz, bpp) = resolve_widget_font_spec(w)?;
-    let compress = if project.sgl_config.font_compressed != 0 { 1 } else { 0 };
+    let compress = if project.sgl_config.flash_font != 0 {
+        0
+    } else if project.sgl_config.font_compressed != 0 {
+        1
+    } else {
+        0
+    };
     let spacing = w.font_spacing.unwrap_or(0).max(0);
     let smart_mono = w.font_smart_mono.unwrap_or(false);
     Some((fam, sz, bpp, compress, spacing, smart_mono))
@@ -999,6 +1100,136 @@ fn write_demo_sources_cmake(
 fn write_fonts_cmake(font_files: &[FontCFile], fonts_dir: &std::path::Path) -> Result<(), String> {
     let names: Vec<String> = font_files.iter().map(|f| f.file_name.clone()).collect();
     write_demo_sources_cmake(&fonts_dir.join("fonts.cmake"), "fonts", &names)
+}
+
+/// 按 font_id 排序生成全部字模；开启 flash_font 时累加偏移并产出 .bin 载荷
+fn generate_project_font_c_files(
+    project: &Project,
+    fonts: &[(String, String, i32, i32, i32, i32, bool, String)],
+    resolved_font_paths: &std::collections::HashMap<String, std::path::PathBuf>,
+    proj_dir: &std::path::Path,
+    skip_missing: bool,
+) -> Result<(Vec<FontCFile>, Vec<(String, u32, u32)>), String> {
+    let flash_on = project.sgl_config.flash_font != 0;
+    let mut work: Vec<&(String, String, i32, i32, i32, i32, bool, String)> = fonts.iter().collect();
+    work.sort_by(|a, b| {
+        let id_a = font_id_from_family(&a.1, a.2, a.3, a.4, a.5, a.6);
+        let id_b = font_id_from_family(&b.1, b.2, b.3, b.4, b.5, b.6);
+        id_a.cmp(&id_b)
+    });
+
+    let mut generated: Vec<FontCFile> = Vec::new();
+    let mut map_entries: Vec<(String, u32, u32)> = Vec::new();
+    let mut next_off: u32 = 0;
+
+    for (_font_name, font_path_str, size, bpp, compress, spacing, smart_mono, symbols) in work {
+        let font_abs_path = {
+            if let Some(p) = resolved_font_paths.get(font_path_str) {
+                p.clone()
+            } else {
+                let p = std::path::Path::new(font_path_str);
+                if p.is_absolute() {
+                    p.to_path_buf()
+                } else {
+                    proj_dir.join(p)
+                }
+            }
+        };
+
+        if !font_abs_path.exists() {
+            if skip_missing {
+                continue;
+            }
+            return Err(format!(
+                "字体文件不存在，无法生成字模: {}（解析路径: {}）",
+                font_path_str,
+                font_abs_path.display()
+            ));
+        }
+
+        let font_id = font_id_from_family(font_path_str, *size, *bpp, *compress, *spacing, *smart_mono);
+        let flash = if flash_on {
+            Some(font_generator::FlashFontExport {
+                flash_offset: next_off,
+            })
+        } else {
+            None
+        };
+
+        match font_generator::generate_font_c(
+            &font_abs_path,
+            *size,
+            *bpp,
+            symbols,
+            *compress > 0,
+            &font_id,
+            *spacing,
+            *smart_mono,
+            flash,
+        ) {
+            Ok(result) => {
+                if !result.missing_glyphs.is_empty() {
+                    eprintln!(
+                        "[font] 警告: {} 缺少 {} 个字形，已跳过取模: {}",
+                        font_id,
+                        result.missing_glyphs.len(),
+                        result
+                            .missing_glyphs
+                            .iter()
+                            .take(12)
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                }
+                if flash_on {
+                    map_entries.push((font_id.clone(), next_off, result.bitmap_size));
+                    next_off = align4_u32(next_off.saturating_add(result.bitmap_size));
+                }
+                generated.push(FontCFile {
+                    font_id: font_id.clone(),
+                    file_name: format!("{}.c", font_id),
+                    content: result.content,
+                    bitmap_bin: result.bitmap_blob,
+                });
+            }
+            Err(e) => {
+                return Err(format!("生成字模失败 {}: {}", font_id, e));
+            }
+        }
+    }
+
+    Ok((generated, map_entries))
+}
+
+fn finish_write_font_outputs(
+    project: &Project,
+    fonts_dir: &std::path::Path,
+    generated: &[FontCFile],
+    map_entries: &[(String, u32, u32)],
+) -> Result<(), String> {
+    write_font_c_files(generated, fonts_dir)?;
+    write_fonts_cmake(generated, fonts_dir)?;
+    if project.sgl_config.flash_font != 0 {
+        let base = parse_flash_font_base_addr(&project.sgl_config.flash_font_base_addr);
+        write_fonts_flash_map(fonts_dir, base, map_entries)?;
+    } else {
+        let map_path = fonts_dir.join("fonts_flash_map.h");
+        if map_path.exists() {
+            let _ = std::fs::remove_file(map_path);
+        }
+        // 清理旧 .bin
+        if let Ok(rd) = std::fs::read_dir(fonts_dir) {
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.extension().and_then(|x| x.to_str()) == Some("bin") {
+                    let _ = std::fs::remove_file(p);
+                }
+            }
+        }
+    }
+    let _ = std::fs::write(fonts_dir.join(".sgl_auto_gen"), "");
+    Ok(())
 }
 
 /// 写入 demo/pixmaps/pixmaps.cmake（根据目录中已有 .c 文件）
@@ -1961,6 +2192,9 @@ fn get_create_fn(t: &str) -> &'static str {
         "sprite" => "sgl_sprite_create",
         "analogclock" => "sgl_analogclock_create",
         "img_ext" => "sgl_img_ext_create",
+        "roller" => "sgl_roller_create",
+        "statusbar" => "sgl_statusbar_create",
+        "launcher" => "sgl_launcher_create",
         _ => "sgl_rect_create",
     }
 }
@@ -2192,8 +2426,12 @@ fn emit_setters(code: &mut String, project: &Project, w: &Widget, obj: &str) {
                 code.push_str(&format!("    sgl_label_set_text_align({}, {});\n", obj, align_macro));
             }
             c!( "sgl_label_set_radius", w.radius.map(|v| v as u8));
-            // SGL label 的 set_text_offset 只接受 offset_x 一个参数
-            c!( "sgl_label_set_text_offset", w.text_offset_x.map(|x| x as i8));
+            // 仅非 0 时生成，避免冗余调用
+            if let Some(ox) = w.text_offset_x {
+                if ox != 0 {
+                    code.push_str(&format!("    sgl_label_set_text_offset({}, {});\n", obj, ox as i8));
+                }
+            }
             // long_mode（长文本滚动模式，需 CONFIG_SGL_ANIMATION）
             // SGL: speed = 像素/秒
             if let Some(true) = w.long_mode {
@@ -2259,8 +2497,17 @@ fn emit_setters(code: &mut String, project: &Project, w: &Widget, obj: &str) {
                 code.push_str(&format!("    sgl_label_ext_set_text_align({}, {});\n", obj, align_macro));
             }
             c!( "sgl_label_ext_set_radius", w.radius.map(|v| v as u8));
-            // label_ext 的 set_text_offset 接受 offset_x 和 offset_y
-            c!( "sgl_label_ext_set_text_offset", w.text_offset_x.zip(w.text_offset_y).map(|(x, y)| format!("{}, {}", x as i8, y as i8)));
+            // label_ext 支持 offset_x/offset_y；仅非默认时生成
+            {
+                let ox = w.text_offset_x.unwrap_or(0);
+                let oy = w.text_offset_y.unwrap_or(0);
+                if ox != 0 || oy != 0 {
+                    code.push_str(&format!(
+                        "    sgl_label_ext_set_text_offset({}, {}, {});\n",
+                        obj, ox as i8, oy as i8
+                    ));
+                }
+            }
             if let Some(r) = w.text_rotation {
                 code.push_str(&format!("    sgl_label_ext_set_text_rotation({}, {});\n", obj, r));
             }
@@ -2296,11 +2543,13 @@ fn emit_setters(code: &mut String, project: &Project, w: &Widget, obj: &str) {
                 cstr!("sgl_arc_label_set_text", w.text);
             }
             cclr!("sgl_arc_label_set_text_color", w.text_color);
-            // arc_label 的 set_bg_color 会自动置位 bg_flag
-            if let Some(bg) = &w.bg_color {
-                if !bg.is_empty() && bg != "transparent" && w.arc_label_bg_flag.unwrap_or(false) {
-                    code.push_str(&format!("    sgl_arc_label_set_bg_color({}, {});\n", obj, sgl_color(bg)));
-                }
+            // 旋转模式（angle!=0）下必须设置 bg_color，否则文本不可见
+            let angle_nonzero = w.angle.map(|a| a != 0).unwrap_or(false);
+            let need_bg = w.arc_label_bg_flag.unwrap_or(false) || angle_nonzero;
+            if need_bg {
+                let bg = w.bg_color.as_deref().filter(|s| !s.is_empty() && *s != "transparent")
+                    .unwrap_or("#FFFFFF");
+                code.push_str(&format!("    sgl_arc_label_set_bg_color({}, {});\n", obj, sgl_color(bg)));
             }
             c!( "sgl_arc_label_set_alpha", w.alpha.map(|v| v as u8));
             if let Some(a) = &w.align {
@@ -2323,8 +2572,23 @@ fn emit_setters(code: &mut String, project: &Project, w: &Widget, obj: &str) {
                 code.push_str(&format!("    sgl_arc_label_set_text_align({}, {});\n", obj, align_macro));
             }
             c!( "sgl_arc_label_set_radius", w.radius.map(|v| v as u8));
-            c!( "sgl_arc_label_set_angle", w.angle.map(|v| v as i16));
-            c!( "sgl_arc_label_set_text_offset", w.arc_label_offset_x.zip(w.arc_label_offset_y).map(|(x, y)| format!("{}, {}", x as i8, y as i8)));
+            // transform 是 union：angle 与 offset 不能同时设置
+            if angle_nonzero {
+                code.push_str(&format!("    sgl_arc_label_set_orig_pos({}, {}, {});\n", obj, w.x, w.y));
+                code.push_str(&format!("    sgl_arc_label_set_orig_size({}, {}, {});\n", obj, w.width, w.height));
+                if let Some(angle) = w.angle {
+                    code.push_str(&format!("    sgl_arc_label_set_angle({}, {});\n", obj, angle as i16));
+                }
+            } else {
+                let ox = w.arc_label_offset_x.unwrap_or(0);
+                let oy = w.arc_label_offset_y.unwrap_or(0);
+                if ox != 0 || oy != 0 {
+                    code.push_str(&format!(
+                        "    sgl_arc_label_set_text_offset({}, {}, {});\n",
+                        obj, ox as i8, oy as i8
+                    ));
+                }
+            }
         }
         "img" => {
             if let Some(pix) = &w.pixmap {
@@ -2393,15 +2657,39 @@ fn emit_setters(code: &mut String, project: &Project, w: &Widget, obj: &str) {
             c!( "sgl_progress_set_fill_alpha", w.alpha.map(|v| v as u8));
         }
         "gauge" => {
-            cclr!("sgl_gauge_set_bg_color", w.bg_color);
-            cclr!("sgl_gauge_set_arc_color", w.color);
-            cclr!("sgl_gauge_set_scale_color", w.border_color);
-            cclr!("sgl_gauge_set_text_color", w.text_color);
-            c!( "sgl_gauge_set_value", w.value.map(|v| v as i16));
-            c!( "sgl_gauge_set_alpha", w.alpha.map(|v| v as u8));
             if let Some(fid) = font_id_for_widget(&project, w) {
                 code.push_str(&format!("    sgl_gauge_set_font({}, &{});\n", obj, fid));
             }
+            c!( "sgl_gauge_set_value", w.value.map(|v| v as i16));
+            cclr!("sgl_gauge_set_arc_color", w.arc_color);
+            cclr!("sgl_gauge_set_scale_color", w.scale_color);
+            cclr!("sgl_gauge_set_pointer_color", w.pointer_color);
+            cclr!("sgl_gauge_set_text_color", w.text_color);
+            cclr!("sgl_gauge_set_hub_color", w.hub_color);
+            cclr!("sgl_gauge_set_bg_color", w.bg_color);
+            if w.start_angle.is_some() || w.end_angle.is_some() {
+                code.push_str(&format!(
+                    "    sgl_gauge_set_angle_range({}, {}, {});\n",
+                    obj,
+                    w.start_angle.unwrap_or(0),
+                    w.end_angle.unwrap_or(360)
+                ));
+            }
+            c!( "sgl_gauge_set_arc_width", w.arc_width.map(|v| v as u8));
+            c!( "sgl_gauge_set_scale_width", w.scale_width.map(|v| v as u8));
+            c!( "sgl_gauge_set_scale_length", w.scale_length.map(|v| v as u8));
+            c!( "sgl_gauge_set_pointer_width", w.pointer_width.map(|v| v as u8));
+            c!( "sgl_gauge_set_hub_radiue", w.hub_radius.map(|v| v as u8));
+            c!( "sgl_gauge_set_scale_start_value", w.scale_start.map(|v| v as i16));
+            if let Some(step) = w.scale_step {
+                code.push_str(&format!("    sgl_gauge_set_scale_step_value({}, {});\n", obj, step.max(1)));
+            }
+            if let Some(angle) = w.scale_angle {
+                code.push_str(&format!("    sgl_gauge_set_scale_angle({}, {});\n", obj, angle.max(1)));
+            }
+            c!( "sgl_gauge_set_text_interval", w.text_interval.map(|v| v as u8));
+            c!( "sgl_gauge_set_scale_warning_value", w.scale_warning.map(|v| v as i16));
+            c!( "sgl_gauge_set_alpha", w.alpha.map(|v| v as u8));
         }
         "bar" => {
             cclr!("sgl_bar_set_fill_color", w.color);
@@ -2445,13 +2733,14 @@ fn emit_setters(code: &mut String, project: &Project, w: &Widget, obj: &str) {
             }
         }
         "led" => {
-            cclr!("sgl_led_set_on_color", w.color);
-            cclr!("sgl_led_set_off_color", w.bg_color);
-            c!( "sgl_led_set_radius", w.radius.map(|v| v as u8));
-            c!( "sgl_led_set_alpha", w.alpha.map(|v| v as u8));
             if let Some(s) = w.status {
                 code.push_str(&format!("    sgl_led_set_status({}, {});\n", obj, if s { "true" } else { "false" }));
             }
+            cclr!("sgl_led_set_on_color", w.on_color);
+            cclr!("sgl_led_set_off_color", w.off_color);
+            cclr!("sgl_led_set_bg_color", w.bg_color);
+            c!( "sgl_led_set_radius", w.radius.map(|v| v as u8));
+            c!( "sgl_led_set_alpha", w.alpha.map(|v| v as u8));
         }
         "arc" => {
             cclr!("sgl_arc_set_color", w.color);
@@ -2547,12 +2836,23 @@ fn emit_setters(code: &mut String, project: &Project, w: &Widget, obj: &str) {
             if let Some(fid) = font_id_for_widget(&project, w) {
                 code.push_str(&format!("    sgl_dropdown_set_text_font({}, &{});\n", obj, fid));
             }
-            cclr!("sgl_dropdown_set_bg_color", w.color);
-            cclr!("sgl_dropdown_set_selected_color", w.bg_color);
-            cclr!("sgl_dropdown_set_border_color", w.border_color);
+            if let Some(ref opts) = w.options {
+                if !opts.is_empty() {
+                    let escaped = opts.replace('\\', "\\\\").replace('"', "\\\"");
+                    if w.option_dynamic.unwrap_or(false) {
+                        code.push_str(&format!("    sgl_dropdown_set_option_dynamic({}, \"{}\");\n", obj, escaped));
+                    } else {
+                        code.push_str(&format!("    sgl_dropdown_set_option_static({}, \"{}\");\n", obj, escaped));
+                    }
+                }
+            }
             cclr!("sgl_dropdown_set_text_color", w.text_color);
+            cclr!("sgl_dropdown_set_bg_color", w.bg_color);
+            cclr!("sgl_dropdown_set_border_color", w.border_color);
             c!( "sgl_dropdown_set_border_width", w.border_width.map(|v| v as u8));
             c!( "sgl_dropdown_set_radius", w.radius.map(|v| v as u8));
+            cclr!("sgl_dropdown_set_selected_color", w.selected_color);
+            c!( "sgl_dropdown_set_visible_rows", w.visible_rows.map(|v| v as u8));
             c!( "sgl_dropdown_set_alpha", w.alpha.map(|v| v as u8));
         }
         "textline" => {
@@ -2948,8 +3248,10 @@ fn emit_setters(code: &mut String, project: &Project, w: &Widget, obj: &str) {
                 }
                 // barchart 专用
                 if chart_type == "barchart" {
-                    if let Some(bs) = w.bar_spacing {
-                        code.push_str(&format!("    {}_set_bar_spacing({}, {}, 10);\n", prefix, obj, bs));
+                    if w.bar_spacing.is_some() || w.category_gap.is_some() {
+                        let bs = w.bar_spacing.unwrap_or(4);
+                        let cg = w.category_gap.unwrap_or(10);
+                        code.push_str(&format!("    {}_set_bar_spacing({}, {}, {});\n", prefix, obj, bs, cg));
                     }
                     c!(format!("{}_set_orientation", prefix), w.orientation.map(|v| v as u8));
                 }
@@ -2962,6 +3264,83 @@ fn emit_setters(code: &mut String, project: &Project, w: &Widget, obj: &str) {
                     }
                 }
             }
+        }
+        "roller" => {
+            if let Some(fid) = font_id_for_widget(&project, w) {
+                code.push_str(&format!("    sgl_roller_set_text_font({}, &{});\n", obj, fid));
+            }
+            if let Some(ref opts) = w.options {
+                if !opts.is_empty() {
+                    let escaped = opts.replace('\\', "\\\\").replace('"', "\\\"");
+                    if w.option_dynamic.unwrap_or(false) {
+                        code.push_str(&format!("    sgl_roller_set_option_dynamic({}, \"{}\");\n", obj, escaped));
+                    } else {
+                        code.push_str(&format!("    sgl_roller_set_option_static({}, \"{}\");\n", obj, escaped));
+                    }
+                }
+            }
+            c!( "sgl_roller_set_visible_rows", w.visible_rows.map(|v| v as u8));
+            if let Some(v) = w.infinite_mode {
+                code.push_str(&format!("    sgl_roller_set_infinite_mode({}, {});\n", obj, if v { "true" } else { "false" }));
+            }
+            cclr!("sgl_roller_set_text_color", w.text_color);
+            cclr!("sgl_roller_set_selected_color", w.selected_color);
+            cclr!("sgl_roller_set_bg_color", w.bg_color);
+            cclr!("sgl_roller_set_border_color", w.border_color);
+            c!( "sgl_roller_set_border_width", w.border_width.map(|v| v as u8));
+            c!( "sgl_roller_set_radius", w.radius.map(|v| v as u8));
+            c!( "sgl_roller_set_alpha", w.alpha.map(|v| v as u8));
+        }
+        "statusbar" => {
+            cclr!("sgl_statusbar_set_bg_color", w.bg_color);
+            c!( "sgl_statusbar_set_bg_alpha", w.statusbar_bg_alpha.map(|v| v as u8));
+            c!( "sgl_statusbar_set_bg_radius", w.radius.map(|v| v as u8));
+            if w.left_margin.is_some() || w.right_margin.is_some() {
+                code.push_str(&format!(
+                    "    sgl_statusbar_set_slot_margin({}, {}, {});\n",
+                    obj,
+                    w.left_margin.unwrap_or(0),
+                    w.right_margin.unwrap_or(0)
+                ));
+            }
+            c!( "sgl_statusbar_set_slot_space", w.slot_space.map(|v| v as u8));
+            if let Some(fid) = font_id_for_widget(&project, w) {
+                code.push_str(&format!("    sgl_statusbar_set_font({}, &{});\n", obj, fid));
+            }
+            if let Some(ref left) = w.left_slots {
+                for (i, slot) in left.split(';').map(|s| s.trim()).filter(|s| !s.is_empty()).take(4).enumerate() {
+                    let escaped = slot.replace('\\', "\\\\").replace('"', "\\\"");
+                    code.push_str(&format!("    sgl_statusbar_set_left_slot({}, {}, \"{}\");\n", obj, i, escaped));
+                }
+            }
+            if let Some(ref right) = w.right_slots {
+                for (i, slot) in right.split(';').map(|s| s.trim()).filter(|s| !s.is_empty()).take(8).enumerate() {
+                    let escaped = slot.replace('\\', "\\\\").replace('"', "\\\"");
+                    code.push_str(&format!("    sgl_statusbar_set_right_slot({}, {}, \"{}\");\n", obj, i, escaped));
+                }
+            }
+            if w.slot_color.is_some() || w.slot_alpha.is_some() {
+                let color = w.slot_color.as_deref().filter(|s| !s.is_empty()).unwrap_or("#FFFFFF");
+                let alpha = w.slot_alpha.unwrap_or(255) as u8;
+                let color_expr = sgl_color(color);
+                for i in 0..4 {
+                    code.push_str(&format!("    sgl_statusbar_set_left_slot_color({}, {}, {});\n", obj, i, color_expr));
+                }
+                for i in 0..8 {
+                    code.push_str(&format!("    sgl_statusbar_set_right_slot_color({}, {}, {});\n", obj, i, color_expr));
+                }
+                for i in 0..4 {
+                    code.push_str(&format!("    sgl_statusbar_set_left_slot_alpha({}, {}, {});\n", obj, i, alpha));
+                }
+                for i in 0..8 {
+                    code.push_str(&format!("    sgl_statusbar_set_right_slot_alpha({}, {}, {});\n", obj, i, alpha));
+                }
+            }
+        }
+        "launcher" => {
+            cclr!("sgl_launcher_set_label_color", w.label_color);
+            cclr!("sgl_launcher_set_navigbar_color", w.navigbar_color);
+            c!( "sgl_launcher_set_current_page", w.current_page.map(|v| v as u8));
         }
         _ => {}
     }
@@ -3005,19 +3384,96 @@ fn is_inside_project(path: &std::path::Path, proj_dir: &std::path::Path) -> bool
     path_str.as_bytes().get(proj_str.len()) == Some(&b'\\') || path_str.as_bytes().get(proj_str.len()) == Some(&b'/')
 }
 
-/// 安全检查：验证路径是否为合法的项目内资源路径
-/// 用于 save_project 中防止恶意项目文件包含的绝对路径指向系统敏感文件
-fn is_safe_resource_path(path: &str, proj_dir: &std::path::Path) -> bool {
-    if path.is_empty() {
-        return false;
-    }
+/// 保存时允许导入的字体扩展名（用户显式添加的项目外字体需要复制进 resources/fonts）
+fn is_importable_font_ext(name: &str) -> bool {
+    std::path::Path::new(name)
+        .extension()
+        .map(|e| {
+            matches!(
+                e.to_string_lossy().to_ascii_lowercase().as_str(),
+                "ttf" | "otf" | "ttc" | "woff" | "woff2"
+            )
+        })
+        .unwrap_or(false)
+}
+
+/// 保存时允许导入的图片扩展名
+fn is_importable_image_ext(name: &str) -> bool {
+    std::path::Path::new(name)
+        .extension()
+        .map(|e| {
+            matches!(
+                e.to_string_lossy().to_ascii_lowercase().as_str(),
+                "png" | "jpg" | "jpeg" | "bmp" | "gif" | "webp"
+            )
+        })
+        .unwrap_or(false)
+}
+
+/// 解析资源源路径：绝对路径原样；相对路径基于项目目录
+fn resolve_resource_src(path: &str, proj_dir: &std::path::Path) -> std::path::PathBuf {
     let p = std::path::Path::new(path);
     if p.is_absolute() {
-        return is_inside_project(p, proj_dir);
+        p.to_path_buf()
+    } else {
+        proj_dir.join(p)
     }
-    // 相对路径：join到项目目录后检查
-    let joined = proj_dir.join(p);
-    is_inside_project(&joined, proj_dir)
+}
+
+/// 将字体/图片复制到项目 resources，并返回是否已写入目标文件。
+/// 允许项目外的用户所选文件（扩展名白名单）；禁止把不存在的外部路径改写成相对路径空壳。
+fn import_resource_file(
+    src_path: &str,
+    dest: &std::path::Path,
+    kind: &str,
+    allow_ext: impl Fn(&str) -> bool,
+) -> Result<(), String> {
+    let dest_name = dest
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    if !is_safe_filename(&dest_name) {
+        return Err(format!("非法{}文件名: {}", kind, dest_name));
+    }
+    if !allow_ext(&dest_name) {
+        return Err(format!("不支持的{}格式: {}", kind, dest_name));
+    }
+    let src = std::path::Path::new(src_path);
+    if !src.exists() {
+        // 相对路径且目标已存在：可能已导入过，跳过
+        if !src.is_absolute() && dest.exists() {
+            return Ok(());
+        }
+        return Err(format!(
+            "{}文件不存在，无法导入项目: {}（目标: {}）",
+            kind,
+            src_path,
+            dest.display()
+        ));
+    }
+    let same = src
+        .canonicalize()
+        .ok()
+        .zip(dest.canonicalize().ok())
+        .map(|(a, b)| a == b)
+        .unwrap_or(false);
+    if same {
+        return Ok(());
+    }
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("创建{}目录失败: {}", kind, e))?;
+    }
+    std::fs::copy(src, dest).map_err(|e| {
+        format!(
+            "复制{}失败: {} -> {} ({})",
+            kind,
+            src_path,
+            dest.display(),
+            e
+        )
+    })?;
+    Ok(())
 }
 
 /// 验证文件名为纯文件名（不含路径分隔符和 .. 组件），防止路径遍历写入
@@ -3132,7 +3588,6 @@ fn save_project(path: String, mut project: Project) -> Result<(), String> {
     {
         let mut used_names: std::collections::HashSet<String> = std::collections::HashSet::new();
         for font in &mut project.resources.fonts {
-            let src = std::path::Path::new(&font.path);
             let mut dest_name = font.name.clone();
             // 处理同名冲突
             let mut counter = 1u32;
@@ -3168,13 +3623,15 @@ fn save_project(path: String, mut project: Project) -> Result<(), String> {
             }
             font_path_map.insert(new_rel_path.clone(), new_rel_path.clone());
 
-            // 安全检查：防止恶意项目文件包含指向项目目录外的绝对路径
-            if src.exists() && is_safe_resource_path(&font.path, proj_dir) {
-                let dest = fonts_dir.join(&dest_name);
-                if src.canonicalize().unwrap_or_default() != dest.canonicalize().unwrap_or_default() {
-                    let _ = std::fs::copy(src, &dest);
-                }
-            }
+            // 将项目外/内的字体统一复制到 resources/fonts（扩展名白名单，允许外部绝对路径导入）
+            let src_abs = resolve_resource_src(&font.path, proj_dir);
+            let dest = fonts_dir.join(&dest_name);
+            import_resource_file(
+                &src_abs.to_string_lossy(),
+                &dest,
+                "字体",
+                is_importable_font_ext,
+            )?;
             font.path = new_rel_path;
             font.name = dest_name;
         }
@@ -3184,7 +3641,6 @@ fn save_project(path: String, mut project: Project) -> Result<(), String> {
     {
         let mut used_names: std::collections::HashSet<String> = std::collections::HashSet::new();
         for img in &mut project.resources.images {
-            let src = std::path::Path::new(&img.path);
             let mut dest_name = img.name.clone();
             let mut counter = 1u32;
             let base_name = dest_name.clone();
@@ -3202,13 +3658,14 @@ fn save_project(path: String, mut project: Project) -> Result<(), String> {
             }
             used_names.insert(dest_name.clone());
 
-            // 安全检查：防止恶意项目文件包含指向项目目录外的绝对路径
-            if src.exists() && is_safe_resource_path(&img.path, proj_dir) {
-                let dest = images_dir.join(&dest_name);
-                if src.canonicalize().unwrap_or_default() != dest.canonicalize().unwrap_or_default() {
-                    let _ = std::fs::copy(src, &dest);
-                }
-            }
+            let src_abs = resolve_resource_src(&img.path, proj_dir);
+            let dest = images_dir.join(&dest_name);
+            import_resource_file(
+                &src_abs.to_string_lossy(),
+                &dest,
+                "图片",
+                is_importable_image_ext,
+            )?;
             img.path = format!("resources/images/{}", dest_name);
             img.name = dest_name;
         }
@@ -3440,57 +3897,20 @@ fn export_code(path: String, code: String, mut project: Project, font_files: Vec
         resolved_font_paths.insert(normalized, abs_path);
     }
 
-    let mut generated_font_files: Vec<FontCFile> = Vec::new();
-    for (_font_name, font_path_str, size, bpp, compress, spacing, smart_mono, symbols) in &_fonts {
-        let font_abs_path = {
-            if let Some(p) = resolved_font_paths.get(font_path_str) {
-                p.clone()
-            } else {
-                let p = std::path::Path::new(font_path_str);
-                if p.is_absolute() {
-                    p.to_path_buf()
-                } else {
-                    proj_dir.join(p)
-                }
-            }
-        };
-
-        if !font_abs_path.exists() {
-            continue;
-        }
-
-        let font_id = font_id_from_family(font_path_str, *size, *bpp, *compress, *spacing, *smart_mono);
-        match font_generator::generate_font_c(
-            &font_abs_path,
-            *size,
-            *bpp,
-            symbols,
-            *compress > 0,
-            &font_id,
-            *spacing,
-            *smart_mono,
-        ) {
-            Ok(content) => {
-                generated_font_files.push(FontCFile {
-                    font_id: font_id.clone(),
-                    file_name: format!("{}.c", font_id),
-                    content,
-                });
-            }
-            Err(e) => {
-                return Err(format!("生成字模失败 {}: {}", font_id, e));
-            }
-        }
-    }
+    let (generated_font_files, map_entries) = generate_project_font_c_files(
+        &project,
+        &_fonts,
+        &resolved_font_paths,
+        proj_dir,
+        true,
+    )?;
 
     // 写入字模 C 文件到 fonts/ 目录
     let fonts_dir = out_dir.join("fonts");
     if fonts_dir.exists() && fonts_dir.join(".sgl_auto_gen").exists() {
         let _ = std::fs::remove_dir_all(&fonts_dir);
     }
-    write_font_c_files(&generated_font_files, &fonts_dir)?;
-    write_fonts_cmake(&generated_font_files, &fonts_dir)?;
-    let _ = std::fs::write(fonts_dir.join(".sgl_auto_gen"), "");
+    finish_write_font_outputs(&project, &fonts_dir, &generated_font_files, &map_entries)?;
     Ok(())
 }
 
@@ -3994,56 +4414,20 @@ fn export_code_to_project(mut project: Project, project_path: String, code: Stri
         resolved_font_paths.insert(normalized, abs_path);
     }
 
-    let mut generated_font_files: Vec<FontCFile> = Vec::new();
-    for (_font_name, font_path_str, size, bpp, compress, spacing, smart_mono, symbols) in &collected_fonts {
-        let font_abs_path = {
-            if let Some(p) = resolved_font_paths.get(font_path_str) {
-                p.clone()
-            } else {
-                let p = std::path::Path::new(font_path_str);
-                if p.is_absolute() {
-                    p.to_path_buf()
-                } else {
-                    proj_dir.join(p)
-                }
-            }
-        };
-
-        if !font_abs_path.exists() {
-            continue;
-        }
-
-        let font_id = font_id_from_family(font_path_str, *size, *bpp, *compress, *spacing, *smart_mono);
-        match font_generator::generate_font_c(
-            &font_abs_path,
-            *size,
-            *bpp,
-            symbols,
-            *compress > 0,
-            &font_id,
-            *spacing,
-            *smart_mono,
-        ) {
-            Ok(content) => {
-                generated_font_files.push(FontCFile {
-                    font_id: font_id.clone(),
-                    file_name: format!("{}.c", font_id),
-                    content,
-                });
-            }
-            Err(e) => {
-                return Err(format!("生成字模失败 {}: {}", font_id, e));
-            }
-        }
-    }
+    let (generated_font_files, map_entries) = generate_project_font_c_files(
+        &project,
+        &collected_fonts,
+        &resolved_font_paths,
+        &proj_dir,
+        true,
+    )?;
 
     // 写入字模 C 文件到 code/fonts/ 目录
     let fonts_dir = code_dir.join("fonts");
     if fonts_dir.exists() {
         let _ = std::fs::remove_dir_all(&fonts_dir);
     }
-    write_font_c_files(&generated_font_files, &fonts_dir)?;
-    write_fonts_cmake(&generated_font_files, &fonts_dir)?;
+    finish_write_font_outputs(&project, &fonts_dir, &generated_font_files, &map_entries)?;
 
 
     // 若项目目录下已克隆 sgl-port-windows-vscode 仓库（用户可能用 VSCode/CMake 手动编译），
@@ -4607,6 +4991,8 @@ fn generate_sgl_config_h(config: &SglConfig, path: &std::path::Path) -> Result<(
 #define  CONFIG_SGL_OBJ_USE_NAME                           {}
 #define  CONFIG_SGL_FONT_COMPRESSED                        {}
 #define  CONFIG_SGL_FONT_SMALL_TABLE                       {}
+#define  CONFIG_SGL_FLASH_FONT                             {}
+#define  CONFIG_SGL_FLASH_FONT_GLYPH_BUF_SIZE              {}
 #define  CONFIG_SGL_BOOT_LOGO                              {}
 #define  CONFIG_SGL_THEME_DARK                             {}
 #define  CONFIG_SGL_HEAP_ALGO                              {}
@@ -4644,6 +5030,12 @@ fn generate_sgl_config_h(config: &SglConfig, path: &std::path::Path) -> Result<(
         config.obj_use_name,
         config.font_compressed,
         config.font_small_table,
+        if config.flash_font != 0 { 1 } else { 0 },
+        if config.flash_font_glyph_buf_size > 0 {
+            config.flash_font_glyph_buf_size
+        } else {
+            512
+        },
         config.boot_logo,
         config.theme_dark,
         safe_heap_algo,
@@ -5169,68 +5561,35 @@ fn build_project(
         resolved_font_paths.insert(normalized, abs_path);
     }
 
-    // 用 Rust 调用 FreeType 生成字模 C 文件
-    let mut generated_font_files: Vec<FontCFile> = Vec::new();
-    for (_font_name, font_path_str, size, bpp, compress, spacing, smart_mono, symbols) in &collected_fonts {
-        // 解析字体路径为绝对路径
-        let font_abs_path = {
-            // 先查映射表
-            if let Some(p) = resolved_font_paths.get(font_path_str) {
-                p.clone()
-            } else {
-                // 回退：直接作为路径处理
-                let p = std::path::Path::new(font_path_str);
-                if p.is_absolute() {
-                    p.to_path_buf()
-                } else {
-                    proj_dir.join(p)
-                }
-            }
-        };
-
-        if !font_abs_path.exists() {
+    // 用 Rust 调用 FreeType 生成字模 C 文件（开启 flash_font 时按 font_id 排序累加地址）
+    let (generated_font_files, map_entries) = match generate_project_font_c_files(
+        &project,
+        &collected_fonts,
+        &resolved_font_paths,
+        &proj_dir,
+        false,
+    ) {
+        Ok(v) => v,
+        Err(e) => {
             let _ = window.emit(
                 "build-log",
-                serde_json::json!({ "message": format!("字体文件不存在: {} -> {}", font_path_str, font_abs_path.display()), "level": "error" }),
+                serde_json::json!({ "message": e.clone(), "level": "error" }),
             );
-            return Err(format!(
-                "字体文件不存在，无法生成字模: {}（解析路径: {}）。请检查项目资源中的字体路径。",
-                font_path_str,
-                font_abs_path.display()
-            ));
+            return Err(e);
         }
-
-        let font_id = font_id_from_family(font_path_str, *size, *bpp, *compress, *spacing, *smart_mono);
+    };
+    for f in &generated_font_files {
         let _ = window.emit(
             "build-log",
-            serde_json::json!({ "message": format!("生成字模: {} ({}px, {}bpp, compress={}, symbols_len={})", font_id, size, bpp, compress, symbols.chars().count()), "level": "info" }),
+            serde_json::json!({
+                "message": format!(
+                    "生成字模: {} (flash_bin={})",
+                    f.font_id,
+                    f.bitmap_bin.as_ref().map(|b| b.len()).unwrap_or(0)
+                ),
+                "level": "info"
+            }),
         );
-
-        match font_generator::generate_font_c(
-            &font_abs_path,
-            *size,
-            *bpp,
-            symbols,
-            *compress > 0,
-            &font_id,
-            *spacing,
-            *smart_mono,
-        ) {
-            Ok(content) => {
-                generated_font_files.push(FontCFile {
-                    font_id: font_id.clone(),
-                    file_name: format!("{}.c", font_id),
-                    content,
-                });
-            }
-            Err(e) => {
-                let _ = window.emit(
-                    "build-log",
-                    serde_json::json!({ "message": format!("生成字模失败 {}: {}", font_id, e), "level": "error" }),
-                );
-                return Err(format!("生成字模失败 {}: {}", font_id, e));
-            }
-        }
     }
 
     // 生成图片取模文件到 code/pixmaps/ 子目录
@@ -5288,8 +5647,21 @@ fn build_project(
             serde_json::json!({ "message": format!("字模文件: {} (fontId={}, 内容首行: {})", f.file_name, f.font_id, first_line), "level": "info" }),
         );
     }
-    write_font_c_files(&generated_font_files, &fonts_dir)?;
-    write_fonts_cmake(&generated_font_files, &fonts_dir)?;
+    finish_write_font_outputs(&project, &fonts_dir, &generated_font_files, &map_entries)?;
+    if project.sgl_config.flash_font != 0 {
+        let base = parse_flash_font_base_addr(&project.sgl_config.flash_font_base_addr);
+        let _ = window.emit(
+            "build-log",
+            serde_json::json!({
+                "message": format!(
+                    "外闪字模已打包: base=0x{:08X}, fonts={}, map=fonts_flash_map.h + *.bin",
+                    base,
+                    map_entries.len()
+                ),
+                "level": "info"
+            }),
+        );
+    }
 
     // 复制 UI 代码到 sgl-port 的 demo/ui.c
     let demo_dir = sgl_port_dir.join("demo");
@@ -5739,6 +6111,9 @@ fn read_sgl_config_from_file(project_path: String) -> Result<SglConfig, String> 
         log_level: get_i32(&content, "CONFIG_SGL_LOG_LEVEL", 0),
         obj_use_name: get_i32(&content, "CONFIG_SGL_OBJ_USE_NAME", 0),
         font_compressed: get_i32(&content, "CONFIG_SGL_FONT_COMPRESSED", 0),
+        flash_font: get_i32(&content, "CONFIG_SGL_FLASH_FONT", 0),
+        flash_font_glyph_buf_size: get_i32(&content, "CONFIG_SGL_FLASH_FONT_GLYPH_BUF_SIZE", 512),
+        flash_font_base_addr: default_flash_font_base_addr(),
         boot_logo: get_i32(&content, "CONFIG_SGL_BOOT_LOGO", 0),
         theme_dark: get_i32(&content, "CONFIG_SGL_THEME_DARK", 0),
         heap_algo: get_string(&content, "CONFIG_SGL_HEAP_ALGO", "lwmem"),
@@ -5933,7 +6308,47 @@ fn write_font_c_files(font_files: &[FontCFile], fonts_dir: &std::path::Path) -> 
         let path = fonts_dir.join(&f.file_name);
         std::fs::write(&path, &f.content)
             .map_err(|e| format!("写入字模文件 {} 失败: {}", f.file_name, e))?;
+        if let Some(ref bin) = f.bitmap_bin {
+            let bin_name = format!("{}.bin", f.font_id);
+            if !is_safe_filename(&bin_name) {
+                return Err(format!("非法字模 bin 文件名: {}", bin_name));
+            }
+            std::fs::write(fonts_dir.join(&bin_name), bin)
+                .map_err(|e| format!("写入字模 bin {} 失败: {}", bin_name, e))?;
+        }
     }
+    Ok(())
+}
+
+/// 写入 fonts_flash_map.h：基址 + 各字模偏移/大小清单
+fn write_fonts_flash_map(
+    fonts_dir: &std::path::Path,
+    base_addr: u32,
+    entries: &[(String, u32, u32)],
+) -> Result<(), String> {
+    let mut out = String::new();
+    out.push_str("/* Auto-generated by SGL UI Designer — external flash font map */\n");
+    out.push_str("#ifndef SGL_FONTS_FLASH_MAP_H\n");
+    out.push_str("#define SGL_FONTS_FLASH_MAP_H\n\n");
+    out.push_str("#include <stdint.h>\n\n");
+    out.push_str("/* Manual base address — only this value needs editing after packing */\n");
+    out.push_str(&format!("#ifndef SGL_FLASH_FONT_BASE_ADDR\n#define SGL_FLASH_FONT_BASE_ADDR  0x{:08X}u\n#endif\n\n", base_addr));
+    out.push_str("/* Platform flash read — implement in ui.c (USER CODE) */\n");
+    out.push_str("int32_t sgl_flash_font_read(uint32_t addr, void *buf, uint32_t len);\n\n");
+    out.push_str("/* Packed layout (font_id sorted, 4-byte aligned):\n");
+    out.push_str(" *   name                              offset       size\n");
+    for (id, off, sz) in entries {
+        out.push_str(&format!(" *   {:<32} 0x{:08X}  {}\n", id, off, sz));
+    }
+    out.push_str(" */\n");
+    for (id, off, sz) in entries {
+        out.push_str(&format!("#define {}_FLASH_OFFSET  0x{:X}u\n", id.to_uppercase(), off));
+        out.push_str(&format!("#define {}_FLASH_SIZE    {}u\n", id.to_uppercase(), sz));
+    }
+    out.push_str("\n#endif /* SGL_FONTS_FLASH_MAP_H */\n");
+    std::fs::create_dir_all(fonts_dir).map_err(|e| format!("创建 fonts 目录失败: {}", e))?;
+    std::fs::write(fonts_dir.join("fonts_flash_map.h"), out)
+        .map_err(|e| format!("写入 fonts_flash_map.h 失败: {}", e))?;
     Ok(())
 }
 
@@ -6296,7 +6711,7 @@ fn generate_font_c(
     font_name: String,
     spacing: Option<i32>,
     smart_mono: Option<bool>,
-) -> Result<String, String> {
+) -> Result<font_generator::GenerateFontResult, String> {
     let path = std::path::Path::new(&font_path);
     if !path.exists() {
         return Err(format!("字体文件不存在: {}", font_path));
@@ -6310,6 +6725,7 @@ fn generate_font_c(
         &font_name,
         spacing.unwrap_or(0),
         smart_mono.unwrap_or(false),
+        None, // 设计器预览始终片内字模
     )
 }
 

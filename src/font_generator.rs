@@ -368,8 +368,16 @@ fn select_best_face_index(font_path: &Path, codes: &[u32]) -> isize {
     best_face
 }
 
+fn format_missing_codepoint(code: u32) -> String {
+    match char::from_u32(code) {
+        Some(ch) if !ch.is_control() => format!("'{}'(U+{:04X})", ch, code),
+        _ => format!("U+{:04X}", code),
+    }
+}
+
 /// 渲染所有字形（对齐 font_render.c font_render_init）
-fn font_render(font_path: &Path, pixel_size: i32, codes: &[u32]) -> Result<FontData, String> {
+/// 返回 (FontData, 字体中不存在的码点列表)
+fn font_render(font_path: &Path, pixel_size: i32, codes: &[u32]) -> Result<(FontData, Vec<u32>), String> {
     let library = get_font_library()?;
     // TTC/OTTC 集合字体选择能覆盖最多目标字符的 face_index
     let face_index = select_best_face_index(font_path, codes);
@@ -382,14 +390,21 @@ fn font_render(font_path: &Path, pixel_size: i32, codes: &[u32]) -> Result<FontD
         .map_err(|e| format!("set_pixel_sizes 失败: {}", e))?;
 
     let mut glyphs: Vec<Glyph> = Vec::with_capacity(codes.len());
+    let mut missing: Vec<u32> = Vec::new();
     let mut ascent: i32 = i32::MIN; // 对齐 C: int ascent = -9999
     let mut descent: i32 = i32::MAX; // 对齐 C: int descent = 9999
 
     for &code in codes {
         let glyph_index = match face.get_char_index(code as usize) {
-            Some(0) => continue,
+            Some(0) => {
+                missing.push(code);
+                continue;
+            }
             Some(idx) => idx,
-            None => continue,
+            None => {
+                missing.push(code);
+                continue;
+            }
         };
 
         // 对齐 C: FT_Load_Glyph(face, glyph_index, FT_LOAD_RENDER | FT_LOAD_TARGET_LIGHT | FT_LOAD_FORCE_AUTOHINT)
@@ -499,12 +514,23 @@ fn font_render(font_path: &Path, pixel_size: i32, codes: &[u32]) -> Result<FontD
     }
 
     // 对齐 C: out->font_height = ascent - descent; out->base_line = -descent
-    eprintln!("[font_render] {} 完成: glyphs={}/{} ascent={} descent={}", font_path.display(), glyphs.len(), codes.len(), ascent, descent);
-    Ok(FontData {
-        glyphs,
-        font_height: ascent - descent,
-        base_line: -descent,
-    })
+    eprintln!(
+        "[font_render] {} 完成: glyphs={}/{} missing={} ascent={} descent={}",
+        font_path.display(),
+        glyphs.len(),
+        codes.len(),
+        missing.len(),
+        ascent,
+        descent
+    );
+    Ok((
+        FontData {
+            glyphs,
+            font_height: ascent - descent,
+            base_line: -descent,
+        },
+        missing,
+    ))
 }
 
 // ============================================================
@@ -624,9 +650,27 @@ fn write_glyph_inventory_comment(out: &mut String, glyphs: &[Glyph]) {
     out.push_str(" */\n\n");
 }
 
+/// 外闪字模导出参数（CONFIG_SGL_FLASH_FONT）
+#[derive(Debug, Clone, Copy)]
+pub struct FlashFontExport {
+    /// 相对 SGL_FLASH_FONT_BASE_ADDR 的偏移（字节）
+    pub flash_offset: u32,
+}
+
 /// 生成 SGL 字模 C 文件内容（严格对齐 output_writer.c write_sgl_font）
-fn write_sgl_font(font_name: &str, font: &FontData, cmap: &CmapPlan, bpp: i32, compress: bool) -> String {
+/// 返回 (c_source, bitmap_blob)；flash 模式下 C 不含 bitmap 数组，blob 供烧录 .bin
+fn write_sgl_font(
+    font_name: &str,
+    font: &FontData,
+    cmap: &CmapPlan,
+    bpp: i32,
+    compress: bool,
+    flash: Option<FlashFontExport>,
+) -> (String, Vec<u8>) {
     let glyph_count = font.glyphs.len();
+    let flash_mode = flash.is_some();
+    // 外闪格式与 COMPRESSED 互斥
+    let compress = if flash_mode { false } else { compress };
 
     // Phase 1: 编译所有字形位图
     struct CompiledGlyph {
@@ -647,6 +691,11 @@ fn write_sgl_font(font_name: &str, font: &FontData, cmap: &CmapPlan, bpp: i32, c
             bitmap_data: bm,
         });
         total_bitmap_size += compiled.last().unwrap().bitmap_data.len();
+    }
+
+    let mut bitmap_blob: Vec<u8> = Vec::with_capacity(total_bitmap_size);
+    for cg in &compiled {
+        bitmap_blob.extend_from_slice(&cg.bitmap_data);
     }
 
     let mut out = String::new();
@@ -676,12 +725,23 @@ fn write_sgl_font(font_name: &str, font: &FontData, cmap: &CmapPlan, bpp: i32, c
     out.push_str(" * SOFTWARE.\n");
     out.push_str(" */\n\n");
     out.push_str("#include <sgl.h>\n");
-    out.push_str("#include <sgl_font.h>\n\n");
+    out.push_str("#include <sgl_font.h>\n");
+    if flash_mode {
+        out.push_str("#include \"fonts_flash_map.h\"\n");
+    }
+    out.push('\n');
 
     // 字符一览（对齐原版 sgl_font_conv 顶部字符注释，并附带码点表便于核对）
     write_glyph_inventory_comment(&mut out, &font.glyphs);
 
-    // Phase 3: font_bitmap[]
+    // Phase 3: font_bitmap[]（外闪模式改为独立 .bin，避免占用片内 Flash）
+    if flash_mode {
+        let fo = flash.unwrap();
+        out.push_str(&format!(
+            "/* External flash bitmap blob: {}.bin ({} bytes)\n * Burn to SGL_FLASH_FONT_BASE_ADDR + 0x{:X}\n */\n\n",
+            font_name, total_bitmap_size, fo.flash_offset
+        ));
+    } else {
     out.push_str("static const uint8_t font_bitmap[] = {\n");
     for i in 0..glyph_count {
         let g = &font.glyphs[i];
@@ -707,6 +767,7 @@ fn write_sgl_font(font_name: &str, font: &FontData, cmap: &CmapPlan, bpp: i32, c
         }
     }
     out.push_str("};\n\n");
+    } // !flash_mode: embed font_bitmap[]
 
     // Phase 4: font_table[]
     out.push_str("\nstatic const sgl_font_table_t font_table[] = {\n");
@@ -812,10 +873,15 @@ fn write_sgl_font(font_name: &str, font: &FontData, cmap: &CmapPlan, bpp: i32, c
     }
     out.push_str("};\n\n");
 
-    // Phase 7: sgl_font_t — 字段顺序必须与 sgl_core.h 中 sgl_font_t 声明一致
-    // (bitmap, table, font_table_size, font_height, unicode, unicode_num, base_line, bpp, compress)
+    // Phase 7: sgl_font_t — 字段顺序必须与当前 sgl_core.h 一致
+    // (bitmap, table, font_table_size, font_height, unicode, unicode_num, base_line, bpp, format
+    //  [, flash_read, flash_addr] when CONFIG_SGL_FLASH_FONT)
     out.push_str(&format!("const sgl_font_t {} = {{\n", font_name));
-    out.push_str("    .bitmap = font_bitmap,\n");
+    if flash_mode {
+        out.push_str("    .bitmap = NULL,\n");
+    } else {
+        out.push_str("    .bitmap = font_bitmap,\n");
+    }
     out.push_str("    .table = font_table,\n");
     out.push_str("    .font_table_size = SGL_ARRAY_SIZE(font_table),\n");
     out.push_str(&format!("    .font_height = {},\n", font.font_height));
@@ -823,10 +889,25 @@ fn write_sgl_font(font_name: &str, font: &FontData, cmap: &CmapPlan, bpp: i32, c
     out.push_str("    .unicode_num = SGL_ARRAY_SIZE(font_unicode),\n");
     out.push_str(&format!("    .base_line = {},\n", font.base_line));
     out.push_str(&format!("    .bpp = {},\n", bpp));
-    out.push_str(&format!("    .compress = {},\n", if should_compress(bpp, compress) { 1 } else { 0 }));
+    let fmt = if flash_mode {
+        "SGL_FONT_FMT_EXT_FLASH"
+    } else if should_compress(bpp, compress) {
+        "SGL_FONT_FMT_COMPRESSED"
+    } else {
+        "SGL_FONT_FMT_NORMAL"
+    };
+    out.push_str(&format!("    .format = {},\n", fmt));
+    if flash_mode {
+        let fo = flash.unwrap();
+        out.push_str("    .flash_read = sgl_flash_font_read,\n");
+        out.push_str(&format!(
+            "    .flash_addr = (SGL_FLASH_FONT_BASE_ADDR + 0x{:X}u),\n",
+            fo.flash_offset
+        ));
+    }
     out.push_str("};\n");
 
-    out
+    (out, bitmap_blob)
 }
 
 // ============================================================
@@ -892,6 +973,19 @@ fn apply_spacing(font: &mut FontData, spacing: i32) {
     }
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GenerateFontResult {
+    /// 生成的字模 C 源码
+    pub content: String,
+    /// 字体中不存在、已跳过取模的字符描述（如 "'字'(U+5B57)"）
+    pub missing_glyphs: Vec<String>,
+    /// bitmap blob 字节数（片内数组或外闪 .bin）
+    pub bitmap_size: u32,
+    /// 外闪导出时的原始 bitmap（供写入 .bin）；预览/片内模式为 None
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bitmap_blob: Option<Vec<u8>>,
+}
+
 pub fn generate_font_c(
     font_path: &Path,
     size: i32,
@@ -901,7 +995,8 @@ pub fn generate_font_c(
     font_name: &str,
     spacing: i32,
     smart_mono: bool,
-) -> Result<String, String> {
+    flash: Option<FlashFontExport>,
+) -> Result<GenerateFontResult, String> {
     if size <= 0 {
         return Err(format!("字号必须大于 0，当前值: {}", size));
     }
@@ -924,10 +1019,25 @@ pub fn generate_font_c(
     }
 
     // 2. 用 FreeType 渲染所有字形（对齐 C: font_render_init）
-    let font_data = font_render(font_path, size, &codes)?;
+    let (font_data, missing_codes) = font_render(font_path, size, &codes)?;
 
     if font_data.glyphs.is_empty() {
-        return Err("字体渲染失败：没有有效字形".to_string());
+        let preview: Vec<String> = missing_codes
+            .iter()
+            .take(16)
+            .map(|&c| format_missing_codepoint(c))
+            .collect();
+        let more = if missing_codes.len() > 16 {
+            format!(" 等共 {} 个", missing_codes.len())
+        } else {
+            String::new()
+        };
+        return Err(format!(
+            "字体渲染失败：没有有效字形（请求 {} 个字符均不在字体中: {}{}）",
+            codes.len(),
+            preview.join(", "),
+            more
+        ));
     }
 
         // 3. smart-mono + spacing (align C Phase 1.5 / 1.6)
@@ -942,5 +1052,16 @@ pub fn generate_font_c(
     let cmap = cmap_build(&rendered_codes);
 
     // 5. write C
-    Ok(write_sgl_font(font_name, &font_data, &cmap, bpp, compress))
+    let missing_glyphs: Vec<String> = missing_codes
+        .iter()
+        .map(|&c| format_missing_codepoint(c))
+        .collect();
+    let (content, bitmap_blob) = write_sgl_font(font_name, &font_data, &cmap, bpp, compress, flash);
+    let bitmap_size = bitmap_blob.len() as u32;
+    Ok(GenerateFontResult {
+        content,
+        missing_glyphs,
+        bitmap_size,
+        bitmap_blob: if flash.is_some() { Some(bitmap_blob) } else { None },
+    })
 }

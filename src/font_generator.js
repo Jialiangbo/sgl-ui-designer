@@ -666,8 +666,8 @@ function generateSglFontC(fontName, fontData, cmap, bpp, compress) {
   }
   out += `};\n\n`;
 
-  // Phase 7: sgl_font_t — 字段顺序必须与 sgl_core.h 中 sgl_font_t 声明一致
-  // (bitmap, table, font_table_size, font_height, unicode, unicode_num, base_line, bpp, compress)
+  // Phase 7: sgl_font_t — 与当前 sgl_core.h 一致（bpp 后为 format，非旧版 compress）
+  // (bitmap, table, font_table_size, font_height, unicode, unicode_num, base_line, bpp, format)
   out += `const sgl_font_t ${fontName} = {\n`;
   out += `    .bitmap = font_bitmap,\n`;
   out += `    .table = font_table,\n`;
@@ -677,7 +677,7 @@ function generateSglFontC(fontName, fontData, cmap, bpp, compress) {
   out += `    .unicode_num = SGL_ARRAY_SIZE(font_unicode),\n`;
   out += `    .base_line = ${fontData.baseLine},\n`;
   out += `    .bpp = ${bpp},\n`;
-  out += `    .compress = ${shouldCompress(bpp, compress) ? 1 : 0},\n`;
+  out += `    .format = ${shouldCompress(bpp, compress) ? 'SGL_FONT_FMT_COMPRESSED' : 'SGL_FONT_FMT_NORMAL'},\n`;
   out += `};\n`;
 
   return out;

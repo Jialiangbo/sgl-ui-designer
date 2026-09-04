@@ -53,6 +53,9 @@ function ensureSglConfig() {
       obj_use_name: 0,
       font_compressed: 0,
       font_small_table: 0,
+      flash_font: 0,
+      flash_font_glyph_buf_size: 512,
+      flash_font_base_addr: '0x00100000',
       boot_logo: 0,
       theme_dark: 0,
       heap_algo: 'lwmem',
@@ -75,6 +78,9 @@ function ensureSglConfig() {
     if (cfg.monitor_trace == null) cfg.monitor_trace = 0;
     if (cfg.pixmap_bilinear_interp == null) cfg.pixmap_bilinear_interp = 0;
     if (cfg.font_small_table == null) cfg.font_small_table = 0;
+    if (cfg.flash_font == null) cfg.flash_font = 0;
+    if (cfg.flash_font_glyph_buf_size == null) cfg.flash_font_glyph_buf_size = 512;
+    if (cfg.flash_font_base_addr == null || cfg.flash_font_base_addr === '') cfg.flash_font_base_addr = '0x00100000';
   }
 }
 
@@ -183,11 +189,13 @@ async function _init() {
           const parsed = parseInt(el.value, 10);
           AppState.project.sgl_config[key] = Number.isFinite(parsed) ? parsed : 0;
         }
+      } else if (key === 'flash_font_base_addr' || el.type === 'text') {
+        AppState.project.sgl_config[key] = (el.value || '').trim() || '0x00100000';
       } else {
         // number 输入：须为非负整数；尺寸类字段须 > 0
         const raw = el.value.trim();
         const parsed = parseInt(raw, 10);
-        const mustPositive = ['systick_ms', 'event_queue_size', 'dirty_area_num_max', 'heap_memory_size', 'focused_width'].includes(key);
+        const mustPositive = ['systick_ms', 'event_queue_size', 'dirty_area_num_max', 'heap_memory_size', 'focused_width', 'flash_font_glyph_buf_size'].includes(key);
         const invalid = raw === '' || !Number.isFinite(parsed) || parsed < 0 || (mustPositive && parsed < 1);
         if (invalid) {
           showToast(`配置项 ${key} 须为${mustPositive ? '大于 0 的' : '非负'}整数`, 'error');

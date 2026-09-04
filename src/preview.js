@@ -152,7 +152,6 @@ const runtimeTextOverrides = new Map(); // widgetId -> { text: string }
 const scopeWaveBuffers = new Map(); // widgetId -> number[]
 let previewActive = false;
 let previewDemoEnabled = true; // 演示动画总开关（scope/频谱/仪表等假数据）
-let _previewToolbarBound = false;
 let _previewLayoutRaf = 0;
 let _previewLayoutObs = null;
 
@@ -285,12 +284,13 @@ export function enterPreviewSimulator() {
   runtimeTextOverrides.clear();
   scopeWaveBuffers.clear();
   setupPreviewToolbar();
-  updateDemoToggleUI();
+  bindPreviewSwipeNavigation();
 }
 
 export function exitPreviewSimulator() {
   previewActive = false;
   unbindPreviewLayoutWatcher();
+  unbindPreviewSwipeNavigation();
   for (const s of runtimeState.values()) {
     if (s.longModeAnimId) cancelAnimationFrame(s.longModeAnimId);
     if (s.scopeAnimId) cancelAnimationFrame(s.scopeAnimId);
@@ -309,7 +309,6 @@ export function exitPreviewSimulator() {
 
 export function setPreviewDemoEnabled(on) {
   previewDemoEnabled = !!on;
-  updateDemoToggleUI();
   if (previewActive) render();
 }
 
@@ -335,50 +334,81 @@ function setupPreviewToolbar() {
   const toolbar = document.getElementById('preview-toolbar');
   if (!toolbar) return;
   toolbar.style.display = 'flex';
-  if (_previewToolbarBound) return;
-  _previewToolbarBound = true;
-  const prevBtn = document.getElementById('preview-page-prev');
-  const nextBtn = document.getElementById('preview-page-next');
-  const demoBtn = document.getElementById('preview-demo-toggle');
-  if (prevBtn) prevBtn.addEventListener('click', () => navigatePreviewPage(-1));
-  if (nextBtn) nextBtn.addEventListener('click', () => navigatePreviewPage(1));
-  if (demoBtn) {
-    demoBtn.addEventListener('click', () => {
-      previewDemoEnabled = !previewDemoEnabled;
-      if (!previewDemoEnabled) {
-        for (const st of runtimeState.values()) {
-          if (st.barValues) st.barValues = null;
-          if (st.scopeAnimId) { cancelAnimationFrame(st.scopeAnimId); st.scopeAnimId = null; }
-          if (st.gaugeAnimId) { cancelAnimationFrame(st.gaugeAnimId); st.gaugeAnimId = null; }
-          if (st.spectrumAnimId) { cancelAnimationFrame(st.spectrumAnimId); st.spectrumAnimId = null; }
-          if (st.batteryAnimId) { cancelAnimationFrame(st.batteryAnimId); st.batteryAnimId = null; }
-        }
-        scopeWaveBuffers.clear();
-      }
-      updateDemoToggleUI();
-      if (previewActive) render();
-    });
-  }
-}
-
-function updateDemoToggleUI() {
-  const demoBtn = document.getElementById('preview-demo-toggle');
-  if (!demoBtn) return;
-  demoBtn.textContent = previewDemoEnabled ? '演示:开' : '演示:关';
-  demoBtn.title = previewDemoEnabled
-    ? '关闭演示动画（波形/频谱/仪表自动摆动等）'
-    : '开启演示动画（波形/频谱/仪表自动摆动等）';
-  demoBtn.classList.toggle('active', previewDemoEnabled);
 }
 
 function updatePreviewToolbar(page, pageCount) {
   const label = document.getElementById('preview-page-label');
   if (label) label.textContent = `${page.name || '页面'} (${currentIndex + 1}/${pageCount})`;
-  const prevBtn = document.getElementById('preview-page-prev');
-  const nextBtn = document.getElementById('preview-page-next');
-  if (prevBtn) prevBtn.disabled = pageCount <= 1;
-  if (nextBtn) nextBtn.disabled = pageCount <= 1;
-  updateDemoToggleUI();
+}
+
+// 左右滑动换页（绑定在 preview-stage，避免与控件拖拽冲突）
+let _previewSwipeBound = false;
+let _swipeCtx = null;
+const PREVIEW_SWIPE_MIN_PX = 48;
+const PREVIEW_SWIPE_WIDGET_MIN_PX = 72;
+
+function bindPreviewSwipeNavigation() {
+  if (_previewSwipeBound) return;
+  const stage = document.getElementById('preview-stage');
+  if (!stage) return;
+  _previewSwipeBound = true;
+  stage.addEventListener('pointerdown', onPreviewSwipeDown);
+  stage.addEventListener('pointermove', onPreviewSwipeMove);
+  stage.addEventListener('pointerup', onPreviewSwipeUp);
+  stage.addEventListener('pointercancel', onPreviewSwipeCancel);
+}
+
+function unbindPreviewSwipeNavigation() {
+  if (!_previewSwipeBound) return;
+  const stage = document.getElementById('preview-stage');
+  if (stage) {
+    stage.removeEventListener('pointerdown', onPreviewSwipeDown);
+    stage.removeEventListener('pointermove', onPreviewSwipeMove);
+    stage.removeEventListener('pointerup', onPreviewSwipeUp);
+    stage.removeEventListener('pointercancel', onPreviewSwipeCancel);
+    stage.classList.remove('preview-swipe-active');
+  }
+  _previewSwipeBound = false;
+  _swipeCtx = null;
+}
+
+function onPreviewSwipeDown(evt) {
+  if (!previewActive || evt.button !== 0) return;
+  const hit = findTargetWidget(evt);
+  _swipeCtx = {
+    pointerId: evt.pointerId,
+    startX: evt.clientX,
+    startY: evt.clientY,
+    onWidget: !!hit,
+    blocked: false,
+  };
+  evt.currentTarget.classList.add('preview-swipe-active');
+}
+
+function onPreviewSwipeMove(evt) {
+  if (!_swipeCtx || _swipeCtx.pointerId !== evt.pointerId) return;
+  if (dragCtx.active) _swipeCtx.blocked = true;
+}
+
+function onPreviewSwipeUp(evt) {
+  if (!_swipeCtx || _swipeCtx.pointerId !== evt.pointerId) return;
+  evt.currentTarget.classList.remove('preview-swipe-active');
+  const ctx = _swipeCtx;
+  _swipeCtx = null;
+  if (!previewActive || ctx.blocked) return;
+  const dx = evt.clientX - ctx.startX;
+  const dy = evt.clientY - ctx.startY;
+  const adx = Math.abs(dx);
+  const ady = Math.abs(dy);
+  const minPx = ctx.onWidget ? PREVIEW_SWIPE_WIDGET_MIN_PX : PREVIEW_SWIPE_MIN_PX;
+  if (adx < minPx || ady > adx * 0.55) return;
+  navigatePreviewPage(dx < 0 ? 1 : -1);
+}
+
+function onPreviewSwipeCancel(evt) {
+  if (!_swipeCtx || _swipeCtx.pointerId !== evt.pointerId) return;
+  _swipeCtx = null;
+  document.getElementById('preview-stage')?.classList.remove('preview-swipe-active');
 }
 
 // 控件元素引用（用于事件分发）：id -> { el, widget, z, absX, absY, domW, domH }
@@ -750,7 +780,13 @@ export function render() {
       }
     }
 
-    renderPreviewWidget(el, w, z, { domW, domH }, page);
+    try {
+      renderPreviewWidget(el, w, z, { domW, domH }, page);
+    } catch (widgetErr) {
+      console.error('[preview] widget render failed:', w.type, w.id, widgetErr);
+      el.style.background = 'rgba(239,68,68,0.25)';
+      el.title = `预览渲染失败: ${w.type}`;
+    }
 
     // 注册控件引用（事件分发使用）
     registerWidgetRef(w.id, {
@@ -982,41 +1018,24 @@ function getLauncherCellAt(w, x, y) {
   return null;
 }
 
-/** 按开屏动画进度缩放 chart 数据（不修改原控件） */
+/** 演示动画合并重绘，避免 gauge/spectrum/scope 同时 render 把页面打爆 */
+let _previewAnimRenderScheduled = false;
+function schedulePreviewAnimRender() {
+  if (_previewAnimRenderScheduled) return;
+  _previewAnimRenderScheduled = true;
+  requestAnimationFrame(() => {
+    _previewAnimRenderScheduled = false;
+    if (previewActive) render();
+  });
+}
+
+/** 开屏动画：对齐 SGL clip/角度揭示，不改写数据 */
 function getChartWidgetForPreview(w) {
   const s = runtimeState.get(w.id);
   if (!w.openAnim) return w;
   const progress = s && s.chartProgress != null ? s.chartProgress : 0;
   if (progress >= 0.999) return w;
-  const p = Math.max(0, Math.min(1, progress));
-  const copy = { ...w };
-  const dir = Number(w.openAnimDir) || 0;
-  // 从左揭示：逐步增加点数
-  if (dir === 1 && copy.seriesData) {
-    copy.seriesData = String(copy.seriesData).split(';').map(series => {
-      const pts = series.split(',').map(t => t.trim()).filter(t => t !== '');
-      if (pts.length < 2) return series;
-      const n = Math.max(2, Math.ceil(pts.length * Math.max(0.02, p)));
-      return pts.slice(0, n).join(',');
-    }).join(';');
-    return copy;
-  }
-  // 默认/从下：数值从 0 长到目标
-  if (copy.seriesData) {
-    copy.seriesData = String(copy.seriesData).split(';').map(series =>
-      series.split(',').map(v => {
-        const n = parseFloat(String(v).trim());
-        return Number.isFinite(n) ? String(+(n * p).toFixed(4)) : v;
-      }).join(',')
-    ).join(';');
-  }
-  if (copy.sliceValues) {
-    copy.sliceValues = String(copy.sliceValues).split(';').map(v => {
-      const n = parseFloat(String(v).trim());
-      return Number.isFinite(n) ? String(+(n * p).toFixed(4)) : v;
-    }).join(';');
-  }
-  return copy;
+  return { ...w, _openAnimProgress: Math.max(0, Math.min(1, progress)) };
 }
 
 /** 根据点击位置估算 gauge 指针值（与渲染公式对应） */
@@ -1616,7 +1635,7 @@ function startGaugeDemoAnim(wid, w, s) {
     stateNow.gaugeAnimId = requestAnimationFrame(tick);
     if (!stateNow._lastGaugeRender || ts - stateNow._lastGaugeRender > 80) {
       stateNow._lastGaugeRender = ts;
-      render();
+      schedulePreviewAnimRender();
     }
   };
   s.gaugeAnimId = requestAnimationFrame(tick);
@@ -1643,7 +1662,7 @@ function startSpectrumDemoAnim(wid, w, s) {
     stateNow.spectrumAnimId = requestAnimationFrame(tick);
     if (!stateNow._lastSpectrumRender || ts - stateNow._lastSpectrumRender > 80) {
       stateNow._lastSpectrumRender = ts;
-      render();
+      schedulePreviewAnimRender();
     }
   };
   s.spectrumAnimId = requestAnimationFrame(tick);
@@ -1659,7 +1678,7 @@ function startBatteryDemoAnim(wid, w, s) {
     stateNow.batteryAnimId = requestAnimationFrame(tick);
     if (!stateNow._lastBatteryRender || ts - stateNow._lastBatteryRender > 120) {
       stateNow._lastBatteryRender = ts;
-      render();
+      schedulePreviewAnimRender();
     }
   };
   s.batteryAnimId = requestAnimationFrame(tick);
@@ -1687,7 +1706,7 @@ function startScopeDemoAnim(wid, w, s) {
     stateNow.scopeAnimId = requestAnimationFrame(tick);
     if (!stateNow._lastScopeRender || ts - stateNow._lastScopeRender > 80) {
       stateNow._lastScopeRender = ts;
-      render();
+      schedulePreviewAnimRender();
     }
   };
   s.scopeAnimId = requestAnimationFrame(tick);
@@ -1705,7 +1724,7 @@ function startAnalogClockAnim(wid, s) {
     stateNow.clockAnimId = requestAnimationFrame(tick);
     if (!stateNow._lastClockRender || ts - stateNow._lastClockRender > 250) {
       stateNow._lastClockRender = ts;
-      render();
+      schedulePreviewAnimRender();
     }
   };
   s.clockAnimId = requestAnimationFrame(tick);
@@ -1715,29 +1734,49 @@ function startLabelLongModeAnim(wid, info, w, s) {
   // 对齐 SGL：longModeSpeed = 像素/秒
   const speedPxPerSec = Math.max(1, w.longModeSpeed || 50);
   let lastTs = performance.now();
-  // 估算文本像素宽度（近似值，不需要精确到像素级；用控件 fontSize 近似）
   const fontSize = w.fontSize || 14;
-  const text = getPreviewText(w);
-  const estTextW = text.length * fontSize * 0.6;
+  const text = getPreviewText(w) || '';
+  // 用真实 DOM/Canvas 测宽，中文不再用 0.6*字号低估
+  let estTextW = Math.max(1, Math.ceil(text.length * fontSize * 0.9));
+  try {
+    const span = info.el && info.el.querySelector('[data-long-mode-text]');
+    if (span && span.offsetWidth > 0) {
+      estTextW = Math.max(1, Math.round(span.offsetWidth / Math.max(0.001, currentZ)));
+    } else if (typeof document !== 'undefined') {
+      const cv = document.createElement('canvas');
+      const ctx = cv.getContext('2d');
+      if (ctx) {
+        ctx.font = `${fontSize}px system-ui, "Segoe UI", sans-serif`;
+        estTextW = Math.max(1, Math.ceil(ctx.measureText(text).width));
+      }
+    }
+  } catch (_) {}
   const contentW = info.domW || w.width || 0;
+  s._longModeTextW = estTextW;
+  s._longModeContentW = contentW;
 
   function step(ts) {
     const stateNow = runtimeState.get(wid);
     if (!stateNow) return; // 控件已被清理
-    const dt = ts - lastTs;
+    if (!previewActive) return;
+    const dt = Math.min(64, Math.max(0, ts - lastTs));
     lastTs = ts;
-    // px/s → 本帧位移
     const pxPerMs = speedPxPerSec / 1000;
     stateNow.longModeOffset = (stateNow.longModeOffset || 0) + (pxPerMs * dt);
-    const cycle = estTextW + contentW + 40; // 空白间隔
+    const cycle = Math.max(1, (stateNow._longModeTextW || estTextW) + (stateNow._longModeContentW || contentW) + 40);
     if (stateNow.longModeOffset > cycle) stateNow.longModeOffset -= cycle;
-    // 更新 text 位移：通过直接改 DOM text 位置更高效；简化处理：只在 offset 跨 1 像素时才 render（节流）
     if (!stateNow._lastRenderedOffset
         || Math.abs(stateNow.longModeOffset - stateNow._lastRenderedOffset) >= 1) {
       stateNow._lastRenderedOffset = stateNow.longModeOffset;
-      // 只重绘该 label：先局部改文本位置，性能优先
       const wref = widgetRefMap.get(wid);
-      if (wref) updateLabelLongModeText(wref, stateNow.longModeOffset, estTextW, contentW);
+      if (wref) {
+        updateLabelLongModeText(
+          wref,
+          stateNow.longModeOffset,
+          stateNow._longModeTextW || estTextW,
+          stateNow._longModeContentW || contentW
+        );
+      }
     }
     stateNow.longModeAnimId = requestAnimationFrame(step);
   }
@@ -1746,28 +1785,31 @@ function startLabelLongModeAnim(wid, info, w, s) {
 
 // 直接通过 DOM 移动 label 内 overlay 文本节点（避免频繁 render 全量 canvas）
 function updateLabelLongModeText(info, offsetPx, estTextW, contentW) {
-  const wrap = info.el.querySelector('div[style*="position:absolute"] > div, div[style*="position:absolute"] > span');
-  // 找最外层叠加文本的容器（第一个 position:absolute 子元素的子 span）
-  const first = info.el.firstElementChild;
-  if (!first) return;
-  // text overlay 是在 renderPreviewWidget 的 overlayText/overlayTextAt 函数里 append 的子元素
-  // 结构：info.el > wrap(div,position:absolute) > span
-  const children = info.el.children;
-  let textWrap = null;
-  for (let i = 0; i < children.length; i++) {
-    const c = children[i];
-    if (c.tagName === 'DIV' && c.style.position === 'absolute'
-        && c.querySelector('span')) { textWrap = c; break; }
+  if (!info || !info.el) return;
+  let span = info.el.querySelector('[data-long-mode-text]');
+  if (!span) {
+    // 兼容旧结构：任意 absolute 容器内的 span
+    const children = info.el.children;
+    for (let i = 0; i < children.length; i++) {
+      const c = children[i];
+      if (c.tagName === 'DIV' && c.style.position === 'absolute') {
+        span = c.querySelector('span') || c.querySelector('div');
+        if (span) break;
+      }
+    }
   }
-  if (!textWrap) return;
-  const span = textWrap.querySelector('span') || textWrap.querySelector('div');
   if (!span) return;
-  // 水平滚动：向左位移（负值），取模
-  const mod = estTextW + contentW + 40;
-  let off = (offsetPx % mod);
-  if (off < 0) off += mod;
-  span.style.transform = `translateX(${-off}px)`;
+  // 若初次测宽不准，运行中用真实宽度校正
+  if (span.offsetWidth > 0 && currentZ > 0) {
+    const realW = Math.round(span.offsetWidth / currentZ);
+    const st = runtimeState.get(info.id);
+    if (st && realW > (st._longModeTextW || 0)) st._longModeTextW = realW;
+  }
+  const off = Math.max(0, Number(offsetPx) || 0);
+  span.style.transform = `translateX(${-off * currentZ}px)`;
   span.style.willChange = 'transform';
+  span.style.textOverflow = 'clip';
+  span.style.overflow = 'visible';
 }
 
 function renderPreviewWidget(el, w, z, renderSize, page) {
@@ -1807,6 +1849,27 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
       span.style.cssText = `color:${color};font-size:${fs}px;font-family:${cssFamily};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;filter:var(--sgl-bpp-filter,none);`;
       span.textContent = text;
     }
+    wrap.appendChild(span);
+    el.appendChild(wrap);
+  }
+
+  // longMode 专用：完整文本 + 水平位移（不做 ellipsis 截断）
+  function overlayLongModeText(opts) {
+    const { text, color, fontSize, fontFamily, align, offsetPx = 0 } = opts;
+    if (!text) return;
+    const hasFont = widgetHasFont(w);
+    const cssFamily = hasFont ? getCssFontStack(fontFamily || '') : 'system-ui, -apple-system, "Segoe UI", sans-serif';
+    const fs = Math.max(1, Math.round(fontSize * z));
+    const wrap = document.createElement('div');
+    wrap.dataset.longMode = '1';
+    wrap.style.cssText = `position:absolute;left:0;top:0;width:100%;height:100%;display:flex;pointer-events:none;box-sizing:border-box;overflow:hidden;`;
+    Object.assign(wrap.style, flexAlign(align || 'LEFT_MID'));
+    const span = document.createElement('span');
+    span.dataset.longModeText = '1';
+    span.style.cssText = `color:${color};font-size:${fs}px;font-family:${cssFamily};white-space:nowrap;filter:var(--sgl-bpp-filter,none);will-change:transform;`;
+    span.textContent = text;
+    const off = Math.max(0, Number(offsetPx) || 0);
+    span.style.transform = `translateX(${-off * z}px)`;
     wrap.appendChild(span);
     el.appendChild(wrap);
   }
@@ -2302,6 +2365,7 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
 
     case 'label': {
       // SGL pixel render: optional bg + text (font: SGL drawString, no font: DOM span)
+      // longMode：必须走可位移的 DOM 文本层，canvas 静态字无法滚动
       const { surf, R } = createWidgetCanvas(el, w, z);
       el.style.opacity = 1;
       const alpha = w.alpha != null ? w.alpha : 255;
@@ -2311,6 +2375,7 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
       const effFontFamily = resolveEffectiveFontFamily(w.fontFamily);
       const fontPath = resolveFontPath(effFontFamily);
       const cssFamily = getCssFontStack(effFontFamily);
+      const useLongMode = !!w.longMode;
       // bg
       if (lblBg && lblBg !== 'transparent') {
         R.drawFillRect(surf, 0, 0, w.width - 1, w.height - 1,
@@ -2320,7 +2385,7 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
       const txt = getPreviewText(w) || '标签';
       const txtCol = R.hexToColor(w.textColor || w.color || '#000000');
       const hasFont = widgetHasFont(w);
-      if (hasFont) {
+      if (hasFont && !useLongMode) {
         // SGL drawString to buf32 (before flushWidget)
         const coords = { x1: 0, y1: 0, x2: w.width - 1, y2: w.height - 1 };
         const align = alignStrToNum(w.align || 'CENTER');
@@ -2336,9 +2401,20 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
         }
       }
       flushWidget(surf);
-      if (!hasFont) {
-        // no font: DOM span (system default)
-        overlayText({ text: txt, color: (w.textColor || w.color || '#000000'), fontSize, fontFamily: effFontFamily, align: (w.align || 'CENTER'), x: 0, y: 0, w: w.width, h: w.height });
+      if (!hasFont || useLongMode) {
+        if (useLongMode) {
+          overlayLongModeText({
+            text: txt,
+            color: (w.textColor || w.color || '#000000'),
+            fontSize,
+            fontFamily: effFontFamily,
+            align: (w.align || 'LEFT_MID'),
+            offsetPx: (runtimeState.get(w.id)?.longModeOffset) || 0,
+          });
+        } else {
+          // no font: DOM span (system default)
+          overlayText({ text: txt, color: (w.textColor || w.color || '#000000'), fontSize, fontFamily: effFontFamily, align: (w.align || 'CENTER'), x: 0, y: 0, w: w.width, h: w.height });
+        }
       }
       break;
     }
@@ -2424,9 +2500,22 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
       flushWidget(surf);
       const tbText = getPreviewText(w);
       const pad = tbRadius;
-      const tbFontBpp = w.fontBpp || 4;
       if (tbText) {
-        overlayText({ text: tbText, color: tbTextColor, fontSize: tbFontSize, fontFamily: (w.fontFamily || ''), x: pad, y: pad, w: w.width - 2 * pad, h: w.height - 2 * pad, multiline: true, lineMargin: tbLineMargin, maxWidth: w.width - 2 * pad, align: 'LEFT_MID' });
+        // 与 editor.js 一致：无字模时 DOM 多行从左上角排版（TOP_LEFT），不要 LEFT_MID 垂直居中
+        overlayText({
+          text: tbText,
+          color: tbTextColor,
+          fontSize: tbFontSize,
+          fontFamily: (w.fontFamily || ''),
+          x: pad,
+          y: pad,
+          w: w.width - 2 * pad,
+          h: w.height - 2 * pad,
+          multiline: true,
+          lineMargin: tbLineMargin,
+          maxWidth: w.width - 2 * pad,
+          align: 'TOP_LEFT',
+        });
       }
       break;
     }
@@ -2889,7 +2978,7 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
         const textLen = sglStrWidth(mt.text);
         const txtX = mt.tx - Math.floor(textLen / 2) - 2;
         const txtY = mt.ty - Math.floor(sglFontH / 2);
-        overlayTextAt({ text: mt.text, color: textCol, fontSize, fontFamily: gFontFamily, x: txtX, y: txtY, align: 'CENTER' });
+        overlayTextAt({ text: mt.text, color: textCol, fontSize, fontFamily: gEffFamily, x: txtX, y: txtY, align: 'CENTER' });
       });
       break;
     }
@@ -3881,31 +3970,35 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
     }
 
     case 'scope': {
-      // 对齐当前 sgl_scope.c：背景+边框 → 四分网格 → 每列一点垂直连线
+      // 对齐 sgl_scope.c :: sgl_scope_construct_cb
+      // 背景/边框 alpha=255；网格 alpha 固定 90；波形用 scope.alpha；每列竖线连接
       const { surf, R } = createWidgetCanvas(el, w, z);
       el.style.opacity = 1;
-      const alpha = w.alpha != null ? w.alpha : 255;
+      const waveAlpha = w.alpha != null ? w.alpha : 255;
       const scBgCol = R.hexToColor(w.bgColor || '#000000');
-      const scBorderCol = R.hexToColor(w.borderColor || '#969696');
+      const scBorderCol = R.hexToColor(w.borderColor || '#000000');
       const scBorderW = w.borderWidth != null ? w.borderWidth : 1;
       const scGridCol = R.hexToColor(w.gridColor || '#808080');
-      const scGridAlpha = Math.min(255, Math.floor(alpha * 90 / 255));
+      const scGridAlpha = 90; // SGL_SCOPE_GRID_ALPHA
       const scVMin = Number(w.vMin != null ? w.vMin : (w.rangeMin != null ? w.rangeMin : -32768));
       const scVMax = Number(w.vMax != null ? w.vMax : (w.rangeMax != null ? w.rangeMax : 32767));
       const bodyW = w.width, bodyH = w.height;
       const bw = Math.max(0, scBorderW);
+      const scRadius = w.radius != null ? w.radius : 0;
 
       R.drawRect(surf, 0, 0, bodyW - 1, bodyH - 1, {
-        alpha: alpha, border: bw, border_alpha: alpha, border_mask: 0,
-        color: scBgCol, border_color: scBorderCol, radius: 0
+        alpha: 255, border: bw, border_alpha: 255, border_mask: 0,
+        color: scBgCol, border_color: scBorderCol, radius: scRadius
       });
 
       const plotX1 = bw, plotY1 = bw;
       const plotX2 = bodyW - 1 - bw, plotY2 = bodyH - 1 - bw;
-      const cap = Math.max(1, plotX2 - plotX1 + 1);
-      const plotH = Math.max(1, plotY2 - plotY1 + 1);
-      const span = Math.max(1, scVMax - scVMin);
-      const scaleQ16 = Math.floor(((plotH - 1) << 16) / span);
+      const cap = plotX2 - plotX1 + 1;
+      const plotH = plotY2 - plotY1 + 1;
+      if (cap <= 0 || plotH <= 0) {
+        flushWidget(surf);
+        break;
+      }
 
       for (let g = 1; g < 4; g++) {
         const xPos = plotX1 + Math.trunc(cap * g / 4);
@@ -3913,6 +4006,13 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
         R.drawVLine(surf, xPos, plotY1, plotY2, 1, scGridCol, scGridAlpha);
         R.drawHLine(surf, plotX1, plotX2, yPos, 1, scGridCol, scGridAlpha);
       }
+
+      const span = scVMax - scVMin;
+      if (span <= 0) {
+        flushWidget(surf);
+        break;
+      }
+      const scaleQ16 = Math.floor(((plotH - 1) << 16) / span);
 
       const mapY = (v) => {
         let y = plotY2 - Math.floor(((v - scVMin) * scaleQ16) >> 16);
@@ -3933,7 +4033,10 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
         for (let sc = 0; sc < cap; sc++) {
           let v;
           if (demoPts && demoPts.length > 0) {
-            const idx = Math.min(demoPts.length - 1, Math.floor(sc * demoPts.length / cap));
+            // 演示缓冲长度 == plot 宽时 1:1；否则按列采样
+            const idx = demoPts.length === cap
+              ? sc
+              : Math.min(demoPts.length - 1, Math.floor(sc * demoPts.length / cap));
             v = demoPts[idx];
           } else {
             const phase = (sc / Math.max(1, cap - 1)) * Math.PI * 4 + ch * 0.7;
@@ -3942,7 +4045,7 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
           const y = mapY(v);
           const x = plotX1 + sc;
           if (prevY == null) prevY = y;
-          R.drawVLine(surf, x, Math.min(prevY, y), Math.max(prevY, y), 1, col, alpha);
+          R.drawVLine(surf, x, Math.min(prevY, y), Math.max(prevY, y), 1, col, waveAlpha);
           prevY = y;
         }
       }
@@ -4083,7 +4186,7 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
 
     case 'chart': {
       // SGL chart: 严格移植 SGL 算法，用 SGLRenderer 像素级渲染
-      // openAnim 开启时按 chartProgress 缩放/揭示数据
+      // openAnim：SGL 式 clip / 角度揭示（见 getChartWidgetForPreview）
       const chartW = getChartWidgetForPreview(w);
       const { surf, R } = createWidgetCanvas(el, w, z);
       el.style.opacity = 1;

@@ -38,6 +38,9 @@ export const AppState = {
       obj_use_name: 0,
       font_compressed: 0,
       font_small_table: 0,
+      flash_font: 0,
+      flash_font_glyph_buf_size: 512,
+      flash_font_base_addr: '0x00100000',
       boot_logo: 1,
       theme_dark: 0,
       heap_algo: 'lwmem',
@@ -986,6 +989,9 @@ export const AppState = {
         obj_use_name: 0,
         font_compressed: 0,
         font_small_table: 0,
+        flash_font: 0,
+        flash_font_glyph_buf_size: 512,
+        flash_font_base_addr: '0x00100000',
         boot_logo: 1,
         theme_dark: 0,
         heap_algo: 'lwmem',
@@ -1008,6 +1014,9 @@ export const AppState = {
       if (cfg.monitor_trace == null) cfg.monitor_trace = 0;
       if (cfg.pixmap_bilinear_interp == null) cfg.pixmap_bilinear_interp = 0;
       if (cfg.font_small_table == null) cfg.font_small_table = 0;
+      if (cfg.flash_font == null) cfg.flash_font = 0;
+      if (cfg.flash_font_glyph_buf_size == null) cfg.flash_font_glyph_buf_size = 512;
+      if (cfg.flash_font_base_addr == null || cfg.flash_font_base_addr === '') cfg.flash_font_base_addr = '0x00100000';
     }
     // 为每个 widget 补充缺失的默认属性（不覆盖已有值）
     // 解决旧项目文件因结构体字段缺失导致属性丢失的问题
@@ -1117,6 +1126,9 @@ export const AppState = {
         obj_use_name: 0,
         font_compressed: 0,
         font_small_table: 0,
+        flash_font: 0,
+        flash_font_glyph_buf_size: 512,
+        flash_font_base_addr: '0x00100000',
         boot_logo: 1,
         theme_dark: 0,
         heap_algo: 'lwmem',

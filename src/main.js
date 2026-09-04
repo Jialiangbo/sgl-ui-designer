@@ -387,6 +387,23 @@ const PAGE_TEMPLATES = {
         </div>
         <div class="settings-row">
           <div class="form-group">
+            <label class="form-label">外闪字模 (FLASH_FONT)</label>
+            <select class="form-select sgl-cfg" data-key="flash_font">
+              <option value="0">0</option>
+              <option value="1">1</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">外闪字形缓冲(字节)</label>
+            <input type="number" class="form-input sgl-cfg" data-key="flash_font_glyph_buf_size" min="64" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">外闪字模起始地址</label>
+            <input type="text" class="form-input sgl-cfg" data-key="flash_font_base_addr" placeholder="0x00100000" />
+          </div>
+        </div>
+        <div class="settings-row">
+          <div class="form-group">
             <label class="form-label">深色主题</label>
             <select class="form-select sgl-cfg" data-key="theme_dark">
               <option value="0">0</option>

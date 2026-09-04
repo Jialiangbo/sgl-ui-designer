@@ -1727,14 +1727,23 @@ function parseFontCFile(content) {
   const fontHeightMatch = cleaned.match(/\.font_height\s*=\s*(\d+)/);
   const baseLineMatch = cleaned.match(/\.base_line\s*=\s*(-?\d+)/);
   const bppMatch = cleaned.match(/\.bpp\s*=\s*(\d+)/);
+  const formatMatch = cleaned.match(/\.format\s*=\s*(SGL_FONT_FMT_\w+|\d+)/);
   const compressMatch = cleaned.match(/\.compress\s*=\s*(\d+)/);
+  let compress = 0;
+  if (formatMatch) {
+    const v = formatMatch[1];
+    if (v === 'SGL_FONT_FMT_COMPRESSED' || v === '1') compress = 1;
+    else compress = 0;
+  } else if (compressMatch) {
+    compress = parseInt(compressMatch[1], 10) || 0;
+  }
 
   const fd = {
     bitmap, table, unicode,
     font_height: fontHeightMatch ? parseInt(fontHeightMatch[1], 10) : 14,
     base_line: baseLineMatch ? parseInt(baseLineMatch[1], 10) : 3,
     bpp: bppMatch ? parseInt(bppMatch[1], 10) : 4,
-    compress: compressMatch ? parseInt(compressMatch[1], 10) : 0,
+    compress,
   };
 
   // parseFontCFile 内部诊断：bitmap/table 一致性校验（输出前 3 条越界）
@@ -1909,28 +1918,14 @@ function drawStringSGL(surf, x, y, str, color, alpha, font) {
   if (!font.bitmap || !font.table || font.table.length < 2 || !font.unicode || font.unicode.length === 0) {
     return;
   }
-  // 诊断：输出字模关键信息和 seg.list 状态（只打一次）
-  if (!drawStringSGL._logged) {
-    drawStringSGL._logged = true;
-    console.log(`%c[drawStringSGL诊断] table=${font.table.length} unicode=${font.unicode.length} bitmap=${font.bitmap.length} bpp=${font.bpp}`, 'color:red;font-weight:bold;');
-    font.unicode.forEach((u, i) => {
-      console.log(`%c[drawStringSGL诊断] seg[${i}]: offset=0x${u.offset.toString(16)} len=${u.len} list=${u.list ? JSON.stringify(u.list.map(v=>'0x'+v.toString(16))) : 'null'} tab_offset=${u.tab_offset}`, 'color:red;font-weight:bold;');
-    });
-    console.log(`%c[drawStringSGL诊断] table详情: `, 'color:red;font-weight:bold;', font.table.map((e, i) => `[${i}]bmp_idx=${e.bitmap_index} w=${e.box_w} h=${e.box_h} ofs_x=${e.ofs_x} ofs_y=${e.ofs_y} adv_w=${e.adv_w}`).join(' | '));
-  }
   let cx = x;
   for (let i = 0; i < str.length; i++) {
     const code = str.charCodeAt(i);
     const chIndex = searchUnicodeChIndex(font, code);
-    const ch = str.charAt(i);
-    // 逐字符诊断：chIndex 和实际 table entry
-    console.log(`%c[drawStringSGL-逐字符] '${ch}'(U+${code.toString(16)}) → chIndex=${chIndex}`, 'color:magenta;font-weight:bold;');
     if (chIndex === 0) {
-      console.log(`%c[drawStringSGL-逐字符]   ↳ chIndex=0，跳过`, 'color:magenta;');
       continue;
     }
     const entry = font.table[chIndex];
-    console.log(`%c[drawStringSGL-逐字符]   ↳ table[${chIndex}]: bmp_idx=${entry?.bitmap_index} w=${entry?.box_w} h=${entry?.box_h} ofs_x=${entry?.ofs_x} ofs_y=${entry?.ofs_y}`, 'color:magenta;');
     if (!entry || entry.box_w <= 0 || entry.box_h <= 0) continue;
     const neededBytes = Math.ceil((entry.box_w * entry.box_h * font.bpp) / 8);
     if (entry.bitmap_index + neededBytes > font.bitmap.length) {
@@ -3987,6 +3982,58 @@ function _chartGetEffectiveStep(axis) {
   return step <= 0 ? 1 : step;
 }
 
+/** 开屏动画 plot_clip（对齐 sgl_linechart / sgl_barchart construct_cb） */
+function _chartOpenAnimPlotClip(plotRect, w, isBarchart) {
+  const p = w._openAnimProgress;
+  if (p == null || !(p < 0.999)) {
+    return { x1: plotRect.x1, y1: plotRect.y1, x2: plotRect.x2, y2: plotRect.y2 };
+  }
+  const extent = Math.floor(1000 * Math.max(0, Math.min(1, p)));
+  const dir = Number(w.openAnimDir) || 0;
+  const orientation = Number(w.orientation) || 0;
+  const clip = { x1: plotRect.x1, y1: plotRect.y1, x2: plotRect.x2, y2: plotRect.y2 };
+  const pw = plotRect.x2 - plotRect.x1 + 1;
+  const ph = plotRect.y2 - plotRect.y1 + 1;
+
+  if (isBarchart) {
+    if (orientation === 1) {
+      // HORIZONTAL: FROM_BOTTOM 自下而上；否则从左
+      if (dir === 2) {
+        const visibleH = Math.floor((ph * extent) / 1000);
+        if (visibleH <= 0) return null;
+        clip.y1 = plotRect.y2 - visibleH + 1;
+      } else if (dir !== 0) {
+        const visibleW = Math.floor((pw * extent) / 1000);
+        if (visibleW <= 0) return null;
+        clip.x2 = plotRect.x1 + visibleW - 1;
+      }
+    } else {
+      // VERTICAL: FROM_LEFT 从左；否则（含 FROM_BOTTOM=2 / NONE 当启用动画）自下而上
+      if (dir === 1) {
+        const visibleW = Math.floor((pw * extent) / 1000);
+        if (visibleW <= 0) return null;
+        clip.x2 = plotRect.x1 + visibleW - 1;
+      } else {
+        const visibleH = Math.floor((ph * extent) / 1000);
+        if (visibleH <= 0) return null;
+        clip.y1 = plotRect.y2 - visibleH + 1;
+      }
+    }
+  } else {
+    // linechart: FROM_LEFT=1, FROM_TOP=2
+    if (dir === 1) {
+      const visibleW = Math.floor((pw * extent) / 1000);
+      if (visibleW <= 0) return null;
+      clip.x2 = plotRect.x1 + visibleW - 1;
+    } else if (dir === 2) {
+      const visibleH = Math.floor((ph * extent) / 1000);
+      if (visibleH <= 0) return null;
+      clip.y2 = plotRect.y1 + visibleH - 1;
+    }
+  }
+  return clip;
+}
+
 // 自动缩放轴（移植 sgl_linechart_update_axis_auto / sgl_barchart_update_axis_auto）
 function _chartUpdateAxisAuto(seriesArr, xAxis, yAxis, autoScaleX, autoScaleY, isBarchart) {
   let dataMinX = Infinity, dataMaxX = -Infinity;
@@ -4078,20 +4125,24 @@ function _drawPiechart(surf, w, R, opts, overlays) {
     const v = parseInt(s.trim());
     return isNaN(v) ? 0 : v;
   });
-  const sliceCount = w.sliceCount || sliceValues.length;
+  // 与 SGL 一致：只使用 slice_count 个扇区
+  const sliceCount = Math.max(0, Math.min(
+    w.sliceCount != null ? w.sliceCount : sliceValues.length,
+    sliceValues.length
+  ));
 
-  // 计算总值（只累加正值）
+  // 计算总值（只累加正值，且不超过 sliceCount）
   let totalValue = 0;
-  for (let i = 0; i < sliceValues.length; i++) {
+  for (let i = 0; i < sliceCount; i++) {
     if (sliceValues[i] > 0) totalValue += sliceValues[i];
   }
   if (totalValue <= 0) totalValue = 1;
 
-  // 图例设置
+  // 图例设置（SGL_THEME_TEXT_COLOR / DEFAULT = #000000）
   const legendEnable = w.legendEnable != null ? w.legendEnable : true;
   const legendPos = w.legendPos != null ? w.legendPos : 2;
   const legendDir = w.legendDir || 0;
-  const legendTextColor = w.legendTextColor || '#e4e4e7';
+  const legendTextColor = w.legendTextColor || '#000000';
   const legendAreaSize = w.legendAreaSize || 60;
   const legendAlpha = w.legendAlpha != null ? w.legendAlpha : 255;
   const legendBoxSize = w.legendBoxSize || 10;
@@ -4167,14 +4218,25 @@ function _drawPiechart(surf, w, R, opts, overlays) {
       while (baseAngle < 0) baseAngle += 360;
       while (baseAngle >= 360) baseAngle -= 360;
 
-      // 找最后一个正值扇区
+      // 开屏动画：0→360° 扇区揭示（sgl_piechart_construct_cb）
+      let animActive = false;
+      let revealEndAngle = baseAngle + 360;
+      const openP = w._openAnimProgress;
+      if (openP != null && openP < 0.999) {
+        animActive = true;
+        const angleStep = Math.floor(360 * Math.max(0, Math.min(1, openP)));
+        revealEndAngle = baseAngle + angleStep;
+      }
+
+      // 找最后一个正值扇区（仅 sliceCount 内）
       let lastPositive = -1;
-      for (let i = 0; i < sliceValues.length; i++) {
+      for (let i = 0; i < sliceCount; i++) {
         if (sliceValues[i] > 0) lastPositive = i;
       }
 
       let currentAngle = baseAngle;
-      for (let i = 0; i < sliceValues.length; i++) {
+      const themeBg = R.hexToColor('#000000'); // SGL_THEME_BG_COLOR
+      for (let i = 0; i < sliceCount; i++) {
         if (sliceValues[i] <= 0) continue;
 
         let endAngle;
@@ -4188,19 +4250,24 @@ function _drawPiechart(surf, w, R, opts, overlays) {
 
         if (endAngle > baseAngle + 360) endAngle = baseAngle + 360;
 
+        if (animActive) {
+          if (currentAngle >= revealEndAngle) break;
+          if (endAngle > revealEndAngle) endAngle = revealEndAngle;
+        }
+
         let sliceAlpha = sliceAlphas[i] || 255;
         if (sliceAlpha === 0) sliceAlpha = 255;
         let mixAlpha = Math.floor(sliceAlpha * globalAlpha / 255);
         if (mixAlpha === 0) mixAlpha = sliceAlpha;
 
         const col = R.hexToColor(sliceColors[i] || sliceColors[0] || '#FFFFFF');
-        // SGL_ARC_MODE_NORMAL=0, SGL_ARC_MODE_NORMAL_SMOOTH=2
+        // SGL_ARC_MODE_NORMAL=0, SGL_ARC_MODE_NORMAL_SMOOTH=2；bg_color = SGL_THEME_BG_COLOR
         const mode = w.smooth ? 2 : 0;
 
         R.drawFillArc(surf, {
           cx, cy, radius_in: radiusIn, radius_out: radius,
           start_angle: currentAngle & 0x1FF, end_angle: endAngle & 0x1FF,
-          mode: mode, color: col, bg_color: col, alpha: mixAlpha
+          mode: mode, color: col, bg_color: themeBg, alpha: mixAlpha
         });
 
         currentAngle = endAngle;
@@ -4228,7 +4295,7 @@ function _drawPiechart(surf, w, R, opts, overlays) {
       if (legendDir === 0) {
         // 垂直布局
         let y = clip.y1 + padding;
-        for (let i = 0; i < sliceValues.length; i++) {
+        for (let i = 0; i < sliceCount; i++) {
           const boxX1 = clip.x1 + padding;
           const boxY1 = y;
           const col = R.hexToColor(sliceColors[i] || sliceColors[0] || '#FFFFFF');
@@ -4254,11 +4321,11 @@ function _drawPiechart(surf, w, R, opts, overlays) {
         // 水平布局
         let contentW = rectW - padding * 2;
         if (contentW > 0) {
-          let visibleCnt = sliceValues.length || 1;
+          let visibleCnt = sliceCount || 1;
           let itemW = Math.floor(contentW / visibleCnt);
           if (itemW < boxSize + 4) itemW = boxSize + 4;
 
-          for (let i = 0; i < sliceValues.length; i++) {
+          for (let i = 0; i < sliceCount; i++) {
             let baseX = clip.x1 + padding + i * itemW;
             let boxY1 = clip.y1 + padding;
             const col = R.hexToColor(sliceColors[i] || sliceColors[0] || '#FFFFFF');
@@ -4294,6 +4361,9 @@ function _drawChartGridAndLabels(surf, w, R, opts, overlays, plotRect, fullRect,
   if (yRange <= 0) yRange = 1;
 
   const showLabels = w.showYLabels !== undefined && w.showYLabels !== null ? w.showYLabels : true;
+  // SGL: linechart X/Y show_grid=1；barchart X show_grid=0、Y show_grid=1
+  const showYGrid = true;
+  const showXGrid = !isBarchart;
   const gridColor = R.hexToColor(w.gridColor || '#3C3C3C');
   const gridDashed = w.gridDashed != null ? w.gridDashed : true;
   const gridAlpha = 80;
@@ -4316,10 +4386,12 @@ function _drawChartGridAndLabels(surf, w, R, opts, overlays, plotRect, fullRect,
     while (tickIdx < MAX_TICKS && v <= yAxis.max) {
       let y = plotRect.y2 - Math.floor((v - yAxis.min) * plotH / yRange);
 
-      if (gridDashed) {
-        R.drawDashedLine(surf, plotRect.x1, y, plotRect.x2, y, 6, 4, gridColor, mixGridAlpha);
-      } else {
-        R.drawHLine(surf, plotRect.x1, plotRect.x2, y, 1, gridColor, mixGridAlpha);
+      if (showYGrid) {
+        if (gridDashed) {
+          R.drawDashedLine(surf, plotRect.x1, y, plotRect.x2, y, 6, 4, gridColor, mixGridAlpha);
+        } else {
+          R.drawHLine(surf, plotRect.x1, plotRect.x2, y, 1, gridColor, mixGridAlpha);
+        }
       }
 
       if (showLabels && opts.hasFont && labelAreaX2 > objX1 + 2) {
@@ -4348,10 +4420,12 @@ function _drawChartGridAndLabels(surf, w, R, opts, overlays, plotRect, fullRect,
     while (tickIdx < MAX_TICKS && v <= xAxis.max) {
       let x = plotRect.x1 + Math.floor((v - xAxis.min) * plotW / xRange);
 
-      if (gridDashed) {
-        R.drawDashedLine(surf, x, plotRect.y1, x, plotRect.y2, 6, 4, gridColor, mixGridAlpha);
-      } else {
-        R.drawVLine(surf, x, plotRect.y1, plotRect.y2, 1, gridColor, mixGridAlpha);
+      if (showXGrid) {
+        if (gridDashed) {
+          R.drawDashedLine(surf, x, plotRect.y1, x, plotRect.y2, 6, 4, gridColor, mixGridAlpha);
+        } else {
+          R.drawVLine(surf, x, plotRect.y1, plotRect.y2, 1, gridColor, mixGridAlpha);
+        }
       }
 
       if (showLabels && opts.hasFont) {
@@ -4474,14 +4548,24 @@ function _drawLinechart(surf, w, R, opts, overlays) {
   const autoScale = w.autoScale !== undefined && w.autoScale !== null ? w.autoScale : true;
 
   let xAxis = { min: 0, max: 100, step: 0, auto_divisions: 4, show_labels: x_axis_show_labels, label_font: x_font };
-  let yAxis = { min: w.minValue || 0, max: w.maxValue || 100, step: 0, auto_divisions: 4, show_labels: y_axis_show_labels, label_font: y_font };
+  let yAxis = {
+    min: w.minValue != null ? w.minValue : 0,
+    max: w.maxValue != null ? w.maxValue : 100,
+    step: 0, auto_divisions: 4, show_labels: y_axis_show_labels, label_font: y_font
+  };
 
   _chartUpdateAxisAuto(seriesArr, xAxis, yAxis, autoScale, autoScale, false);
 
   const base_alpha = chart_alpha;
 
-  // plot_clip = plot_rect (无开屏动画)
-  const plot_clip = { x1: plot_rect.x1, y1: plot_rect.y1, x2: plot_rect.x2, y2: plot_rect.y2 };
+  // open anim → plot_clip（SGL 裁剪绘制区，非整体系列缩放）
+  const plot_clip = _chartOpenAnimPlotClip(plot_rect, w, false);
+  if (!plot_clip) return;
+
+  const oldClip = { x1: surf.clip.x1, y1: surf.clip.y1, x2: surf.clip.x2, y2: surf.clip.y2 };
+  const clipped = areaClip(oldClip, plot_clip);
+  if (!clipped) return;
+  surf.clip = clipped;
 
   // 绘制网格和标签
   _drawChartGridAndLabels(surf, w, R, opts, overlays, plot_rect, full_rect, xAxis, yAxis, base_alpha, false);
@@ -4489,7 +4573,10 @@ function _drawLinechart(surf, w, R, opts, overlays) {
   // 绘制序列：sgl_linechart_draw_series
   let plot_w = plot_rect.x2 - plot_rect.x1;
   let plot_h = plot_rect.y2 - plot_rect.y1;
-  if (plot_w <= 0 || plot_h <= 0) return;
+  if (plot_w <= 0 || plot_h <= 0) {
+    surf.clip = oldClip;
+    return;
+  }
 
   let x_range = xAxis.max - xAxis.min;
   let y_range = yAxis.max - yAxis.min;
@@ -4553,11 +4640,11 @@ function _drawLinechart(surf, w, R, opts, overlays) {
 
       if (prev_valid) {
         if (show_line) {
-          // SGL line_width 映射: 1→4, 2→8, n→n*4
+          // SGL sgl_linechart_draw_segment_line：逻辑宽度 1:1 映射
           let effWidth;
-          if (line_width <= 1) effWidth = 4;
-          else if (line_width === 2) effWidth = 8;
-          else effWidth = Math.min(255, line_width * 4);
+          if (line_width <= 1) effWidth = 1;
+          else if (line_width === 2) effWidth = 2;
+          else effWidth = Math.min(255, line_width);
 
           R.drawLine(surf, prev_x, prev_y, x, y, effWidth, line_color, eff_line_alpha);
         }
@@ -4572,6 +4659,8 @@ function _drawLinechart(surf, w, R, opts, overlays) {
       prev_valid = true;
     }
   }
+
+  surf.clip = oldClip;
 }
 
 // 柱状图渲染（移植 sgl_barchart_construct_cb）
@@ -4601,10 +4690,14 @@ function _drawBarchart(surf, w, R, opts, overlays) {
   const autoScale = w.autoScale !== undefined && w.autoScale !== null ? w.autoScale : true;
   const orientation = w.orientation || 0;
   const barGap = w.barSpacing != null ? w.barSpacing : 4;
-  const categoryGap = 10;
+  const categoryGap = w.categoryGap != null ? w.categoryGap : 10;
 
   let xAxis = { min: 0, max: 5, step: 1, auto_divisions: 4 };
-  let yAxis = { min: 0, max: 100, step: 0, auto_divisions: 4 };
+  let yAxis = {
+    min: w.minValue != null ? w.minValue : 0,
+    max: w.maxValue != null ? w.maxValue : 100,
+    step: 0, auto_divisions: 4
+  };
 
   _chartUpdateAxisAuto(seriesArr, xAxis, yAxis, false, autoScale, true);
 
@@ -4635,6 +4728,13 @@ function _drawBarchart(surf, w, R, opts, overlays) {
 
   let baseAlpha = alpha ? alpha : 255;
 
+  const plotClip = _chartOpenAnimPlotClip(plotRect, w, true);
+  if (!plotClip) return;
+  const oldClip = { x1: surf.clip.x1, y1: surf.clip.y1, x2: surf.clip.x2, y2: surf.clip.y2 };
+  const clipped = areaClip(oldClip, plotClip);
+  if (!clipped) return;
+  surf.clip = clipped;
+
   // 5. 绘制网格和标签
   _drawChartGridAndLabels(surf, w, R, opts, overlays, plotRect, fullRect, xAxis, yAxis, baseAlpha, true);
 
@@ -4648,10 +4748,16 @@ function _drawBarchart(surf, w, R, opts, overlays) {
   for (let i = 0; i < seriesArr.length; i++) {
     if (seriesArr[i].length > pointCount) pointCount = seriesArr[i].length;
   }
-  if (pointCount === 0) return;
+  if (pointCount === 0) {
+    surf.clip = oldClip;
+    return;
+  }
 
   let categoryW = Math.floor(plotW / pointCount);
-  if (categoryW <= 0) return;
+  if (categoryW <= 0) {
+    surf.clip = oldClip;
+    return;
+  }
   let usableW = categoryW - categoryGap;
   if (usableW < seriesArr.length) usableW = seriesArr.length;
   let barW = usableW;
@@ -4704,6 +4810,8 @@ function _drawBarchart(surf, w, R, opts, overlays) {
       }
     }
   }
+
+  surf.clip = oldClip;
 }
 
 // chart 控件渲染入口（严格移植 SGL 算法）

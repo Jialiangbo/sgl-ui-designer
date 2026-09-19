@@ -249,7 +249,7 @@ function executePreviewAction(callback) {
     const targetName = parts[2];
     const text = parts.slice(3).join(':');
     const target = findWidgetByVarName(targetName, true) || findWidgetByVarName(targetName, false);
-    if (target && ['label', 'label_ext', 'textbox', 'textline', 'arc_label'].includes(target.type)) {
+    if (target && ['label', 'label_ext', 'textbox', 'textedit', 'textline', 'arc_label'].includes(target.type)) {
       setPreviewText(target.id, text);
       render();
       return true;
@@ -2470,7 +2470,7 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
     }
 
     case 'label_ext': {
-      // label_ext：在 label 基础上支持偏移与旋转（预览近似）
+      // label_ext：bgFlag 控制背景；旋转绕文本中心（0–360，与 SGL sgl_mod360 一致）
       const { surf, R } = createWidgetCanvas(el, w, z);
       el.style.opacity = 1;
       const alpha = w.alpha != null ? w.alpha : 255;
@@ -2482,8 +2482,8 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
       const cssFamily = getCssFontStack(effFontFamily);
       const offX = w.textOffsetX || 0;
       const offY = w.textOffsetY || 0;
-      const rot = Number(w.textRotation) || 0;
-      if ((w.bgFlag || (leBg && leBg !== 'transparent')) && leBg && leBg !== 'transparent') {
+      const rot = ((Number(w.textRotation) || 0) % 360 + 360) % 360;
+      if (w.bgFlag && leBg && leBg !== 'transparent') {
         R.drawFillRect(surf, 0, 0, w.width - 1, w.height - 1,
           w.radius || 0, R.hexToColor(leBg), alpha);
       }
@@ -2567,6 +2567,45 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
           align: 'TOP_LEFT',
         });
       }
+      break;
+    }
+
+    case 'textedit': {
+      const { surf, R } = createWidgetCanvas(el, w, z);
+      el.style.opacity = 1;
+      const alpha = w.alpha != null ? w.alpha : 255;
+      const teBorder = w.borderWidth != null ? w.borderWidth : 1;
+      const teRadius = w.radius != null ? w.radius : 4;
+      const teBg = w.bgColor || '#FFFFFF';
+      const teBorderCol = w.borderColor || '#808080';
+      const teTextColor = w.textColor || '#000000';
+      const teCursorColor = w.cursorColor || '#000000';
+      const teLineMargin = w.lineMargin != null ? w.lineMargin : 2;
+      const teFontSize = w.fontSize != null ? w.fontSize : 14;
+      const teMulti = Number(w.editMode) === 1;
+      const tePad = Math.max(2, teRadius);
+      R.drawRect(surf, 0, 0, w.width - 1, w.height - 1, {
+        alpha: alpha, border: teBorder, border_alpha: alpha, border_mask: 0,
+        color: R.hexToColor(teBg), border_color: R.hexToColor(teBorderCol), radius: teRadius
+      });
+      flushWidget(surf);
+      const teText = getPreviewText(w) || '';
+      overlayText({
+        text: teText,
+        color: teTextColor,
+        fontSize: teFontSize,
+        fontFamily: (w.fontFamily || ''),
+        x: tePad, y: tePad,
+        w: w.width - 2 * tePad, h: w.height - 2 * tePad,
+        multiline: teMulti,
+        lineMargin: teLineMargin,
+        maxWidth: w.width - 2 * tePad,
+        align: 'TOP_LEFT',
+      });
+      // 光标竖线（DOM）
+      const cur = document.createElement('div');
+      cur.style.cssText = `position:absolute;left:${(tePad + Math.min(teText.length, 12) * teFontSize * 0.55) * z}px;top:${tePad * z}px;width:${Math.max(1, z)}px;height:${teFontSize * z}px;background:${teCursorColor};pointer-events:none;opacity:0.85;`;
+      el.appendChild(cur);
       break;
     }
 

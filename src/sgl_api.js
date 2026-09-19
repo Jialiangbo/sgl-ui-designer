@@ -274,7 +274,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><line x1="6" y1="10" x2="6" y2="10.01"/><line x1="10" y1="10" x2="10" y2="10.01"/><line x1="14" y1="10" x2="14" y2="10.01"/><line x1="18" y1="10" x2="18" y2="10.01"/><line x1="8" y1="14" x2="16" y2="14"/></svg>',
     category: 'interactive',
     defaultSize: [320, 180],
-    properties: ['cellColor', 'btnColor', 'textColor', 'borderColor', 'borderWidth', 'radius', 'mainAlpha', 'borderAlpha', 'btnRadius', 'btnAlpha', 'btnMainAlpha', 'btnBorderColor', 'btnBorderWidth', 'btnBorderAlpha', 'btnPixmap', 'pixmap', 'pixmapFormat', 'textarea', 'fontSize', 'fontFamily', 'fontBpp', 'fontGlyphExtra', 'fontIncludeAscii', 'fontGlyphRanges', 'fontSpacing', 'fontSmartMono', 'alpha', 'locked']
+    properties: ['cellColor', 'btnColor', 'textColor', 'borderColor', 'borderWidth', 'radius', 'mainAlpha', 'borderAlpha', 'btnRadius', 'btnAlpha', 'btnMainAlpha', 'btnBorderColor', 'btnBorderWidth', 'btnBorderAlpha', 'btnPixmap', 'pixmap', 'pixmapFormat', 'textarea', 'keyCallback', 'fontSize', 'fontFamily', 'fontBpp', 'fontGlyphExtra', 'fontIncludeAscii', 'fontGlyphRanges', 'fontSpacing', 'fontSmartMono', 'alpha', 'locked']
   },
 
   // ============ 文本相关 ============
@@ -293,6 +293,14 @@ export const SGL_WIDGET_TYPES = [
     category: 'text',
     defaultSize: [160, 36],
     properties: ['text', 'textColor', 'bgColor', 'borderColor', 'borderWidth', 'radius', 'fontSize', 'fontFamily', 'fontBpp', 'fontGlyphExtra', 'fontIncludeAscii', 'fontGlyphRanges', 'fontSpacing', 'fontSmartMono', 'lineMargin', 'pixmap', 'pixmapFormat', 'alpha', 'locked']
+  },
+  {
+    type: 'textedit',
+    name: '文本编辑',
+    icon: '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><line x1="7" y1="10" x2="7" y2="14"/><line x1="10" y1="9" x2="17" y2="9"/><line x1="10" y1="13" x2="15" y2="13"/></svg>',
+    category: 'text',
+    defaultSize: [180, 32],
+    properties: ['text', 'textBuffer', 'editMode', 'textColor', 'bgColor', 'cursorColor', 'borderColor', 'borderWidth', 'radius', 'fontSize', 'fontFamily', 'fontBpp', 'fontGlyphExtra', 'fontIncludeAscii', 'fontGlyphRanges', 'fontSpacing', 'fontSmartMono', 'lineMargin', 'alpha', 'locked']
   },
   {
     type: 'textline',
@@ -702,7 +710,9 @@ export const PROP_META = {
   textOffsetY: { label: '文本 Y 偏移', type: 'number', min: -50, max: 50 },
   msgOffsetX: { label: '消息文本 X 偏移', type: 'number', min: 0, max: 100 },
   msgOffsetY: { label: '消息文本 Y 偏移', type: 'number', min: 0, max: 100 },
-  textRotation: { label: '文本旋转 (°)', type: 'number', min: -180, max: 180 },
+  textRotation: { label: '文本旋转 (°)', type: 'number', min: 0, max: 360 },
+  editMode: { label: '编辑模式', type: 'select', options: [[0, '单行'], [1, '多行']] },
+  cursorColor: { label: '光标颜色', type: 'color' },
   longMode: { label: '长文本滚动', type: 'bool' },
   // 对齐 SGL sgl_label_set_long_mode：speed = 像素/秒（非毫秒）
   longModeSpeed: { label: '滚动速度(px/s)', type: 'number', min: 1, max: 500 },
@@ -838,6 +848,7 @@ export const PROP_META = {
   points: { label: '控制点', type: 'text', placeholder: '归一化0-255: x0,y0;x1,y1;...' },
   eventCb: { label: '事件回调函数', type: 'text' },
   textarea: { label: '文本缓冲区变量', type: 'text' },
+  keyCallback: { label: '按键回调函数', type: 'text', placeholder: 'C 函数名，如 keyboard_key_cb（需自行实现）' },
   painterCb: { label: '绘制回调函数', type: 'text', placeholder: '例如: my_canvas_painter' },
   privateData: { label: '私有数据指针', type: 'text', placeholder: 'C 变量名或 NULL' },
   parentId: { label: '父对象', type: 'parentSelect' },
@@ -973,9 +984,12 @@ export const WIDGET_EVENTS = {
   stepper: ['onPressed', 'onReleased', 'onClicked'],
   // 文本组件
   label: [],
+  label_ext: [],
   textbox: ['onPressed', 'onReleased', 'onFocused', 'onUnfocused', 'onMoveUp', 'onMoveDown'],
+  textedit: ['onPressed', 'onReleased', 'onClicked', 'onFocused', 'onUnfocused'],
   textline: [],
   textlist: ['onClicked', 'onReleased', 'onMoveUp', 'onMoveDown', 'onKeyEnter', 'onKeyDown', 'onKeyUp'],
+  arc_label: [],
   // 显示组件
   progress: [],
   bar: ['onPressed', 'onReleased', 'onMotion', 'onMoveUp', 'onMoveDown', 'onMoveLeft', 'onMoveRight'],
@@ -1008,7 +1022,7 @@ export const WIDGET_EVENTS = {
 export const WIDGET_CATEGORIES = [
   { id: 'basic', name: '基础图形', types: ['rect', 'rect_ext', 'circle', 'ring', 'arc', 'line', 'polygon', 'curve'] },
   { id: 'interactive', name: '交互组件', types: ['button', 'switch', 'checkbox', 'slider', 'numberkbd', 'keyboard', 'dropdown', 'roller', 'stepper'] },
-  { id: 'text', name: '文本组件', types: ['label', 'textbox', 'textline', 'textlist', 'arc_label'] },
+  { id: 'text', name: '文本组件', types: ['label', 'label_ext', 'textbox', 'textedit', 'textline', 'textlist', 'arc_label'] },
   { id: 'display', name: '显示组件', types: ['progress', 'bar', 'gauge', 'spectrum', 'battery', 'led', 'viewlist', 'qrcode', 'scope', 'chart', 'analogclock'] },
   { id: 'special', name: '特殊组件', types: ['msgbox', 'box', 'win', 'tabview', 'scrollview', 'canvas', '2dball', 'sprite', 'statusbar', 'launcher'] },
   { id: 'image', name: '图像组件', types: ['icon', 'img_ext', 'img'] }
@@ -1053,11 +1067,13 @@ export function createWidgetDefaults(type) {
     case 'numberkbd':
       return { ...base, cellColor: '#FFFFFF', borderColor: '#000000', borderWidth: 2, radius: 0, fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, btnColor: '#FFFFFF', textColor: '#000000', btnMargin: 5, btnBorderWidth: 1, btnBorderColor: '#000000', btnRadius: 0, btnPixmap: '', pixmap: '' };
     case 'keyboard':
-      return { ...base, cellColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, mainAlpha: 255, borderAlpha: 255, fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, btnColor: '#404040', textColor: '#000000', btnRadius: 0, btnAlpha: 255, btnMainAlpha: 255, btnBorderColor: '#000000', btnBorderWidth: 0, btnBorderAlpha: 255, btnPixmap: '', pixmap: '', textarea: '' };
+      return { ...base, cellColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, mainAlpha: 255, borderAlpha: 255, fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, btnColor: '#404040', textColor: '#000000', btnRadius: 0, btnAlpha: 255, btnMainAlpha: 255, btnBorderColor: '#000000', btnBorderWidth: 0, btnBorderAlpha: 255, btnPixmap: '', pixmap: '', textarea: '', keyCallback: '' };
     case 'label':
       return { ...base, text: '标签文本', textColor: '#000000', bgColor: 'transparent', align: 'LEFT_MID', fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, textOffsetX: 0, radius: 0, textBuffer: '', textFmt: '', textFmtDynamic: '', longMode: false, longModeSpeed: 50 };
     case 'textbox':
       return { ...base, text: 'textbox', textColor: '#000000', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 10, fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, lineMargin: 1, pixmap: '', pixmapFormat: 'RGB565' };
+    case 'textedit':
+      return { ...base, text: '', textBuffer: 'textedit_buf,64', editMode: 0, textColor: '#000000', bgColor: '#FFFFFF', cursorColor: '#000000', borderColor: '#808080', borderWidth: 1, radius: 4, fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, lineMargin: 2 };
     case 'textline':
       return { ...base, text: 'textline', textColor: '#000000', bgColor: '#FFFFFF', bgTransparent: false, radius: 0, fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, edgeMargin: 0, lineMargin: 1 };
     case 'textlist':
@@ -1141,9 +1157,10 @@ export const WIDGET_DEFAULTS = {
   checkbox: { text: '选项', color: '#000000', textColor: '#000000', boxColor: '#2196F3', checkColor: '#FFFFFF', status: false, radius: 0, fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, alpha: 255 },
   slider: { value: 50, direct: 0, fillColor: '#000000', trackColor: '#808080', knobColor: '#000000', borderWidth: 2, radius: 4, thickness: 10, alpha: 255 },
   numberkbd: { cellColor: '#FFFFFF', borderColor: '#000000', borderWidth: 2, radius: 0, fontFamily: '', fontSize: 14, fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, btnColor: '#FFFFFF', textColor: '#000000', btnMargin: 5, btnBorderWidth: 1, btnBorderColor: '#000000', btnRadius: 0, btnPixmap: '', pixmap: '', pixmapFormat: 'RGB565', alpha: 255 },
-  keyboard: { cellColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, mainAlpha: 255, borderAlpha: 255, fontFamily: '', fontSize: 14, fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, btnColor: '#404040', textColor: '#000000', btnRadius: 0, btnAlpha: 255, btnMainAlpha: 255, btnBorderColor: '#000000', btnBorderWidth: 0, btnBorderAlpha: 255, btnPixmap: '', pixmap: '', pixmapFormat: 'RGB565', textarea: '', alpha: 255 },
-  label: { text: '标签文本', textColor: '#000000', bgColor: 'transparent', align: 'CENTER', fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, textOffsetX: 0, radius: 0, textBuffer: '', textFmt: '', textFmtDynamic: '', alpha: 255 },
+  keyboard: { cellColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, mainAlpha: 255, borderAlpha: 255, fontFamily: '', fontSize: 14, fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, btnColor: '#404040', textColor: '#000000', btnRadius: 0, btnAlpha: 255, btnMainAlpha: 255, btnBorderColor: '#000000', btnBorderWidth: 0, btnBorderAlpha: 255, btnPixmap: '', pixmap: '', pixmapFormat: 'RGB565', textarea: '', keyCallback: '', alpha: 255 },
+  label: { text: '标签文本', textColor: '#000000', bgColor: 'transparent', align: 'CENTER', fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, textOffsetX: 0, radius: 0, textBuffer: '', textFmt: '', textFmtDynamic: '', longMode: false, longModeSpeed: 50, alpha: 255 },
   textbox: { text: 'textbox', textColor: '#000000', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 10, fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, lineMargin: 1, pixmap: '', pixmapFormat: 'RGB565', alpha: 255 },
+  textedit: { text: '', textBuffer: 'textedit_buf,64', editMode: 0, textColor: '#000000', bgColor: '#FFFFFF', cursorColor: '#000000', borderColor: '#808080', borderWidth: 1, radius: 4, fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, lineMargin: 2, alpha: 255 },
   textline: { text: 'textline', textColor: '#000000', bgColor: '#FFFFFF', bgTransparent: false, radius: 0, fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, edgeMargin: 0, lineMargin: 1, alpha: 255 },
   textlist: { options: '选项1\n选项2\n选项3', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, fontSize: 12, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, textColor: '#000000', selectedColor: '#808080', pixmap: '', alpha: 255 },
   progress: { value: 50, fillColor: '#FFFFFF', fillAlpha: 255, trackColor: '#000000', trackAlpha: 255, borderColor: '#000000', borderWidth: 2, radius: 0, fillGap: 4, fillRadius: 0, fillWidth: 4, pixmap: '', pixmapFormat: 'RGB565' },
@@ -1273,6 +1290,10 @@ function getWidgetTextForFont(w) {
   if (w.type === 'numberkbd' || w.type === 'keyboard') {
     return undefined;
   }
+  // textedit 可空初始文本，但仍需要字体才能显示输入
+  if (w.type === 'textedit') {
+    return undefined;
+  }
   // win 使用 titleText 作为标题文本
   if (w.type === 'win') {
     return w.titleText;
@@ -1373,6 +1394,24 @@ export function generateSGLCode(project) {
             }
           }
         }
+        if (w.type === 'label_ext') {
+          const rot = Number(w.textRotation) || 0;
+          if (rot !== 0) {
+            const compress = effectiveFontCompress(project);
+            const bif = resolveBuiltinFont(w.fontFamily);
+            const flash = project.sgl_config && Number(project.sgl_config.flash_font) !== 0;
+            const compressBuiltin = bif && String(bif.id).includes('compress');
+            if (compress || flash || compressBuiltin) {
+              codegenLog(`[WARN] label_ext '${w.name || ''}' (id=${w.id}) 使用压缩/Flash 字体时不支持旋转，运行时将按未旋转绘制`, 'warn');
+            }
+          }
+        }
+        if (w.type === 'textedit') {
+          const spec = parseTextBufferSpec(w.textBuffer);
+          if (!spec) {
+            codegenLog(`[WARN] textedit 控件 '${w.name || ''}' (id=${w.id}) 未设置有效 textBuffer（格式: 变量名,大小），运行时无法输入`, 'warn');
+          }
+        }
       });
     });
   }
@@ -1407,7 +1446,7 @@ export function generateSGLCode(project) {
   const textBuffers = collectTextBufferVars(project);
   if (textBuffers.size > 0) {
     code += `\n/* ============================================\n`;
-    code += ` * 标签文本缓冲区（label / label_ext / arc_label）\n`;
+    code += ` * 文本缓冲区（label / label_ext / arc_label / textedit）\n`;
     code += ` * ============================================ */\n`;
     textBuffers.forEach(({ size, initText }, name) => {
       if (initText) {
@@ -1884,9 +1923,11 @@ export function validateProjectEmptyTexts(project) {
       const name = `${typeDef.name || w.type} (${w.id})`;
       const pageName = page.name || '未命名页面';
 
-      // 主文本类：label / button / checkbox / textbox / textline / arc_label / label_ext
-      if (['label', 'label_ext', 'arc_label', 'button', 'checkbox', 'textbox', 'textline'].includes(w.type)) {
+      // 主文本类：label / button / checkbox / textbox / textedit / textline / arc_label / label_ext
+      if (['label', 'label_ext', 'arc_label', 'button', 'checkbox', 'textbox', 'textedit', 'textline'].includes(w.type)) {
         if (usesDynamicText(w)) return; // 动态缓冲/格式化文本，静态 text 可为空
+        // textedit 允许空初始文本（输入控件）
+        if (w.type === 'textedit') return;
         if (isBlank(w.text)) {
           issues.push({
             page: pageName,
@@ -2016,10 +2057,10 @@ function parseTextBufferSpec(textBuffer) {
   return { name, size };
 }
 
-/** 收集 label 系列控件的文本缓冲区声明（同名取最大 size） */
+/** 收集 label / textedit 系列控件的文本缓冲区声明（同名取最大 size） */
 function collectTextBufferVars(project) {
   const buffers = new Map();
-  const types = new Set(['label', 'label_ext', 'arc_label']);
+  const types = new Set(['label', 'label_ext', 'arc_label', 'textedit']);
   if (!project?.pages) return buffers;
   project.pages.forEach(page => {
     if (!Array.isArray(page.widgets)) return;
@@ -2102,6 +2143,7 @@ function getSglCreateFn(type) {
     'label': 'sgl_label_create',
     'label_ext': 'sgl_label_ext_create',
     'textbox': 'sgl_textbox_create',
+    'textedit': 'sgl_textedit_create',
     'textline': 'sgl_textline_create',
     'textlist': 'sgl_textlist_create',
     'progress': 'sgl_progress_create',
@@ -2291,7 +2333,10 @@ function getSglSetters(w, project) {
       }
       appendLabelTextSetters(setters, w, defaults, 'sgl_label_ext', false);
       if (shouldGenerateValue(w.textColor, defaults, 'textColor')) setters.push(`sgl_label_ext_set_text_color(${obj(w)}, ${hexToSglColor(w.textColor)});`);
-      if (shouldGenerateValue(w.bgColor, defaults, 'bgColor') && w.bgColor !== 'transparent') setters.push(`sgl_label_ext_set_bg_color(${obj(w)}, ${hexToSglColor(w.bgColor)});`);
+      // SGL: set_bg_color 会自动置位 bg_flag=1；仅当 bgFlag 为真时生成
+      if (w.bgFlag) {
+        setters.push(`sgl_label_ext_set_bg_color(${obj(w)}, ${hexToSglColor(w.bgColor && w.bgColor !== 'transparent' ? w.bgColor : '#FFFFFF')});`);
+      }
       if (shouldGenerateValue(w.align, defaults, 'align')) setters.push(`sgl_label_ext_set_text_align(${obj(w)}, SGL_ALIGN_${mapSglAlign(w.align)});`);
       if (shouldGenerateValue(w.radius, defaults, 'radius')) setters.push(`sgl_label_ext_set_radius(${obj(w)}, ${w.radius});`);
       // 当前 SGL label_ext 支持 offset；默认 0 时不生成，避免冗余调用
@@ -2302,7 +2347,10 @@ function getSglSetters(w, project) {
           setters.push(`sgl_label_ext_set_text_offset(${obj(w)}, ${ox}, ${oy});`);
         }
       }
-      if (shouldGenerateValue(w.textRotation, defaults, 'textRotation')) setters.push(`sgl_label_ext_set_text_rotation(${obj(w)}, ${w.textRotation});`);
+      if (shouldGenerateValue(w.textRotation, defaults, 'textRotation')) {
+        const rot = ((Number(w.textRotation) % 360) + 360) % 360;
+        setters.push(`sgl_label_ext_set_text_rotation(${obj(w)}, ${rot});`);
+      }
       if (shouldGenerateValue(w.alpha, defaults, 'alpha')) setters.push(`sgl_label_ext_set_alpha(${obj(w)}, ${w.alpha});`);
       break;
 
@@ -2318,8 +2366,34 @@ function getSglSetters(w, project) {
       if (shouldGenerateValue(w.borderWidth, defaults, 'borderWidth')) setters.push(`sgl_textbox_set_border_width(${obj(w)}, ${w.borderWidth});`);
       if (shouldGenerateValue(w.radius, defaults, 'radius')) setters.push(`sgl_textbox_set_radius(${obj(w)}, ${w.radius});`);
       if (shouldGenerateValue(w.lineMargin, defaults, 'lineMargin')) setters.push(`sgl_textbox_set_line_margin(${obj(w)}, ${w.lineMargin});`);
-      if (shouldGeneratePixmap(w.pixmap)) setters.push(`sgl_textbox_set_pixmap(${obj(w)}, &${pixmapVarName(w.pixmap, w.pixmapFormat)});`);
+      if (shouldGeneratePixmap(w.pixmap)) setters.push(`sgl_textbox_set_pixmap(${obj(w)}, &${pixmapVarName(w.pixmap, w.pixmapFormat || 'RGB565')});`);
       break;
+
+    case 'textedit': {
+      if (shouldGenerateFont(w, defaults)) {
+        const fontId = getWidgetFontId(w, project);
+        setters.push(`sgl_textedit_set_text_font(${obj(w)}, &${fontId});`);
+      }
+      const teSpec = parseTextBufferSpec(w.textBuffer);
+      if (teSpec) {
+        setters.push(`sgl_textedit_set_text_buffer(${obj(w)}, ${teSpec.name}, ${teSpec.size});`);
+      }
+      if (w.text != null && String(w.text).length > 0) {
+        setters.push(`sgl_textedit_set_text(${obj(w)}, "${escapeStr(w.text)}");`);
+      }
+      const teMode = Number(w.editMode) === 1 ? 'SGL_TEXTEDIT_MULTI_LINE' : 'SGL_TEXTEDIT_SINGLE_LINE';
+      if (shouldGenerateValue(w.editMode, defaults, 'editMode') || Number(w.editMode) === 1) {
+        setters.push(`sgl_textedit_set_mode(${obj(w)}, ${teMode});`);
+      }
+      if (shouldGenerateValue(w.textColor, defaults, 'textColor')) setters.push(`sgl_textedit_set_text_color(${obj(w)}, ${hexToSglColor(w.textColor)});`);
+      if (shouldGenerateValue(w.bgColor, defaults, 'bgColor')) setters.push(`sgl_textedit_set_bg_color(${obj(w)}, ${hexToSglColor(w.bgColor)});`);
+      if (shouldGenerateValue(w.cursorColor, defaults, 'cursorColor')) setters.push(`sgl_textedit_set_cursor_color(${obj(w)}, ${hexToSglColor(w.cursorColor)});`);
+      if (shouldGenerateValue(w.borderColor, defaults, 'borderColor')) setters.push(`sgl_textedit_set_border_color(${obj(w)}, ${hexToSglColor(w.borderColor)});`);
+      if (shouldGenerateValue(w.borderWidth, defaults, 'borderWidth')) setters.push(`sgl_textedit_set_border_width(${obj(w)}, ${w.borderWidth});`);
+      if (shouldGenerateValue(w.radius, defaults, 'radius')) setters.push(`sgl_textedit_set_radius(${obj(w)}, ${w.radius});`);
+      if (shouldGenerateValue(w.lineMargin, defaults, 'lineMargin')) setters.push(`sgl_textedit_set_line_margin(${obj(w)}, ${w.lineMargin});`);
+      break;
+    }
 
     case 'switch':
       if (shouldGenerateValue(w.status, defaults, 'status')) setters.push(`sgl_switch_set_status(${obj(w)}, ${w.status ? 'true' : 'false'});`);
@@ -2613,6 +2687,9 @@ function getSglSetters(w, project) {
       if (shouldGeneratePixmap(w.btnPixmap)) setters.push(`sgl_keyboard_set_btn_pixmap(${obj(w)}, &${pixmapVarName(w.btnPixmap, w.pixmapFormat || 'RGB565')});`);
       if (shouldGeneratePixmap(w.pixmap)) setters.push(`sgl_keyboard_set_pixmap(${obj(w)}, &${pixmapVarName(w.pixmap, w.pixmapFormat || 'RGB565')});`);
       if (shouldGenerateValue(w.textarea, defaults, 'textarea') && w.textarea) setters.push(`sgl_keyboard_set_textarea(${obj(w)}, ${w.textarea}, sizeof(${w.textarea}));`);
+      if (shouldGenerateValue(w.keyCallback, defaults, 'keyCallback') && w.keyCallback && isValidCIdentifier(String(w.keyCallback).trim())) {
+        setters.push(`sgl_keyboard_set_key_callback(${obj(w)}, ${String(w.keyCallback).trim()}, NULL);`);
+      }
       break;
 
     case 'textline':

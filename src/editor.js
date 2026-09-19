@@ -447,8 +447,10 @@ let textEditingWidgetId = null;
 let textEditingProp = null;
 const WIDGET_TEXT_PROPS = {
   label: 'text',
+  label_ext: 'text',
   button: 'text',
   textbox: 'text',
+  textedit: 'text',
   textline: 'text',
   checkbox: 'text',
   polygon: 'text'
@@ -2207,6 +2209,59 @@ function renderWidgetVisual(el, w, renderSize) {
       break;
     }
 
+    case 'label_ext': {
+      // label_ext：背景受 bgFlag 控制；旋转绕文本中心（CSS 近似，与预览一致）
+      const leAlign = p('align', 'CENTER');
+      const leBg = p('bgColor', 'transparent');
+      const leBgFlag = !!p('bgFlag', false);
+      const leRot = ((Number(p('textRotation', 0)) % 360) + 360) % 360;
+      const leFontSize = p('fontSize', 14);
+      const leFontBpp = p('fontBpp', 4);
+      const leEffFamily = resolveEffectiveFontFamily(p('fontFamily', ''));
+      const leFontPath = resolveFontPath(leEffFamily);
+      const leCssFamily = getCssFontStack(leEffFamily);
+      const leOffX = p('textOffsetX', 0);
+      const leOffY = p('textOffsetY', 0);
+      const leText = p('text', '标签文本');
+      const leTextColor = p('textColor', p('color', '#000000'));
+      const leHasFont = widgetHasFont(w);
+      const leRadius = p('radius', 0);
+
+      const leSurf = sglSurface(w.width, w.height);
+      if (leBgFlag && leBg && leBg !== 'transparent') {
+        SGLR.drawFillRect(leSurf, 0, 0, w.width - 1, w.height - 1, leRadius, SGLR.hexToColor(leBg), alpha);
+      }
+      if (leHasFont && leRot === 0) {
+        const coords = { x1: 0, y1: 0, x2: w.width - 1, y2: w.height - 1 };
+        const sglFont = getSglFontData(leFontPath, leFontSize, leFontBpp, fontOptsFromWidget(w));
+        if (sglFont) {
+          const pos = SGLR.getTextPosSGL(coords, leText, sglFont, 0, sglAlign(leAlign));
+          SGLR.drawStringSGL(leSurf, pos.x + leOffX, pos.y + leOffY, leText, SGLR.hexToColor(leTextColor), alpha, sglFont);
+        } else {
+          const pos = SGLR.getTextPosRealtime(coords, leText, leFontSize, leCssFamily, 4, sglAlign(leAlign));
+          SGLR.drawString(leSurf, pos.x + leOffX, pos.y + leOffY, leText, SGLR.hexToColor(leTextColor), alpha, leFontSize, leCssFamily, leFontBpp);
+        }
+        SGLR.flushSurface(leSurf);
+      } else {
+        SGLR.flushSurface(leSurf);
+        const wrap = document.createElement('div');
+        wrap.style.cssText = `position:absolute;left:0;top:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;pointer-events:none;box-sizing:border-box;overflow:hidden;`;
+        Object.assign(wrap.style, flexAlign(leAlign));
+        const span = document.createElement('span');
+        span.textContent = leText;
+        span.style.color = leTextColor;
+        span.style.fontSize = (leFontSize * z) + 'px';
+        span.style.fontFamily = leCssFamily || 'system-ui,sans-serif';
+        span.style.transform = `translate(${leOffX * z}px, ${leOffY * z}px) rotate(${leRot}deg)`;
+        span.style.transformOrigin = 'center center';
+        span.style.whiteSpace = 'nowrap';
+        span.style.filter = 'var(--sgl-bpp-filter,none)';
+        wrap.appendChild(span);
+        el.appendChild(wrap);
+      }
+      break;
+    }
+
     case 'textbox': {
       // SGL textbox: bg 圆角矩形 + 多行文本
       // 严格移植自 sgl_textbox.c: focus=1 时 border_mask=1 不画边框，scroll_enable=0 默认不画滚动条
@@ -2321,17 +2376,91 @@ function renderWidgetVisual(el, w, renderSize) {
       break;
     }
 
-    case 'switch': {
-      // SGL switch 算法（严格移植自 sgl_switch.c sgl_switch_construct_cb）
-      const swOn = p('status', false);
-      const swBorder = p('borderWidth', 2);
-      const swMargin = p('knobMargin', 1);
-      const swRadius = p('radius', 0);
-      const swTrackColor = swOn ? p('onColor', '#FFFFFF') : p('bgColor', '#000000');
-      const swBorderCol = p('borderColor', '#000000');
-      const swKnobColor = SGLR.hexToColor(p('knobColor', '#808080'));
+    case 'textedit': {
+      // textedit：圆角背景 + 边框 + 文本 + 光标竖线（静态预览）
+      const teFontSize = p('fontSize', 14);
+      const teFontBpp = p('fontBpp', 4);
+      const teEffFamily = resolveEffectiveFontFamily(p('fontFamily', ''));
+      const teFontPath = resolveFontPath(teEffFamily);
+      const teRadius = p('radius', 4);
+      const teBg = p('bgColor', '#FFFFFF');
+      const teBorderCol = p('borderColor', '#808080');
+      const teBorder = p('borderWidth', 1);
+      const teText = p('text', '');
+      const teTextColor = p('textColor', '#000000');
+      const teCursorColor = p('cursorColor', '#000000');
+      const teLineMargin = p('lineMargin', 2);
+      const teMulti = Number(p('editMode', 0)) === 1;
+      const teHasFont = widgetHasFont(w);
+      const tePad = Math.max(2, teRadius);
+      const teSurf = sglSurface(w.width, w.height);
+      SGLR.drawRect(teSurf, 0, 0, w.width - 1, w.height - 1, {
+        alpha: alpha,
+        border: teBorder,
+        border_alpha: alpha,
+        border_mask: 0,
+        color: SGLR.hexToColor(teBg),
+        radius: teRadius,
+        border_color: SGLR.hexToColor(teBorderCol),
+      });
+      let cursorX = tePad;
+      let cursorY = tePad;
+      let cursorH = teFontSize;
+      if (teHasFont) {
+        const sglFont = getSglFontData(teFontPath, teFontSize, teFontBpp, fontOptsFromWidget(w));
+        const txtCol = SGLR.hexToColor(teTextColor);
+        if (sglFont) {
+          cursorH = SGLR.fontGetHeight(sglFont);
+          if (teMulti) {
+            const lines = String(teText || '').split('\n');
+            let drawY = tePad;
+            const lineH = cursorH + teLineMargin;
+            for (let i = 0; i < lines.length; i++) {
+              if (drawY + cursorH > w.height - tePad) break;
+              SGLR.drawStringSGL(teSurf, tePad, drawY, lines[i], txtCol, alpha, sglFont);
+              drawY += lineH;
+            }
+            const last = lines[lines.length - 1] || '';
+            cursorX = tePad + (last ? SGLR.fontGetStringWidth(last, sglFont) : 0);
+            cursorY = tePad + Math.max(0, lines.length - 1) * lineH;
+          } else {
+            const one = String(teText || '').replace(/\n/g, '');
+            SGLR.drawStringSGL(teSurf, tePad, tePad, one, txtCol, alpha, sglFont);
+            cursorX = tePad + (one ? SGLR.fontGetStringWidth(one, sglFont) : 0);
+            cursorY = tePad;
+          }
+        } else {
+          const cssFamily = getCssFontStack(teEffFamily);
+          const one = teMulti ? String(teText || '') : String(teText || '').replace(/\n/g, '');
+          SGLR.drawString(teSurf, tePad, tePad, one, txtCol, alpha, teFontSize, cssFamily, teFontBpp);
+          cursorX = tePad + (one ? one.length * teFontSize * 0.55 : 0);
+        }
+      }
+      // 光标竖线
+      const cx2 = Math.min(w.width - 2, cursorX + 1);
+      const cy2 = Math.min(w.height - 2, cursorY + cursorH - 1);
+      if (cursorX < w.width - 2 && cursorY < w.height - 2) {
+        SGLR.drawLine(teSurf, cursorX, cursorY, cursorX, cy2, 1, SGLR.hexToColor(teCursorColor), alpha);
+        if (cx2 !== cursorX) SGLR.drawLine(teSurf, cx2, cursorY, cx2, cy2, 1, SGLR.hexToColor(teCursorColor), alpha);
+      }
+      SGLR.flushSurface(teSurf);
+      if (!teHasFont) {
+        overlayText({
+          text: teText || '',
+          color: teTextColor,
+          fontSize: teFontSize,
+          fontFamily: teEffFamily,
+          align: 'TOP_LEFT',
+          x: tePad, y: tePad, w: w.width - 2 * tePad, h: w.height - 2 * tePad,
+          lineMargin: teLineMargin,
+          multiline: teMulti,
+          maxWidth: w.width - 2 * tePad
+        });
+      }
+      break;
+    }
 
-      // SGL: knob_offset / knob_size / bg_inset 计算
+    case 'switch': {
       // SGL: obj_h = obj->coords.y2 - obj->coords.y1 = (H-1) - 0 = H-1（coords.y2 是包含的最后一个像素）
       let knobOffset, bgInset;
       if (swMargin >= 0) {
@@ -5407,7 +5536,7 @@ function startTextEdit(widget, widgetEl, textProp) {
   textEditingWidgetId = widget.id;
   textEditingProp = textProp;
 
-  const isMultiline = widget.type === 'textbox';
+  const isMultiline = widget.type === 'textbox' || (widget.type === 'textedit' && Number(widget.editMode) === 1);
   const input = document.createElement(isMultiline ? 'textarea' : 'input');
   input.type = 'text';
 
@@ -5420,7 +5549,7 @@ function startTextEdit(widget, widgetEl, textProp) {
 
   let padding = '2px 4px';
   if (widget.type === 'button') padding = '4px 8px';
-  else if (widget.type === 'textbox') padding = '4px 6px';
+  else if (widget.type === 'textbox' || widget.type === 'textedit') padding = '4px 6px';
 
   input.value = widget[textProp] || '';
 

@@ -268,6 +268,17 @@ struct Widget {
     long_mode: Option<bool>,
     #[serde(default, rename = "longModeSpeed")]
     long_mode_speed: Option<u32>,
+    // textedit / keyboard 扩展
+    #[serde(default, rename = "editMode")]
+    edit_mode: Option<i32>,
+    #[serde(default, rename = "cursorColor")]
+    cursor_color: Option<String>,
+    #[serde(default, rename = "lineMargin")]
+    line_margin: Option<i32>,
+    #[serde(default, rename = "keyCallback")]
+    key_callback: Option<String>,
+    #[serde(default)]
+    textarea: Option<String>,
     // numberkbd 控件属性
     #[serde(default, rename = "btnMargin")]
     btn_margin: Option<i32>,
@@ -2025,7 +2036,7 @@ fn parse_text_buffer_spec(raw: &str) -> Option<(String, u16)> {
 
 fn collect_text_buffer_vars(project: &Project) -> std::collections::BTreeMap<String, TextBufferDecl> {
     let mut buffers: std::collections::BTreeMap<String, TextBufferDecl> = std::collections::BTreeMap::new();
-    let types = ["label", "label_ext", "arc_label"];
+    let types = ["label", "label_ext", "arc_label", "textedit"];
     for page in &project.pages {
         for w in &page.widgets {
             if !types.contains(&w.widget_type.as_str()) {
@@ -2161,7 +2172,7 @@ fn generate_code(project: Project, window: tauri::Window) -> Result<String, Stri
     let text_buffers = collect_text_buffer_vars(&project);
     if !text_buffers.is_empty() {
         code.push_str("/* ============================================\n");
-        code.push_str(" * 标签文本缓冲区（label / label_ext / arc_label）\n");
+        code.push_str(" * 文本缓冲区（label / label_ext / arc_label / textedit）\n");
         code.push_str(" * ============================================ */\n");
         for (name, decl) in &text_buffers {
             if let Some(ref init) = decl.init_text {
@@ -2281,6 +2292,7 @@ fn get_create_fn(t: &str) -> &'static str {
         "arc_label" => "sgl_arc_label_create",
         "img" => "sgl_img_create",
         "textbox" => "sgl_textbox_create",
+        "textedit" => "sgl_textedit_create",
         "textline" => "sgl_textline_create",
         "textlist" => "sgl_textlist_create",
         "progress" => "sgl_progress_create",
@@ -2585,11 +2597,10 @@ fn emit_setters(code: &mut String, project: &Project, w: &Widget, obj: &str) {
                 cstr!("sgl_label_ext_set_text", w.text);
             }
             cclr!("sgl_label_ext_set_text_color", w.text_color);
-            // label_ext 的 set_bg_color 会自动置位 bg_flag
-            if let Some(bg) = &w.bg_color {
-                if !bg.is_empty() && bg != "transparent" {
-                    code.push_str(&format!("    sgl_label_ext_set_bg_color({}, {});\n", obj, sgl_color(bg)));
-                }
+            // label_ext 的 set_bg_color 会自动置位 bg_flag；仅当 bgFlag 为真时生成
+            if w.arc_label_bg_flag.unwrap_or(false) {
+                let bg = w.bg_color.as_deref().filter(|s| !s.is_empty() && *s != "transparent").unwrap_or("#FFFFFF");
+                code.push_str(&format!("    sgl_label_ext_set_bg_color({}, {});\n", obj, sgl_color(bg)));
             }
             c!( "sgl_label_ext_set_alpha", w.alpha.map(|v| v as u8));
             if let Some(a) = &w.align {
@@ -2624,7 +2635,8 @@ fn emit_setters(code: &mut String, project: &Project, w: &Widget, obj: &str) {
                 }
             }
             if let Some(r) = w.text_rotation {
-                code.push_str(&format!("    sgl_label_ext_set_text_rotation({}, {});\n", obj, r));
+                let rot = ((r % 360) + 360) % 360;
+                code.push_str(&format!("    sgl_label_ext_set_text_rotation({}, {});\n", obj, rot));
             }
         }
         "arc_label" => {
@@ -2729,6 +2741,40 @@ fn emit_setters(code: &mut String, project: &Project, w: &Widget, obj: &str) {
             if let Some(fid) = font_id_for_widget(&project, w) {
                 code.push_str(&format!("    sgl_textbox_set_text_font({}, &{});\n", obj, fid));
             }
+            c!( "sgl_textbox_set_line_margin", w.line_margin.map(|v| v as u8));
+        }
+        "textedit" => {
+            if let Some(fid) = font_id_for_widget(&project, w) {
+                code.push_str(&format!("    sgl_textedit_set_text_font({}, &{});\n", obj, fid));
+            }
+            if let Some(buf) = &w.text_buffer {
+                if !buf.is_empty() {
+                    let parts: Vec<&str> = buf.split(',').map(|s| s.trim()).collect();
+                    if parts.len() == 2 {
+                        if let Ok(sz) = parts[1].parse::<i32>() {
+                            code.push_str(&format!("    sgl_textedit_set_text_buffer({}, {}, {});\n", obj, parts[0], sz));
+                        }
+                    } else {
+                        code.push_str(&format!("    sgl_textedit_set_text_buffer({}, {}, 64);\n", obj, parts[0]));
+                    }
+                }
+            }
+            cstr!("sgl_textedit_set_text", w.text);
+            let mode = if w.edit_mode.unwrap_or(0) == 1 {
+                "SGL_TEXTEDIT_MULTI_LINE"
+            } else {
+                "SGL_TEXTEDIT_SINGLE_LINE"
+            };
+            if w.edit_mode.unwrap_or(0) != 0 {
+                code.push_str(&format!("    sgl_textedit_set_mode({}, {});\n", obj, mode));
+            }
+            cclr!("sgl_textedit_set_text_color", w.text_color);
+            cclr!("sgl_textedit_set_bg_color", w.bg_color);
+            cclr!("sgl_textedit_set_cursor_color", w.cursor_color);
+            cclr!("sgl_textedit_set_border_color", w.border_color);
+            c!( "sgl_textedit_set_border_width", w.border_width.map(|v| v as u8));
+            c!( "sgl_textedit_set_radius", w.radius.map(|v| v as u8));
+            c!( "sgl_textedit_set_line_margin", w.line_margin.map(|v| v as u8));
         }
         "switch" => {
             if let Some(s) = w.status {
@@ -3096,6 +3142,19 @@ fn emit_setters(code: &mut String, project: &Project, w: &Widget, obj: &str) {
             c!( "sgl_keyboard_set_alpha", w.alpha.map(|v| v as u8));
             if let Some(fid) = font_id_for_widget(&project, w) {
                 code.push_str(&format!("    sgl_keyboard_set_text_font({}, &{});\n", obj, fid));
+            }
+            if let Some(ta) = &w.textarea {
+                if !ta.is_empty() {
+                    code.push_str(&format!("    sgl_keyboard_set_textarea({}, {}, sizeof({}));\n", obj, ta, ta));
+                }
+            }
+            if let Some(cb) = &w.key_callback {
+                let name = cb.trim();
+                if !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                    && name.chars().next().map(|c| c.is_ascii_alphabetic() || c == '_').unwrap_or(false)
+                {
+                    code.push_str(&format!("    sgl_keyboard_set_key_callback({}, {}, NULL);\n", obj, name));
+                }
             }
         }
         "qrcode" => {

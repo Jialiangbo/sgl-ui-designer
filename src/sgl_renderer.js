@@ -2944,7 +2944,7 @@ function drawExtImg(surf, imgData, w, h, rotation, scaleUniform, pivotX, pivotY,
 
   // SGL decode_pixel：RGB565/RGB332/RGB888 等不透明格式返回 SGL_ALPHA_MAX，
   // ARGB4444/ARGB2222/ARGB8888 等透明格式才读取 alpha 位。
-  const baseFmt = (pixmapFormat || 'RGB565').toUpperCase();
+  const baseFmt = (pixmapFormat || 'RGB565').replace(/^(RLE_|QOI_)/i, '').toUpperCase();
   const opaqueFormats = new Set(['RGB565', 'RGB332', 'RGB888']);
   const isOpaqueFmt = opaqueFormats.has(baseFmt);
 
@@ -2999,6 +2999,15 @@ function drawExtImg(surf, imgData, w, h, rotation, scaleUniform, pivotX, pivotY,
         case 'ARGB8888':
           aa = a;
           break;
+        case 'ARGB8565':
+        case 'ARGB565': {
+          const v = (((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
+          rr = ((v >> 11) & 0x1F) << 3;
+          gg = ((v >> 5) & 0x3F) << 2;
+          bb = (v & 0x1F) << 3;
+          aa = a;
+          break;
+        }
         default:
           aa = 255;
       }
@@ -3050,6 +3059,15 @@ function drawExtImg(surf, imgData, w, h, rotation, scaleUniform, pivotX, pivotY,
         b5 = (b >> 3);
         g6 = (g >> 2);
         r5 = (r >> 3);
+        alpha = a;
+        break;
+      }
+      case 'ARGB8565':
+      case 'ARGB565': {
+        const v = (((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
+        b5 = v & 0x1F;
+        g6 = (v >> 5) & 0x3F;
+        r5 = (v >> 11) & 0x1F;
         alpha = a;
         break;
       }
@@ -3196,15 +3214,15 @@ function drawPixmap(surf, x, y, destW, destH, imgData, fmt, alpha, radius = 0) {
   // 16 位色深下每个 sgl_color_t 占 2 字节，不按 pixmap 格式解码。
   // 这意味着只有 RGB565（2字节）能正确显示，其他格式都会颜色错乱——
   // 这正是 SGL 仿真的实际行为，设计器必须一致才能 WYSIWYG。
-  const baseFmt = (fmt || 'RGB565').replace(/^RLE_/, '').toUpperCase();
+  const baseFmt = (fmt || 'RGB565').replace(/^(RLE_|QOI_)/i, '').toUpperCase();
 
   // 是否含 alpha 通道（用于非 Alpha 格式的黑色背景预乘）
-  const alphaFormats = new Set(['ARGB2222', 'ARGB4444', 'ARGB8888']);
+  const alphaFormats = new Set(['ARGB2222', 'ARGB4444', 'ARGB8888', 'ARGB8565', 'ARGB565']);
   const hasAlpha = alphaFormats.has(baseFmt);
 
   // 先把 ImageData 按 pixmap 格式 encode 成字节数组（与 main.rs convert_image_to_pixmap 一致）
   const bytesPerPixel = {
-    'RGB332': 1, 'ARGB2222': 1, 'RGB565': 2, 'ARGB4444': 2, 'RGB888': 3, 'ARGB8888': 4
+    'RGB332': 1, 'ARGB2222': 1, 'RGB565': 2, 'ARGB4444': 2, 'RGB888': 3, 'ARGB8565': 3, 'ARGB565': 3, 'ARGB8888': 4
   }[baseFmt] || 2;
   const pixmapBytes = new Uint8Array(srcW * srcH * bytesPerPixel);
   let writeOff = 0;
@@ -3252,6 +3270,14 @@ function drawPixmap(surf, x, y, destW, destH, imgData, fmt, alpha, radius = 0) {
           pixmapBytes[writeOff++] = r;
           pixmapBytes[writeOff++] = a;
           break;
+        case 'ARGB8565':
+        case 'ARGB565': {
+          const v = (((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
+          pixmapBytes[writeOff++] = v & 0xFF;
+          pixmapBytes[writeOff++] = (v >> 8) & 0xFF;
+          pixmapBytes[writeOff++] = a;
+          break;
+        }
         default:
           pixmapBytes[writeOff++] = 0;
           pixmapBytes[writeOff++] = 0;
@@ -3389,6 +3415,15 @@ function drawPixmap(surf, x, y, destW, destH, imgData, fmt, alpha, radius = 0) {
               r = pixmapBytes[byteOffset + 2];
               pixAlpha = pixmapBytes[byteOffset + 3];
               break;
+            case 'ARGB8565':
+            case 'ARGB565': {
+              const v = pixmapBytes[byteOffset] | (pixmapBytes[byteOffset + 1] << 8);
+              r = ((v >> 11) & 0x1F) << 3;
+              g = ((v >> 5) & 0x3F) << 2;
+              b = (v & 0x1F) << 3;
+              pixAlpha = pixmapBytes[byteOffset + 2];
+              break;
+            }
             default:
               r = g = b = 0;
           }
@@ -3561,14 +3596,15 @@ function blendPixelRGB565TwoStep(surf, x, y, fg, pix_opa, global_alpha) {
  */
 // ============================================================
 // drawImg - SGL img 控件渲染（移植自 sgl_img.c）
-// img 控件支持全部12种pixmap格式（含RLE），使用decode_pixel按格式解码
+// img 控件支持全部 pixmap 格式（含 RLE / ARGB8565），使用 decode_pixel 按格式解码
 // 1:1像素映射，无缩放
 // ============================================================
 function drawImg(surf, x, y, imgData, fmt, alpha) {
   if (!imgData || alpha <= 0) return;
   // img 控件不支持RLE压缩格式（rle_decompress_line需要状态机，设计器简化处理）
   // 对于RLE格式，设计器按基础格式解码显示（与SGL仿真不完全一致，但可预览）
-  const baseFmt = (fmt || 'RGB565').replace(/^RLE_/, '').toUpperCase();
+  // QOI_RGB565：SGL 解码未完整，预览按 RGB565 处理
+  const baseFmt = (fmt || 'RGB565').replace(/^(RLE_|QOI_)/i, '').toUpperCase();
   const srcW = imgData.width;
   const srcH = imgData.height;
   const srcData = imgData.data;
@@ -3624,6 +3660,15 @@ function drawImg(surf, x, y, imgData, fmt, alpha) {
         case 'ARGB8888':
           aa = a;
           break;
+        case 'ARGB8565':
+        case 'ARGB565': {
+          const v = (((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
+          rr = ((v >> 11) & 0x1F) << 3;
+          gg = ((v >> 5) & 0x3F) << 2;
+          bb = (v & 0x1F) << 3;
+          aa = a;
+          break;
+        }
         default:
           aa = 255;
       }
@@ -3675,6 +3720,15 @@ function drawImg(surf, x, y, imgData, fmt, alpha) {
         b5 = (b >> 3);
         g6 = (g >> 2);
         r5 = (r >> 3);
+        alpha = a;
+        break;
+      }
+      case 'ARGB8565':
+      case 'ARGB565': {
+        const v = (((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
+        b5 = v & 0x1F;
+        g6 = (v >> 5) & 0x3F;
+        r5 = (v >> 11) & 0x1F;
         alpha = a;
         break;
       }

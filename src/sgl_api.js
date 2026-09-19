@@ -49,11 +49,11 @@ function _isFontMatched(family, fonts) {
 }
 
 // 解析控件实际使用的字体路径（与放置规则、后端 collect_fonts 对齐）：
-//   - 未设置 / default → ''，使用系统/SGL 默认字体（不生成自定义字模、不 set_font）
+//   - 未设置 / 内置字体 → ''，不生成自定义字模
 //   - 已设置但不在项目字体资源中 → ''，避免引用不存在的字模
 //   - 已设置且匹配 → 返回资源中的规范 path（优先相对路径）
 export function resolveEffectiveFontFamily(family, fonts) {
-  if (!family || family === 'default') return '';
+  if (!family || isBuiltinFontFamily(family)) return '';
   const f = fonts || _codegenContextFonts || [];
   if (f.length === 0) return '';
   const famNorm = String(family).replace(/\\/g, '/').trim();
@@ -72,6 +72,49 @@ export function resolveEffectiveFontFamily(family, fonts) {
       || (pathNorm && famNorm.endsWith('/' + pathNorm.split('/').slice(-2).join('/')));
   });
   return hit ? (hit.path || hit.name || '') : '';
+}
+
+/** SGL 库内置 ASCII 字体（与 CONFIG_SGL_FONT_* / sgl_font.h 符号一致） */
+export const SGL_BUILTIN_FONTS = [
+  { id: 'consolas14', label: 'Consolas14', configKey: 'font_consolas14', height: 14 },
+  { id: 'consolas23', label: 'Consolas23', configKey: 'font_consolas23', height: 23 },
+  { id: 'consolas24', label: 'Consolas24', configKey: 'font_consolas24', height: 24 },
+  { id: 'consolas32', label: 'Consolas32', configKey: 'font_consolas32', height: 32 },
+  { id: 'consolas24_compress', label: 'Consolas24 Compress', configKey: 'font_consolas24_compress', height: 25 },
+  { id: 'song23', label: 'Song23', configKey: 'font_song23', height: 23 },
+];
+
+/** 控件 fontFamily 是否指向 SGL 内置字体（含旧值 default → consolas14） */
+export function isBuiltinFontFamily(family) {
+  return !!resolveBuiltinFont(family);
+}
+
+/** 解析内置字体条目；default 兼容为 consolas14 */
+export function resolveBuiltinFont(family) {
+  if (!family) return null;
+  if (family === 'default') {
+    return SGL_BUILTIN_FONTS.find(f => f.id === 'consolas14') || null;
+  }
+  const bare = String(family).startsWith('builtin:')
+    ? String(family).slice('builtin:'.length)
+    : String(family);
+  return SGL_BUILTIN_FONTS.find(f => f.id === bare) || null;
+}
+
+/** 内置字体在生成代码中的 C 符号名 */
+export function getBuiltinFontSymbol(family) {
+  const hit = resolveBuiltinFont(family);
+  return hit ? hit.id : null;
+}
+
+/** @deprecated 使用 getBuiltinFontSymbol；保留兼容 */
+export function getBuiltinDefaultFontId() {
+  return 'consolas14';
+}
+
+/** 控件 fontFamily 存值：builtin:<id> */
+export function builtinFontFamilyValue(id) {
+  return `builtin:${id}`;
 }
 
 // ============ 对齐方式 ============
@@ -175,6 +218,14 @@ export const SGL_WIDGET_TYPES = [
     defaultSize: [80, 80],
     properties: ['fillColor', 'borderColor', 'borderWidth', 'alpha', 'vertices', 'text', 'textColor', 'fontFamily', 'fontSize', 'fontBpp', 'fontGlyphExtra', 'fontIncludeAscii', 'fontGlyphRanges', 'fontSpacing', 'fontSmartMono', 'locked']
   },
+  {
+    type: 'curve',
+    name: '曲线',
+    icon: '<svg viewBox="0 0 24 24"><path d="M3 18 Q8 4 12 12 T21 6"/></svg>',
+    category: 'basic',
+    defaultSize: [200, 100],
+    properties: ['curveType', 'points', 'color', 'thickness', 'alpha', 'locked']
+  },
 
   // ============ 按钮与交互 ============
   {
@@ -267,7 +318,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><rect x="2" y="9" width="20" height="6" rx="3"/><rect x="2" y="9" width="13" height="6" rx="3"/></svg>',
     category: 'display',
     defaultSize: [180, 20],
-    properties: ['value', 'fillColor', 'trackColor', 'borderColor', 'borderWidth', 'radius', 'fillGap', 'fillRadius', 'fillWidth', 'trackAlpha', 'fillAlpha', 'pixmap', 'pixmapFormat', 'alpha', 'locked']
+    properties: ['value', 'fillColor', 'trackColor', 'borderColor', 'borderWidth', 'radius', 'fillGap', 'fillRadius', 'fillWidth', 'trackAlpha', 'fillAlpha', 'pixmap', 'pixmapFormat', 'locked']
   },
   {
     type: 'bar',
@@ -275,7 +326,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><rect x="4" y="4" width="6" height="16" rx="1"/><rect x="14" y="10" width="6" height="10" rx="1"/></svg>',
     category: 'display',
     defaultSize: [60, 100],
-    properties: ['value', 'barColor', 'barHatColor', 'bgColor', 'borderColor', 'borderWidth', 'radius', 'barWidth', 'barNum', 'barMode', 'barHatHeight', 'direct', 'alpha', 'pixmap', 'pixmapFormat', 'locked']
+    properties: ['value', 'barColor', 'bgColor', 'borderColor', 'borderWidth', 'radius', 'direct', 'alpha', 'pixmap', 'pixmapFormat', 'locked']
   },
   {
     type: 'gauge',
@@ -325,7 +376,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="7" y1="7" x2="7" y2="7.01"/></svg>',
     category: 'special',
     defaultSize: [240, 160],
-    properties: ['titleText', 'titleTextColor', 'msgText', 'msgColor', 'leftBtnText', 'leftBtnColor', 'leftBtnTextColor', 'rightBtnText', 'rightBtnColor', 'rightBtnTextColor', 'bgColor', 'borderColor', 'borderWidth', 'radius', 'titleHeight', 'msgOffsetX', 'msgOffsetY', 'msgLineMargin', 'mainAlpha', 'borderAlpha', 'pixmap', 'fontSize', 'fontFamily', 'fontBpp', 'fontGlyphExtra', 'fontIncludeAscii', 'fontGlyphRanges', 'fontSpacing', 'fontSmartMono', 'alpha', 'locked']
+    properties: ['titleText', 'titleTextColor', 'msgText', 'msgColor', 'leftBtnText', 'leftBtnColor', 'leftBtnTextColor', 'rightBtnText', 'rightBtnColor', 'rightBtnTextColor', 'bgColor', 'borderColor', 'borderWidth', 'radius', 'titleHeight', 'msgOffsetX', 'msgOffsetY', 'msgLineMargin', 'mainAlpha', 'borderAlpha', 'pixmap', 'pixmapFormat', 'exitAnswer', 'fontSize', 'fontFamily', 'fontBpp', 'fontGlyphExtra', 'fontIncludeAscii', 'fontGlyphRanges', 'fontSpacing', 'fontSmartMono', 'alpha', 'locked']
   },
   {
     type: 'viewlist',
@@ -352,6 +403,14 @@ export const SGL_WIDGET_TYPES = [
     properties: ['options', 'optionDynamic', 'visibleRows', 'infiniteMode', 'textColor', 'selectedColor', 'bgColor', 'borderColor', 'borderWidth', 'radius', 'fontSize', 'fontFamily', 'fontBpp', 'fontGlyphExtra', 'fontIncludeAscii', 'fontGlyphRanges', 'fontSpacing', 'fontSmartMono', 'alpha', 'locked']
   },
   {
+    type: 'stepper',
+    name: '步进器',
+    icon: '<svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="10" rx="2"/><line x1="6" y1="10" x2="6" y2="14"/><line x1="4" y1="12" x2="8" y2="12"/><line x1="16" y1="12" x2="20" y2="12"/></svg>',
+    category: 'interactive',
+    defaultSize: [160, 36],
+    properties: ['value', 'step', 'minValue', 'maxValue', 'decimals', 'wrap', 'bgColor', 'btnColor', 'textColor', 'signColor', 'borderColor', 'radius', 'fontSize', 'fontFamily', 'fontBpp', 'fontGlyphExtra', 'fontIncludeAscii', 'fontGlyphRanges', 'fontSpacing', 'fontSmartMono', 'locked']
+  },
+  {
     type: 'box',
     name: '容器盒',
     icon: '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><rect x="6" y="6" width="12" height="12" rx="1"/></svg>',
@@ -366,6 +425,22 @@ export const SGL_WIDGET_TYPES = [
     category: 'special',
     defaultSize: [240, 180],
     properties: ['titleText', 'titleBgColor', 'titleTextColor', 'closeBtnColor', 'bgColor', 'borderColor', 'borderWidth', 'radius', 'titleHeight', 'titleAlign', 'pixmap', 'pixmapFormat', 'fontSize', 'fontFamily', 'fontBpp', 'fontGlyphExtra', 'fontIncludeAscii', 'fontGlyphRanges', 'fontSpacing', 'fontSmartMono', 'alpha', 'locked']
+  },
+  {
+    type: 'tabview',
+    name: '标签页',
+    icon: '<svg viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="14" rx="1"/><path d="M3 6 V4 H9 V6"/><path d="M10 6 V4 H16 V6"/></svg>',
+    category: 'special',
+    defaultSize: [280, 200],
+    properties: ['tabs', 'activeTab', 'barHeight', 'bgColor', 'barColor', 'tabColor', 'tabActiveColor', 'textColor', 'textActiveColor', 'borderColor', 'borderWidth', 'radius', 'alpha', 'pageBgColors', 'pageAlphas', 'pagePixmaps', 'fontSize', 'fontFamily', 'fontBpp', 'fontGlyphExtra', 'fontIncludeAscii', 'fontGlyphRanges', 'fontSpacing', 'fontSmartMono', 'pixmap', 'pixmapFormat', 'locked']
+  },
+  {
+    type: 'scrollview',
+    name: '滚动视图',
+    icon: '<svg viewBox="0 0 24 24"><rect x="4" y="3" width="14" height="18" rx="1"/><line x1="20" y1="6" x2="20" y2="18"/><line x1="19" y1="9" x2="21" y2="9"/></svg>',
+    category: 'special',
+    defaultSize: [160, 200],
+    properties: ['contentHeight', 'bgColor', 'borderColor', 'borderWidth', 'radius', 'alpha', 'pixmap', 'pixmapFormat', 'locked']
   },
   {
     type: 'qrcode',
@@ -390,7 +465,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><polyline points="4,18 8,10 12,14 16,6 20,12"/></svg>',
     category: 'display',
     defaultSize: [200, 120],
-    properties: ['chartType', 'bgColor', 'bgAlpha', 'borderColor', 'minValue', 'maxValue', 'autoScale', 'showYLabels', 'gridColor', 'gridDashed', 'textColor', 'fontSize', 'fontFamily', 'fontBpp', 'fontGlyphExtra', 'fontIncludeAscii', 'fontGlyphRanges', 'fontSpacing', 'fontSmartMono', 'seriesCount', 'seriesData', 'seriesColors', 'seriesLineAlpha', 'seriesLineWidth', 'xLabels', 'barSpacing', 'categoryGap', 'orientation', 'openAnim', 'openAnimDir', 'openAnimDuration', 'startAngle', 'innerRadiusRate', 'radius', 'sliceAlpha', 'smooth', 'legendEnable', 'legendPos', 'legendDir', 'legendTextColor', 'legendAreaSize', 'legendAlpha', 'legendBoxSize', 'legendPadding', 'legendItemGap', 'legendBg', 'legendBgColor', 'legendBorderColor', 'sliceCount', 'sliceValues', 'sliceColors', 'sliceLabels', 'alpha', 'locked']
+    properties: ['chartType', 'bgColor', 'bgAlpha', 'borderColor', 'minValue', 'maxValue', 'autoScale', 'axisStep', 'axisTicks', 'showYLabels', 'gridColor', 'gridDashed', 'plotAreaRel', 'textColor', 'fontSize', 'fontFamily', 'fontBpp', 'fontGlyphExtra', 'fontIncludeAscii', 'fontGlyphRanges', 'fontSpacing', 'fontSmartMono', 'seriesCount', 'seriesData', 'seriesColors', 'seriesMode', 'seriesFill', 'seriesFillAlpha', 'seriesPointStyle', 'seriesLabels', 'seriesLineAlpha', 'seriesLineWidth', 'xLabels', 'barSpacing', 'categoryGap', 'orientation', 'openAnim', 'openAnimDir', 'openAnimDuration', 'startAngle', 'innerRadiusRate', 'radius', 'sliceAlpha', 'smooth', 'legendEnable', 'legendPos', 'legendDir', 'legendTextColor', 'legendAreaSize', 'legendAlpha', 'legendBoxSize', 'legendPadding', 'legendItemGap', 'legendBg', 'legendBgColor', 'legendBorderColor', 'sliceCount', 'sliceValues', 'sliceColors', 'sliceLabels', 'alpha', 'locked']
   },
   {
     type: 'canvas',
@@ -414,7 +489,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><polygon points="8,4 20,12 8,20"/></svg>',
     category: 'special',
     defaultSize: [48, 48],
-    properties: ['pixmap', 'alpha', 'locked']
+    properties: ['pixmap', 'pixmapFormat', 'alpha', 'locked']
   },
   {
     type: 'statusbar',
@@ -430,7 +505,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/></svg>',
     category: 'special',
     defaultSize: [240, 320],
-    properties: ['iconSize', 'gridCol', 'gridRow', 'marginLeft', 'marginTop', 'marginRight', 'marginBottom', 'labelColor', 'navigbarColor', 'currentPage', 'fontFamily', 'fontSize', 'fontBpp', 'fontGlyphExtra', 'fontIncludeAscii', 'fontGlyphRanges', 'fontSpacing', 'fontSmartMono', 'locked']
+    properties: ['iconSize', 'gridCol', 'gridRow', 'marginLeft', 'marginTop', 'marginRight', 'marginBottom', 'apps', 'labelColor', 'navigbarColor', 'currentPage', 'fontFamily', 'fontSize', 'fontBpp', 'fontGlyphExtra', 'fontIncludeAscii', 'fontGlyphRanges', 'fontSpacing', 'fontSmartMono', 'locked']
   },
   {
     type: 'analogclock',
@@ -438,7 +513,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><line x1="12" y1="12" x2="12" y2="7"/><line x1="12" y1="12" x2="16" y2="12"/></svg>',
     category: 'display',
     defaultSize: [100, 100],
-    properties: ['hour', 'minute', 'second', 'hourPtrColor', 'minPtrColor', 'secPtrColor', 'scaleColor', 'textColor', 'hubColor', 'bgColor', 'borderColor', 'borderWidth', 'hourPtrWidth', 'minPtrWidth', 'secPtrWidth', 'scaleWidth', 'scaleLength', 'hubRadius', 'alpha', 'locked']
+    properties: ['hour', 'minute', 'second', 'hourPtrColor', 'minPtrColor', 'secPtrColor', 'scaleColor', 'textColor', 'hubColor', 'bgColor', 'borderWidth', 'hourPtrWidth', 'minPtrWidth', 'secPtrWidth', 'scaleWidth', 'scaleLength', 'hubRadius', 'fontSize', 'fontFamily', 'fontBpp', 'fontGlyphExtra', 'fontIncludeAscii', 'fontGlyphRanges', 'fontSpacing', 'fontSmartMono', 'alpha', 'locked']
   },
   {
     type: 'img_ext',
@@ -446,7 +521,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><polyline points="4,18 9,13 13,17 17,12 20,15"/></svg>',
     category: 'image',
     defaultSize: [100, 100],
-    properties: ['pixmap', 'pixmapFormat', 'rotation', 'scaleUniform', 'pivotX', 'pivotY', 'readOps', 'alpha', 'locked']
+    properties: ['pixmap', 'pixmapFormat', 'rotation', 'scaleUniform', 'scaleX', 'scaleY', 'pivotX', 'pivotY', 'readOps', 'alpha', 'locked']
   },
   {
     type: 'img',
@@ -454,7 +529,7 @@ export const SGL_WIDGET_TYPES = [
     icon: '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><polyline points="4,18 9,13 13,17 17,12 20,15"/></svg>',
     category: 'image',
     defaultSize: [100, 100],
-    properties: ['pixmap', 'pixmapFormat', 'readOps', 'alpha', 'locked']
+    properties: ['pixmap', 'pixmapFormat', 'pixmapNum', 'pixmapIndex', 'autoRefresh', 'readOps', 'alpha', 'locked']
   },
   {
     type: 'arc_label',
@@ -590,7 +665,7 @@ export const PROP_META = {
   showVScrollbar: { label: '显示垂直滚动条', type: 'bool' },
   showHScrollbar: { label: '显示水平滚动条', type: 'bool' },
   knobMargin: { label: '旋钮边距', type: 'number', min: -20, max: 20 },
-  pixmapFormat: { label: '图片格式', type: 'select', options: [['RGB565', 'RGB565 (16-bit)'], ['ARGB4444', 'ARGB4444 (16-bit+透明度)'], ['RGB888', 'RGB888 (24-bit)'], ['ARGB8888', 'ARGB8888 (32-bit+透明度)'], ['RGB332', 'RGB332 (8-bit)'], ['ARGB2222', 'ARGB2222 (8-bit+透明度)'], ['RLE_RGB565', 'RLE_RGB565 (压缩16-bit)'], ['RLE_ARGB4444', 'RLE_ARGB4444 (压缩16-bit+透明度)'], ['RLE_RGB888', 'RLE_RGB888 (压缩24-bit)'], ['RLE_ARGB8888', 'RLE_ARGB8888 (压缩32-bit+透明度)'], ['RLE_RGB332', 'RLE_RGB332 (压缩8-bit)'], ['RLE_ARGB2222', 'RLE_ARGB2222 (压缩8-bit+透明度)']] },
+  pixmapFormat: { label: '图片格式', type: 'select', options: [['RGB565', 'RGB565 (16-bit)'], ['ARGB4444', 'ARGB4444 (16-bit+透明度)'], ['ARGB8565', 'ARGB8565 (24-bit A8+RGB565)'], ['RGB888', 'RGB888 (24-bit)'], ['ARGB8888', 'ARGB8888 (32-bit+透明度)'], ['RGB332', 'RGB332 (8-bit)'], ['ARGB2222', 'ARGB2222 (8-bit+透明度)'], ['QOI_RGB565', 'QOI_RGB565 (QOI压缩16-bit)'], ['RLE_RGB565', 'RLE_RGB565 (压缩16-bit)'], ['RLE_ARGB4444', 'RLE_ARGB4444 (压缩16-bit+透明度)'], ['RLE_RGB888', 'RLE_RGB888 (压缩24-bit)'], ['RLE_ARGB8888', 'RLE_ARGB8888 (压缩32-bit+透明度)'], ['RLE_RGB332', 'RLE_RGB332 (压缩8-bit)'], ['RLE_ARGB2222', 'RLE_ARGB2222 (压缩8-bit+透明度)']] },
   hubRadius: { label: '中心点半径', type: 'number', min: 0, max: 50 },
   mode: { label: '弧形模式', type: 'select', options: [[0, '普通'], [1, '圆环'], [2, '普通平滑'], [3, '圆环平滑']] },
   startAngle: { label: '起始角度', type: 'number', min: 0, max: 360 },
@@ -733,6 +808,34 @@ export const PROP_META = {
   itemMarginY: { label: '项目垂直边距', type: 'number', min: 0, max: 50 },
   locked: { label: '锁定控件', type: 'bool' },
   vertices: { label: '顶点坐标', type: 'text', placeholder: '格式: x1,y1;x2,y2;x3,y3...' },
+  step: { label: '步进值', type: 'number', min: 1 },
+  decimals: { label: '小数位数', type: 'number', min: 0, max: 4 },
+  wrap: { label: '边界回绕', type: 'bool' },
+  signColor: { label: '符号颜色', type: 'color' },
+  tabs: { label: '标签标题', type: 'text', placeholder: '每行一个，最多8个' },
+  activeTab: { label: '当前标签', type: 'number', min: 0, max: 7 },
+  barHeight: { label: '标签栏高度', type: 'number', min: 0, max: 100 },
+  tabColor: { label: '标签颜色', type: 'color' },
+  tabActiveColor: { label: '活动标签颜色', type: 'color' },
+  pageBgColors: { label: '页背景色', type: 'text', placeholder: '用 ; 分隔，对应每个标签页' },
+  pageAlphas: { label: '页透明度', type: 'text', placeholder: '用 ; 分隔，如: 255;200' },
+  pagePixmaps: { label: '页背景图', type: 'text', placeholder: '用 ; 分隔图片路径，对应每个标签页' },
+  apps: { label: '应用列表', type: 'text', placeholder: '每行: 名称 或 名称,图标路径' },
+  scaleX: { label: 'X缩放系数', type: 'number', min: -128, max: 127 },
+  scaleY: { label: 'Y缩放系数', type: 'number', min: -128, max: 127 },
+  seriesMode: { label: '系列模式', type: 'text', placeholder: '用 ; 分隔: 0=折线 1=散点 2=折线+点' },
+  seriesFill: { label: '系列填充', type: 'text', placeholder: '用 ; 分隔: 0/1' },
+  seriesFillAlpha: { label: '系列填充透明度', type: 'text', placeholder: '用 ; 分隔，如: 80;120' },
+  seriesPointStyle: { label: '点样式', type: 'text', placeholder: '用 ; 分隔: 形状,半径 如 1,3;2,4' },
+  seriesLabels: { label: '系列标签', type: 'text', placeholder: '用 ; 分隔，如: A;B' },
+  axisStep: { label: 'Y轴步长', type: 'number', min: 0, max: 100000 },
+  axisTicks: { label: '显示刻度线', type: 'bool' },
+  plotAreaRel: { label: '绘图区相对矩形', type: 'text', placeholder: 'left,top,width,height（像素）' },
+  textActiveColor: { label: '活动文字颜色', type: 'color' },
+  tabIndex: { label: '所属标签页', type: 'number', min: 0, max: 7 },
+  contentHeight: { label: '内容高度', type: 'number', min: 0 },
+  curveType: { label: '曲线类型', type: 'select', options: [['quad', '二次贝塞尔'], ['cubic', '三次贝塞尔']] },
+  points: { label: '控制点', type: 'text', placeholder: '归一化0-255: x0,y0;x1,y1;...' },
   eventCb: { label: '事件回调函数', type: 'text' },
   textarea: { label: '文本缓冲区变量', type: 'text' },
   painterCb: { label: '绘制回调函数', type: 'text', placeholder: '例如: my_canvas_painter' },
@@ -857,6 +960,7 @@ export const WIDGET_EVENTS = {
   arc: [],
   line: [],
   polygon: [],
+  curve: ['onClicked'],
   // 交互组件
   button: ['onPressed', 'onReleased', 'onClicked', 'onLongClicked'],
   switch: ['onPressed', 'onClicked'],
@@ -866,6 +970,7 @@ export const WIDGET_EVENTS = {
   keyboard: ['onPressed', 'onReleased', 'onKeyRight', 'onKeyEnter'],
   dropdown: ['onClicked', 'onReleased', 'onMoveUp', 'onMoveDown', 'onKeyEnter'],
   roller: ['onClicked', 'onReleased', 'onMoveUp', 'onMoveDown', 'onKeyEnter'],
+  stepper: ['onPressed', 'onReleased', 'onClicked'],
   // 文本组件
   label: [],
   textbox: ['onPressed', 'onReleased', 'onFocused', 'onUnfocused', 'onMoveUp', 'onMoveDown'],
@@ -887,6 +992,8 @@ export const WIDGET_EVENTS = {
   msgbox: ['onPressed', 'onReleased', 'onKeyLeft', 'onKeyRight', 'onKeyEnter'],
   box: ['onPressed', 'onReleased', 'onMoveUp', 'onMoveDown', 'onMoveLeft', 'onMoveRight'],
   win: ['onPressed', 'onClicked'],
+  tabview: ['onPressed', 'onReleased', 'onClicked'],
+  scrollview: ['onPressed', 'onReleased', 'onMoveUp', 'onMoveDown'],
   canvas: [],
   '2dball': [],
   sprite: [],
@@ -899,11 +1006,11 @@ export const WIDGET_EVENTS = {
 
 // ============ 组件分类 ============
 export const WIDGET_CATEGORIES = [
-  { id: 'basic', name: '基础图形', types: ['rect', 'rect_ext', 'circle', 'ring', 'arc', 'line', 'polygon'] },
-  { id: 'interactive', name: '交互组件', types: ['button', 'switch', 'checkbox', 'slider', 'numberkbd', 'keyboard', 'dropdown', 'roller'] },
+  { id: 'basic', name: '基础图形', types: ['rect', 'rect_ext', 'circle', 'ring', 'arc', 'line', 'polygon', 'curve'] },
+  { id: 'interactive', name: '交互组件', types: ['button', 'switch', 'checkbox', 'slider', 'numberkbd', 'keyboard', 'dropdown', 'roller', 'stepper'] },
   { id: 'text', name: '文本组件', types: ['label', 'textbox', 'textline', 'textlist', 'arc_label'] },
   { id: 'display', name: '显示组件', types: ['progress', 'bar', 'gauge', 'spectrum', 'battery', 'led', 'viewlist', 'qrcode', 'scope', 'chart', 'analogclock'] },
-  { id: 'special', name: '特殊组件', types: ['msgbox', 'box', 'win', 'canvas', '2dball', 'sprite', 'statusbar', 'launcher'] },
+  { id: 'special', name: '特殊组件', types: ['msgbox', 'box', 'win', 'tabview', 'scrollview', 'canvas', '2dball', 'sprite', 'statusbar', 'launcher'] },
   { id: 'image', name: '图像组件', types: ['icon', 'img_ext', 'img'] }
 ];
 
@@ -926,13 +1033,15 @@ export function createWidgetDefaults(type) {
     case 'circle':
       return { ...base, color: '#FFFFFF', borderColor: '#000000', borderWidth: 2, radius: 0, xOffset: 0, yOffset: 0, pixmap: '', pixmapFormat: 'RGB565' };
     case 'ring':
-      return { ...base, color: '#FFFFFF', radiusIn: -1, radiusOut: -1 };
+      return { ...base, color: '#FFFFFF', radiusIn: -1, radiusOut: -1, alpha: 255 };
     case 'arc':
       return { ...base, color: '#000000', bgColor: '#FFFFFF', alpha: 255, mode: 0, radiusIn: -1, radiusOut: -1, startAngle: 0, endAngle: 360 };
     case 'line':
       return { ...base, color: '#000000', lineWidth: 1, x1: 0, y1: 0, x2: null, y2: null, dashed: false, dashLen: 0, gapLen: 0 };
     case 'polygon':
       return { ...base, fillColor: '#7F7F7F', borderColor: '#000000', borderWidth: 1, alpha: 255, vertices: '40,5;70,30;60,75;20,75;10,30', text: '', textColor: '#000000', fontFamily: '', fontSize: 14, fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false };
+    case 'curve':
+      return { ...base, curveType: 'quad', points: '0,255;128,0;255,255', color: '#FF0000', thickness: 3, alpha: 255 };
     case 'button':
       return { ...base, text: '按钮', color: '#ffffff', textColor: '#000000', borderColor: '#000000', borderWidth: 2, radius: 0, align: 'CENTER', fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, pixmap: '', pixmapFormat: 'RGB565' };
     case 'switch':
@@ -954,9 +1063,9 @@ export function createWidgetDefaults(type) {
     case 'textlist':
       return { ...base, options: '选项1\n选项2\n选项3', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, fontSize: 12, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, textColor: '#000000', selectedColor: '#808080', pixmap: '' };
     case 'progress':
-      return { ...base, value: 50, fillColor: '#FFFFFF', trackColor: '#000000', borderColor: '#000000', borderWidth: 2, radius: 0, fillGap: 4, fillRadius: 0, fillWidth: 4 };
+      return { ...base, value: 50, fillColor: '#FFFFFF', trackColor: '#000000', borderColor: '#000000', borderWidth: 2, radius: 0, fillGap: 4, fillRadius: 0, fillWidth: 4, trackAlpha: 255, fillAlpha: 255 };
     case 'bar':
-      return { ...base, value: 50, barColor: '#000000', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 2, radius: 0, barWidth: 20, barNum: 10, barMode: 0, barHatColor: '#808080', barHatHeight: 2, direct: 0 };
+      return { ...base, value: 50, barColor: '#000000', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 2, radius: 0, direct: 0 };
     case 'gauge':
       return { ...base, value: 0, arcColor: '#FFFFFF', scaleColor: '#FFFFFF', pointerColor: '#FF0000', hubColor: '#FFFFFF', bgColor: '#000000', startAngle: 30, endAngle: 330, arcWidth: 2, scaleWidth: 1, scaleLength: 0, pointerWidth: 2, hubRadius: 0, scaleStart: 0, scaleStep: 10, scaleAngle: 15, textInterval: 3, scaleWarning: 32767, fontSize: 12, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false };
     case 'spectrum':
@@ -968,7 +1077,7 @@ export function createWidgetDefaults(type) {
     case 'led':
       return { ...base, onColor: '#FFFFFF', offColor: '#000000', bgColor: '#000000', radius: 10, status: false };
     case 'msgbox':
-      return { ...base, titleText: 'Message Box', titleTextColor: '#000000', msgText: 'NULL', msgColor: '#000000', leftBtnText: 'YES', leftBtnColor: '#C7C7C7', leftBtnTextColor: '#000000', rightBtnText: 'NO', rightBtnColor: '#C7C7C7', rightBtnTextColor: '#000000', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 2, radius: 0, titleHeight: 0, msgOffsetX: 0, msgOffsetY: 0, msgLineMargin: 1, mainAlpha: 255, borderAlpha: 255, pixmap: '', fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, exitAnswer: false };
+      return { ...base, titleText: 'Message Box', titleTextColor: '#000000', msgText: 'NULL', msgColor: '#000000', leftBtnText: 'YES', leftBtnColor: '#C7C7C7', leftBtnTextColor: '#000000', rightBtnText: 'NO', rightBtnColor: '#C7C7C7', rightBtnTextColor: '#000000', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 2, radius: 0, titleHeight: 0, msgOffsetX: 0, msgOffsetY: 0, msgLineMargin: 1, mainAlpha: 255, borderAlpha: 255, pixmap: '', pixmapFormat: 'RGB565', fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, exitAnswer: false };
     case 'viewlist':
       return { ...base, bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, itemHeight: 20, itemMarginX: 1, itemMarginY: 1, pixmap: '' };
     case 'dropdown':
@@ -983,7 +1092,7 @@ export function createWidgetDefaults(type) {
       // 对齐 sgl_scope_create 默认：v_min=-32768, v_max=32767, border_width=1, bg=黑
       return { ...base, channelCount: 1, channelWaveformColors: '#00FF00', dataBuffer: '', waveColorsBuffer: '', vMin: -32768, vMax: 32767, bgColor: '#000000', gridColor: '#808080', borderColor: '#000000', borderWidth: 1, alpha: 255 };
     case 'chart':
-      return { ...base, chartType: 'linechart', bgColor: '#000000', bgAlpha: 255, borderColor: '#000000', borderWidth: 2, radius: 0, minValue: 0, maxValue: 100, autoScale: true, showYLabels: true, gridColor: '#3C3C3C', gridDashed: true, textColor: '#000000', fontSize: 12, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, seriesCount: 1, seriesData: '10,40,25,60,45,80,35', seriesColors: '#FFFFFF', seriesLineAlpha: '255', seriesLineWidth: '2', xLabels: '', startAngle: 0, innerRadiusRate: 0, radius: 0, smooth: false, sliceAlpha: '', legendEnable: true, legendPos: 2, legendDir: 0, legendTextColor: '#000000', legendAreaSize: 60, legendAlpha: 255, legendBoxSize: 10, legendPadding: 4, legendItemGap: 4, legendBg: false, legendBgColor: '#000000', legendBorderColor: '#000000', sliceCount: 3, sliceValues: '30;50;20', sliceColors: '#ff0000;#00ff00;#0000ff', sliceLabels: 'A;B;C', barSpacing: 4, categoryGap: 10, orientation: 0, openAnim: false, openAnimDir: 0, openAnimDuration: 600, alpha: 255 };
+      return { ...base, chartType: 'linechart', bgColor: '#000000', bgAlpha: 255, borderColor: '#000000', borderWidth: 2, radius: 0, minValue: 0, maxValue: 100, autoScale: true, axisStep: 0, axisTicks: false, showYLabels: true, gridColor: '#3C3C3C', gridDashed: true, plotAreaRel: '', textColor: '#000000', fontSize: 12, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, seriesCount: 1, seriesData: '10,40,25,60,45,80,35', seriesColors: '#FFFFFF', seriesMode: '', seriesFill: '', seriesFillAlpha: '', seriesPointStyle: '', seriesLabels: '', seriesLineAlpha: '255', seriesLineWidth: '2', xLabels: '', startAngle: 0, innerRadiusRate: 0, radius: 0, smooth: false, sliceAlpha: '', legendEnable: true, legendPos: 2, legendDir: 0, legendTextColor: '#000000', legendAreaSize: 60, legendAlpha: 255, legendBoxSize: 10, legendPadding: 4, legendItemGap: 4, legendBg: false, legendBgColor: '#000000', legendBorderColor: '#000000', sliceCount: 3, sliceValues: '30;50;20', sliceColors: '#ff0000;#00ff00;#0000ff', sliceLabels: 'A;B;C', barSpacing: 4, categoryGap: 10, orientation: 0, openAnim: false, openAnimDir: 0, openAnimDuration: 600, alpha: 255 };
     case 'canvas':
       return { ...base, painterCb: '', privateData: '' };
     case '2dball':
@@ -993,15 +1102,21 @@ export function createWidgetDefaults(type) {
     case 'statusbar':
       return { ...base, bgColor: '#141414', bgAlpha: 128, radius: 0, leftMargin: 5, rightMargin: 5, slotSpace: 4, leftSlots: '', rightSlots: '', slotColor: '#ffffff', slotAlpha: 255, fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false };
     case 'launcher':
-      return { ...base, iconSize: 48, gridCol: 4, gridRow: 5, marginLeft: 20, marginTop: 40, marginRight: 20, marginBottom: 60, labelColor: '#e4e4e7', navigbarColor: '#F5DEB3', currentPage: 0, fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false };
+      return { ...base, iconSize: 48, gridCol: 4, gridRow: 5, marginLeft: 20, marginTop: 40, marginRight: 20, marginBottom: 60, apps: 'App1\nApp2\nApp3\nApp4', labelColor: '#e4e4e7', navigbarColor: '#F5DEB3', currentPage: 0, fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false };
     case 'roller':
       return { ...base, options: '选项1\n选项2\n选项3', optionDynamic: false, visibleRows: 3, infiniteMode: false, textColor: '#000000', selectedColor: '#808080', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false };
+    case 'stepper':
+      return { ...base, value: 50, step: 1, minValue: 0, maxValue: 100, decimals: 0, wrap: false, bgColor: '#FFFFFF', btnColor: '#E0E0E0', textColor: '#000000', signColor: '#000000', borderColor: '#000000', radius: 4, fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false };
+    case 'tabview':
+      return { ...base, tabs: '标签1\n标签2', activeTab: 0, barHeight: 0, bgColor: '#FFFFFF', barColor: '#F0F0F0', tabColor: '#E0E0E0', tabActiveColor: '#FFFFFF', textColor: '#666666', textActiveColor: '#000000', borderColor: '#000000', borderWidth: 1, radius: 0, alpha: 255, pageBgColors: '', pageAlphas: '', pagePixmaps: '', fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, pixmap: '', pixmapFormat: 'RGB565' };
+    case 'scrollview':
+      return { ...base, contentHeight: 0, bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, alpha: 255, pixmap: '', pixmapFormat: 'RGB565' };
     case 'analogclock':
-      return { ...base, hourPtrColor: '#ffffff', minPtrColor: '#FFFFFF', secPtrColor: '#FF0000', scaleColor: '#FFFFFF', textColor: '#FFFFFF', hubColor: '#FF0000', bgColor: '#000000', borderColor: '#FFFFFF', borderWidth: 0, hour: 0, minute: 0, second: 0, hourPtrWidth: 5, minPtrWidth: 5, secPtrWidth: 2, scaleWidth: 1, scaleLength: 8, hubRadius: 6, fontFamily: '', fontSize: 12, fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false };
+      return { ...base, hourPtrColor: '#ffffff', minPtrColor: '#FFFFFF', secPtrColor: '#FF0000', scaleColor: '#FFFFFF', textColor: '#FFFFFF', hubColor: '#FF0000', bgColor: '#000000', borderWidth: 0, hour: 0, minute: 0, second: 0, hourPtrWidth: 5, minPtrWidth: 5, secPtrWidth: 2, scaleWidth: 1, scaleLength: 8, hubRadius: 6, fontFamily: '', fontSize: 12, fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false };
     case 'img_ext':
-      return { ...base, pixmap: '', pixmapFormat: 'RGB565', rotation: 0, scaleUniform: 0, pivotX: '', pivotY: '', readOps: '', alpha: 255 };
+      return { ...base, pixmap: '', pixmapFormat: 'RGB565', rotation: 0, scaleUniform: 0, scaleX: 0, scaleY: 0, pivotX: '', pivotY: '', readOps: '', alpha: 255 };
     case 'img':
-      return { ...base, pixmap: '', pixmapFormat: 'RGB565', readOps: '', alpha: 255 };
+      return { ...base, pixmap: '', pixmapFormat: 'RGB565', pixmapNum: 1, pixmapIndex: 0, autoRefresh: false, readOps: '', alpha: 255 };
     case 'arc_label':
       return { ...base, text: '标签', textColor: '#000000', bgFlag: false, bgColor: '#FFFFFF', radius: 0, align: 'CENTER', fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, angle: 0, offsetX: 0, offsetY: 0, textBuffer: '', textFmt: '', textFmtDynamic: '', alpha: 255 };
     case 'label_ext':
@@ -1020,6 +1135,7 @@ export const WIDGET_DEFAULTS = {
   arc: { color: '#000000', bgColor: '#FFFFFF', alpha: 255, mode: 0, radiusIn: -1, radiusOut: -1, startAngle: 0, endAngle: 360 },
   line: { color: '#000000', lineWidth: 1, x1: 0, y1: 0, x2: null, y2: null, dashed: false, dashLen: 0, gapLen: 0, alpha: 255 },
   polygon: { fillColor: '#7F7F7F', borderColor: '#000000', borderWidth: 1, alpha: 255, vertices: '40,5;70,30;60,75;20,75;10,30', text: '', textColor: '#000000', fontFamily: '', fontSize: 14, fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false },
+  curve: { curveType: 'quad', points: '0,255;128,0;255,255', color: '#FF0000', thickness: 3, alpha: 255 },
   button: { text: '按钮', color: '#ffffff', textColor: '#000000', borderColor: '#000000', borderWidth: 2, radius: 0, align: 'CENTER', fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, alpha: 255, pixmap: '', pixmapFormat: 'RGB565' },
   switch: { status: false, onColor: '#FFFFFF', bgColor: '#000000', knobColor: '#808080', borderColor: '#000000', borderWidth: 2, radius: 0, knobMargin: 1, alpha: 255, pixmap: '', pixmapFormat: 'RGB565' },
   checkbox: { text: '选项', color: '#000000', textColor: '#000000', boxColor: '#2196F3', checkColor: '#FFFFFF', status: false, radius: 0, fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, alpha: 255 },
@@ -1030,8 +1146,8 @@ export const WIDGET_DEFAULTS = {
   textbox: { text: 'textbox', textColor: '#000000', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 10, fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, lineMargin: 1, pixmap: '', pixmapFormat: 'RGB565', alpha: 255 },
   textline: { text: 'textline', textColor: '#000000', bgColor: '#FFFFFF', bgTransparent: false, radius: 0, fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, edgeMargin: 0, lineMargin: 1, alpha: 255 },
   textlist: { options: '选项1\n选项2\n选项3', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, fontSize: 12, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, textColor: '#000000', selectedColor: '#808080', pixmap: '', alpha: 255 },
-  progress: { value: 50, fillColor: '#FFFFFF', fillAlpha: 255, trackColor: '#000000', trackAlpha: 255, borderColor: '#000000', borderWidth: 2, radius: 0, fillGap: 4, fillRadius: 0, fillWidth: 4, pixmap: '', pixmapFormat: 'RGB565', alpha: 255 },
-  bar: { value: 50, barColor: '#000000', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 2, radius: 0, barWidth: 20, barNum: 10, barMode: 0, barHatColor: '#808080', barHatHeight: 2, direct: 0, pixmap: '', pixmapFormat: 'RGB565', alpha: 255 },
+  progress: { value: 50, fillColor: '#FFFFFF', fillAlpha: 255, trackColor: '#000000', trackAlpha: 255, borderColor: '#000000', borderWidth: 2, radius: 0, fillGap: 4, fillRadius: 0, fillWidth: 4, pixmap: '', pixmapFormat: 'RGB565' },
+  bar: { value: 50, barColor: '#000000', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 2, radius: 0, direct: 0, pixmap: '', pixmapFormat: 'RGB565', alpha: 255 },
   gauge: { value: 0, arcColor: '#FFFFFF', scaleColor: '#FFFFFF', pointerColor: '#FF0000', hubColor: '#FFFFFF', bgColor: '#000000', startAngle: 30, endAngle: 330, arcWidth: 2, scaleWidth: 1, scaleLength: 0, pointerWidth: 2, hubRadius: 0, scaleStart: 0, scaleStep: 10, scaleAngle: 15, textInterval: 3, scaleWarning: 32767, fontSize: 12, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, alpha: 255 },
   spectrum: { barColor: '#000000', barHatColor: '#808080', barNum: 12, barMode: 2, barHatHeight: 3, barValues: '', alpha: 255 },
   battery: { level: 100, fillColor: '', lowColor: '#E74C3C', mediumColor: '#F39C12', highColor: '#2ECC71', bgColor: '#1E1E1E', borderColor: '#B4B4B4', vertical: true, charging: false, chargingColor: '#F1C40F', showPercentage: false, textColor: '#FFFFFF', fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, alpha: 140 },
@@ -1043,18 +1159,21 @@ export const WIDGET_DEFAULTS = {
   scroll: { color: '#FFFFFF', borderColor: '#000000', borderWidth: 2, radius: 0, width: 10, value: 0, direct: 1, hidden: false, bindTarget: '', alpha: 255 },
   box: { bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, scrollbarColor: '#C8C8C8', showVScrollbar: true, showHScrollbar: true, elasticUp: 0, elasticDown: 0, elasticLeft: 0, elasticRight: 0, pixmap: '', alpha: 255 },
   win: { titleText: '窗口标题', titleBgColor: '#808080', titleTextColor: '#000000', closeBtnColor: '#FF5A50', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 0, radius: 0, pixmap: '', pixmapFormat: 'RGB565', fontFamily: '', fontSize: 14, fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, titleHeight: 0, titleAlign: 'LEFT_MID', alpha: 255 },
+  tabview: { tabs: '标签1\n标签2', activeTab: 0, barHeight: 0, bgColor: '#FFFFFF', barColor: '#F0F0F0', tabColor: '#E0E0E0', tabActiveColor: '#FFFFFF', textColor: '#666666', textActiveColor: '#000000', borderColor: '#000000', borderWidth: 1, radius: 0, alpha: 255, pageBgColors: '', pageAlphas: '', pagePixmaps: '', fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, pixmap: '', pixmapFormat: 'RGB565' },
+  scrollview: { contentHeight: 0, bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, alpha: 255, pixmap: '', pixmapFormat: 'RGB565' },
   qrcode: { cellColor: '#000000', bgColor: '#ffffff', cellRadius: 0, qrText: 'hello', scale: 4, zone: 1, version: 5, ecc: 0, logo: '', pixmapFormat: 'RGB565', logoRadius: 0, alpha: 255 },
   scope: { channelCount: 1, channelWaveformColors: '#00FF00', dataBuffer: '', waveColorsBuffer: '', vMin: -32768, vMax: 32767, bgColor: '#000000', gridColor: '#808080', borderColor: '#000000', borderWidth: 1, alpha: 255 },
-  chart: { chartType: 'linechart', bgColor: '#000000', bgAlpha: 255, borderColor: '#000000', minValue: 0, maxValue: 100, autoScale: true, showYLabels: true, gridColor: '#3C3C3C', gridDashed: true, textColor: '#000000', fontSize: 12, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, seriesCount: 0, seriesData: '', seriesColors: '#FFFFFF', seriesLineAlpha: '', seriesLineWidth: '', xLabels: '', barSpacing: 4, categoryGap: 10, orientation: 0, openAnim: false, openAnimDir: 0, openAnimDuration: 600, startAngle: 0, innerRadiusRate: 0, radius: 0, sliceAlpha: '', smooth: false, legendEnable: true, legendPos: 2, legendDir: 0, legendTextColor: '#000000', legendAreaSize: 60, legendAlpha: 255, legendBoxSize: 10, legendPadding: 4, legendItemGap: 4, legendBg: false, legendBgColor: '#000000', legendBorderColor: '#808080', sliceCount: 3, sliceValues: '30;50;20', sliceColors: '#ff0000;#00ff00;#0000ff', sliceLabels: 'A;B;C', alpha: 255 },
+  chart: { chartType: 'linechart', bgColor: '#000000', bgAlpha: 255, borderColor: '#000000', minValue: 0, maxValue: 100, autoScale: true, axisStep: 0, axisTicks: false, showYLabels: true, gridColor: '#3C3C3C', gridDashed: true, plotAreaRel: '', textColor: '#000000', fontSize: 12, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, seriesCount: 0, seriesData: '', seriesColors: '#FFFFFF', seriesMode: '', seriesFill: '', seriesFillAlpha: '', seriesPointStyle: '', seriesLabels: '', seriesLineAlpha: '', seriesLineWidth: '', xLabels: '', barSpacing: 4, categoryGap: 10, orientation: 0, openAnim: false, openAnimDir: 0, openAnimDuration: 600, startAngle: 0, innerRadiusRate: 0, radius: 0, sliceAlpha: '', smooth: false, legendEnable: true, legendPos: 2, legendDir: 0, legendTextColor: '#000000', legendAreaSize: 60, legendAlpha: 255, legendBoxSize: 10, legendPadding: 4, legendItemGap: 4, legendBg: false, legendBgColor: '#000000', legendBorderColor: '#808080', sliceCount: 3, sliceValues: '30;50;20', sliceColors: '#ff0000;#00ff00;#0000ff', sliceLabels: 'A;B;C', alpha: 255 },
   canvas: { painterCb: '', privateData: '', locked: false },
   '2dball': { color: '#FFFFFF', bgColor: '#000000', radius: 20, alpha: 255 },
   sprite: { pixmap: '', pixmapFormat: 'ARGB4444', alpha: 255 },
   statusbar: { bgColor: '#000000', bgAlpha: 128, radius: 0, leftMargin: 5, rightMargin: 5, slotSpace: 4, leftSlots: '', rightSlots: '', slotColor: '#FFFFFF', slotAlpha: 255, fontFamily: '', fontSize: 14, fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, alpha: 255 },
-  launcher: { iconSize: 48, gridCol: 4, gridRow: 5, marginLeft: 20, marginTop: 40, marginRight: 20, marginBottom: 60, labelColor: '#e4e4e7', navigbarColor: '#F5DEB3', currentPage: 0, fontFamily: '', fontSize: 14, fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, alpha: 255 },
+  launcher: { iconSize: 48, gridCol: 4, gridRow: 5, marginLeft: 20, marginTop: 40, marginRight: 20, marginBottom: 60, apps: '', labelColor: '#e4e4e7', navigbarColor: '#F5DEB3', currentPage: 0, fontFamily: '', fontSize: 14, fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, alpha: 255 },
   roller: { options: '选项1\n选项2\n选项3', optionDynamic: false, visibleRows: 3, infiniteMode: false, textColor: '#000000', selectedColor: '#808080', bgColor: '#FFFFFF', borderColor: '#000000', borderWidth: 1, radius: 0, fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, alpha: 255 },
-  analogclock: { hourPtrColor: '#ffffff', minPtrColor: '#FFFFFF', secPtrColor: '#FF0000', scaleColor: '#FFFFFF', textColor: '#FFFFFF', hubColor: '#FF0000', bgColor: '#000000', borderColor: '#FFFFFF', borderWidth: 0, hour: 0, minute: 0, second: 0, hourPtrWidth: 5, minPtrWidth: 5, secPtrWidth: 2, scaleWidth: 1, scaleLength: 8, hubRadius: 6, fontFamily: '', fontSize: 12, fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, alpha: 255 },
-  img_ext: { pixmap: '', pixmapFormat: 'RGB565', rotation: 0, scaleUniform: 0, pivotX: '', pivotY: '', readOps: '', alpha: 255 },
-  img: { pixmap: '', pixmapFormat: 'RGB565', readOps: '', alpha: 255 },
+  stepper: { value: 50, step: 1, minValue: 0, maxValue: 100, decimals: 0, wrap: false, bgColor: '#FFFFFF', btnColor: '#E0E0E0', textColor: '#000000', signColor: '#000000', borderColor: '#000000', radius: 4, fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false },
+  analogclock: { hourPtrColor: '#ffffff', minPtrColor: '#FFFFFF', secPtrColor: '#FF0000', scaleColor: '#FFFFFF', textColor: '#FFFFFF', hubColor: '#FF0000', bgColor: '#000000', borderWidth: 0, hour: 0, minute: 0, second: 0, hourPtrWidth: 5, minPtrWidth: 5, secPtrWidth: 2, scaleWidth: 1, scaleLength: 8, hubRadius: 6, fontFamily: '', fontSize: 12, fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, alpha: 255 },
+  img_ext: { pixmap: '', pixmapFormat: 'RGB565', rotation: 0, scaleUniform: 0, scaleX: 0, scaleY: 0, pivotX: '', pivotY: '', readOps: '', alpha: 255 },
+  img: { pixmap: '', pixmapFormat: 'RGB565', pixmapNum: 1, pixmapIndex: 0, autoRefresh: false, readOps: '', alpha: 255 },
   arc_label: { text: '标签', textColor: '#000000', bgFlag: false, bgColor: '#FFFFFF', radius: 0, align: 'CENTER', fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, angle: 0, offsetX: 0, offsetY: 0, textBuffer: '', textFmt: '', textFmtDynamic: '', alpha: 255 },
   label_ext: { text: '标签文本', textColor: '#000000', bgColor: 'transparent', bgFlag: false, align: 'CENTER', fontSize: 14, fontFamily: '', fontBpp: 4, fontGlyphExtra: '', fontIncludeAscii: false, fontGlyphRanges: '', fontSpacing: 0, fontSmartMono: false, textOffsetX: 0, textOffsetY: 0, textRotation: 0, radius: 0, textBuffer: '', textFmt: '', textFmtDynamic: '', alpha: 255 },
 };
@@ -1069,6 +1188,28 @@ function pixmapVarName(pixmapPath, format) {
   const base = pixmapPath.replace(/[/\\]/g, '/').split('/').pop().replace(/\.[^.]+$/, '');
   const sanitized = base.replace(/[^a-zA-Z0-9_]/g, '_').replace(/^[0-9]/, '_$&');
   return 'pixmap_' + sanitized + '_' + (format || 'RGB565');
+}
+
+/** 解析 launcher apps 文本：每行「名称」或「名称,图标路径」/「名称|图标路径」 */
+export function parseLauncherApps(appsStr) {
+  return String(appsStr || '')
+    .split(/[\n;]+/)
+    .map(s => s.trim())
+    .filter(Boolean)
+    .map(line => {
+      let name = line;
+      let icon = '';
+      const pipe = line.indexOf('|');
+      const comma = line.indexOf(',');
+      let sep = -1;
+      if (pipe >= 0 && (comma < 0 || pipe < comma)) sep = pipe;
+      else if (comma >= 0) sep = comma;
+      if (sep >= 0) {
+        name = line.slice(0, sep).trim();
+        icon = line.slice(sep + 1).trim();
+      }
+      return { name: name || 'App', icon };
+    });
 }
 
 function iconVarName(iconPath) {
@@ -1099,6 +1240,14 @@ function getWidgetTextForFont(w) {
   // dropdown/roller/textlist 使用 options 作为显示文本
   if (w.type === 'dropdown' || w.type === 'roller' || w.type === 'textlist') {
     return w.options;
+  }
+  // tabview 使用 tabs 标题
+  if (w.type === 'tabview') {
+    return w.tabs;
+  }
+  // stepper 显示数值，字模至少包含数字与符号
+  if (w.type === 'stepper') {
+    return '0123456789.-';
   }
   // statusbar 使用所有槽位文本拼接作为显示文本
   if (w.type === 'statusbar') {
@@ -1140,15 +1289,20 @@ function getWidgetTextForFont(w) {
 }
 
 function shouldGenerateFont(w, defaults) {
+  // SGL 内置字体 → 生成 set_font(&consolas14 等)
+  if (isBuiltinFontFamily(w.fontFamily)) {
+    const textSource = getWidgetTextForFont(w);
+    return textSource === undefined || hasVisibleText(textSource);
+  }
   let effFamily = resolveEffectiveFontFamily(w.fontFamily);
   const textSource = getWidgetTextForFont(w);
   // battery 显示百分比但未选字体时，回退到项目第一个字体资源
-  if ((!effFamily || effFamily === 'default') && w.type === 'battery' && w.showPercentage) {
+  if (!effFamily && w.type === 'battery' && w.showPercentage) {
     const fonts = _codegenContextFonts || [];
     if (fonts.length > 0 && fonts[0].path) effFamily = fonts[0].path;
   }
-  // 空字体 = 系统默认字体，不生成 set_font
-  if (!effFamily || effFamily === 'default') return false;
+  // 空字体 = 未设置，不生成 set_font
+  if (!effFamily) return false;
   return shouldGenerateValue(w.fontSize, defaults, 'fontSize') && w.fontSize != null &&
          (textSource === undefined || hasVisibleText(textSource));
 }
@@ -1177,6 +1331,25 @@ export function generateSGLCode(project) {
   // 先设置字体 Fallback 上下文，供后续 shouldGenerateFont / getFontId 等内部函数使用
   const projectFonts = (project && project.resources && project.resources.fonts) || [];
   setCodegenFontContext(projectFonts);
+
+  // 任一控件使用内置字体时，确保对应 CONFIG_SGL_FONT_* 已启用
+  if (project && project.sgl_config && Array.isArray(project.pages)) {
+    const enabled = new Set();
+    for (const page of project.pages) {
+      if (!Array.isArray(page.widgets)) continue;
+      for (const w of page.widgets) {
+        const bif = resolveBuiltinFont(w.fontFamily);
+        if (!bif) continue;
+        if (!project.sgl_config[bif.configKey]) {
+          project.sgl_config[bif.configKey] = 1;
+          enabled.add(bif.id);
+        }
+      }
+    }
+    enabled.forEach(id => {
+      codegenLog(`已自动启用 CONFIG_SGL_FONT_${id.toUpperCase()}（存在使用该内置字体的控件）`, 'info');
+    });
+  }
 
   try {
 
@@ -1278,6 +1451,18 @@ export function generateSGLCode(project) {
         }
         if (w.type === 'icon' && shouldGeneratePixmap(w.icon)) {
           iconExterns.add(iconVarName(w.icon));
+        }
+        if (w.type === 'launcher') {
+          parseLauncherApps(w.apps).forEach(app => {
+            if (shouldGeneratePixmap(app.icon)) {
+              pixmapExterns.add(pixmapVarName(app.icon, w.pixmapFormat || 'RGB565'));
+            }
+          });
+        }
+        if (w.type === 'tabview' && w.pagePixmaps) {
+          String(w.pagePixmaps).split(';').map(s => s.trim()).filter(Boolean).forEach(p => {
+            if (shouldGeneratePixmap(p)) pixmapExterns.add(pixmapVarName(p, w.pixmapFormat || 'RGB565'));
+          });
         }
       });
     }
@@ -1445,8 +1630,12 @@ export function generateSGLCode(project) {
         createFn = w.chartType === 'barchart' ? 'sgl_barchart_create' : (w.chartType === 'piechart' ? 'sgl_piechart_create' : 'sgl_linechart_create');
       }
       // 父对象：如果有 parentId 则使用父控件对象，否则使用页面对象
+      // tabview 子控件挂到对应 page（add_tab 返回值），而非 tabview 本身
       const parentWidget = w.parentId ? page.widgets.find(p => p.id === w.parentId) : null;
-      const parentObjId = parentWidget ? getWidgetVarName(parentWidget) : `page_${pageId}`;
+      let parentObjId = parentWidget ? getWidgetVarName(parentWidget) : `page_${pageId}`;
+      if (parentWidget && parentWidget.type === 'tabview') {
+        parentObjId = `${getWidgetVarName(parentWidget)}_page${Math.max(0, Number(w.tabIndex) || 0)}`;
+      }
       code += `    /* ${getWidgetDisplayName(w.type)} */\n`;
       if (w.type === 'launcher') {
         // launcher 的 create 函数需要 attr、font、apps、app_num、cb 五个参数
@@ -1455,9 +1644,11 @@ export function generateSGLCode(project) {
         const compress = effectiveFontCompress(project);
         const spacing = Math.max(0, w.fontSpacing || 0);
         const smartMono = !!w.fontSmartMono;
-        const fontId = (launcherFont && launcherFont !== 'default' && w.fontSize != null)
-          ? getFontId(launcherFont, w.fontSize, w.fontBpp || 4, compress, spacing, smartMono)
-          : 'sgl_font_default';
+        const builtinSym = getBuiltinFontSymbol(w.fontFamily);
+        const fontId = builtinSym
+          || ((launcherFont && w.fontSize != null)
+            ? getFontId(launcherFont, w.fontSize, w.fontBpp || 4, compress, spacing, smartMono)
+            : getBuiltinDefaultFontId());
         code += `    sgl_launcher_attr_t ${attrName} = {\n`;
         code += `        .icon_size = ${w.iconSize || 48},\n`;
         code += `        .margin_left = ${w.marginLeft || 0},\n`;
@@ -1467,7 +1658,21 @@ export function generateSGLCode(project) {
         code += `        .grid_row = ${w.gridRow || 4},\n`;
         code += `        .grid_col = ${w.gridCol || 3},\n`;
         code += `    };\n`;
-        code += `    sgl_obj_t *${objId} = sgl_launcher_create(&${attrName}, &${fontId}, NULL, 0, NULL);\n`;
+        const launcherApps = parseLauncherApps(w.apps);
+        const appsVar = `${objId}_apps`;
+        if (launcherApps.length > 0) {
+          code += `    static const sgl_launcher_app_t ${appsVar}[] = {\n`;
+          launcherApps.forEach(app => {
+            const iconRef = shouldGeneratePixmap(app.icon)
+              ? `&${pixmapVarName(app.icon, w.pixmapFormat || 'RGB565')}`
+              : 'NULL';
+            code += `        { .start = NULL, .exit = NULL, .private_data = NULL, .icon = ${iconRef}, .name = "${escapeStr(app.name)}", .radius = 8 },\n`;
+          });
+          code += `    };\n`;
+          code += `    sgl_obj_t *${objId} = sgl_launcher_create(&${attrName}, &${fontId}, ${appsVar}, ${launcherApps.length}, NULL);\n`;
+        } else {
+          code += `    sgl_obj_t *${objId} = sgl_launcher_create(&${attrName}, &${fontId}, NULL, 0, NULL);\n`;
+        }
       } else {
         code += `    sgl_obj_t *${objId} = ${createFn}(${parentObjId});\n`;
       }
@@ -1494,11 +1699,41 @@ export function generateSGLCode(project) {
         code += `    ${setter}\n`;
       });
 
+      // tabview：在 create/pos/size/setters 之后添加标签页（SGL 要求先设尺寸再 add_tab）
+      if (w.type === 'tabview') {
+        const tabTitles = String(w.tabs || '')
+          .split(/[\n;]+/)
+          .map(t => t.trim())
+          .filter(t => t)
+          .slice(0, 8);
+        tabTitles.forEach((title, i) => {
+          code += `    sgl_obj_t *${objId}_page${i} = sgl_tabview_add_tab(${objId}, "${escapeStr(title)}");\n`;
+        });
+        const pageBgs = String(w.pageBgColors || '').split(';').map(s => s.trim());
+        const pageAlphas = String(w.pageAlphas || '').split(';').map(s => s.trim());
+        const pagePixmaps = String(w.pagePixmaps || '').split(';').map(s => s.trim());
+        tabTitles.forEach((_, i) => {
+          const pageObj = `${objId}_page${i}`;
+          if (pageBgs[i]) {
+            code += `    sgl_tabview_page_set_bg_color(${pageObj}, ${hexToSglColor(pageBgs[i])});\n`;
+          }
+          if (pageAlphas[i] !== undefined && pageAlphas[i] !== '') {
+            code += `    sgl_tabview_page_set_alpha(${pageObj}, ${Number(pageAlphas[i]) || 255});\n`;
+          }
+          if (pagePixmaps[i] && shouldGeneratePixmap(pagePixmaps[i])) {
+            code += `    sgl_tabview_page_set_pixmap(${pageObj}, &${pixmapVarName(pagePixmaps[i], w.pixmapFormat || 'RGB565')});\n`;
+          }
+        });
+        if (w.activeTab != null && w.activeTab !== '') {
+          code += `    sgl_tabview_set_active(${objId}, ${Number(w.activeTab) || 0});\n`;
+        }
+      }
+
       // viewlist 的子控件：在子控件属性设置完成后，追加到 viewlist 中作为列表项
       // SGL sgl_viewlist_append_obj 会自动设置子控件的位置/宽高（按 item_height 垂直堆叠）
       // 必须在子控件所有属性设置之后调用，否则 append_obj 内部设置的 pos/size 会被后续 setter 覆盖
       if (parentWidget && parentWidget.type === 'viewlist') {
-        code += `    sgl_viewlist_append_obj(${parentObjId}, ${objId});\n`;
+        code += `    sgl_viewlist_append_obj(${getWidgetVarName(parentWidget)}, ${objId});\n`;
       }
 
       // 事件回调绑定：如果有事件，绑定包装函数（包装函数名仍基于唯一 id，避免重名）
@@ -1572,8 +1807,9 @@ export function collectFonts(project) {
 }
 
 // ============ 字体缺失校验 ============
-// 需要显示文本的控件必须设置有效字体资源：
-//   - 未设置 / default → 记入 issues（生成 .c 时警告，运行时拦截）
+// 需要显示文本的控件必须设置有效字体：
+//   - 未设置（空）→ 记入 issues
+//   - SGL 内置字体 → 合法
 //   - 已设置但不在资源中 → 记入 issues
 export function validateProjectFonts(project) {
   const issues = [];
@@ -1594,15 +1830,18 @@ export function validateProjectFonts(project) {
       if (textSource !== undefined && !hasVisibleText(textSource)) return;
 
       const raw = w.fontFamily;
-      if (!raw || raw === 'default') {
+      // SGL 内置 ASCII 字模，视为已设置
+      if (isBuiltinFontFamily(raw)) return;
+
+      if (!raw) {
         issues.push({
           page: page.name || '未命名页面',
           widget: `${typeDef.name || w.type} (${w.id})`,
           type: w.type,
           fontFamily: '',
           reason: fonts.length === 0
-            ? '未设置字体：请先在资源面板添加字体，并在控件上选择字体'
-            : '未设置字体：请在属性面板为控件选择字体文件'
+            ? '未设置字体：请选择 SGL 内置字体或在资源面板添加字体'
+            : '未设置字体：请在属性面板选择 SGL 内置字体或项目字体'
         });
         return;
       }
@@ -1744,8 +1983,10 @@ function getFontId(family, size, bpp, compress = 0, spacing = 0, smartMono = fal
 }
 
 function getWidgetFontId(w, project) {
+  const builtinSym = getBuiltinFontSymbol(w.fontFamily);
+  if (builtinSym) return builtinSym;
   const fam = resolveEffectiveFontFamily(w.fontFamily);
-  if (!fam || fam === 'default') return null;
+  if (!fam) return null;
   const compress = effectiveFontCompress(project);
   const spacing = Math.max(0, w.fontSpacing || 0);
   const smartMono = !!w.fontSmartMono;
@@ -1886,7 +2127,11 @@ function getSglCreateFn(type) {
     'img_ext': 'sgl_img_ext_create',
     'img': 'sgl_img_create',
     'arc_label': 'sgl_arc_label_create',
-    'roller': 'sgl_roller_create'
+    'roller': 'sgl_roller_create',
+    'stepper': 'sgl_stepper_create',
+    'tabview': 'sgl_tabview_create',
+    'scrollview': 'sgl_scrollview_create',
+    'curve': 'sgl_curve_create'
   };
   return map[type] || 'sgl_rect_create';
 }
@@ -1946,8 +2191,17 @@ function getSglSetters(w, project) {
 
     case 'ring':
       if (shouldGenerateValue(w.color, defaults, 'color')) setters.push(`sgl_ring_set_color(${obj(w)}, ${hexToSglColor(w.color)});`);
-      if (shouldGenerateValue(w.radiusIn, defaults, 'radiusIn') || shouldGenerateValue(w.radiusOut, defaults, 'radiusOut')) {
-        setters.push(`sgl_ring_set_radius(${obj(w)}, ${w.radiusIn || 28}, ${w.radiusOut || 30});`);
+      // SGL: set_radius → circle_zoom(radius_out) + width=radius_out-radius_in
+      // 绘制时 radius_out = obj_width/2，radius_in = radius_out - width
+      // radiusIn/Out ≤0 或 -1 表示按控件尺寸自动（厚度默认 2，与 SGL create 默认 width=2 一致）
+      {
+        const rOut = (w.radiusOut != null && w.radiusOut > 0)
+          ? w.radiusOut
+          : Math.max(1, Math.trunc((w.width || 60) / 2));
+        const rIn = (w.radiusIn != null && w.radiusIn >= 0)
+          ? Math.min(w.radiusIn, rOut)
+          : Math.max(0, rOut - 2);
+        setters.push(`sgl_ring_set_radius(${obj(w)}, ${rIn}, ${rOut});`);
       }
       if (shouldGenerateValue(w.alpha, defaults, 'alpha')) setters.push(`sgl_ring_set_alpha(${obj(w)}, ${w.alpha});`);
       break;
@@ -2206,17 +2460,22 @@ function getSglSetters(w, project) {
       if (shouldGenerateValue(w.alpha, defaults, 'alpha')) setters.push(`sgl_battery_set_alpha(${obj(w)}, ${w.alpha});`);
       // 百分比文字必须 set_font：SGL 在 font==NULL 时回退 system font，而 demo 通常未设置 system font
       if (w.showPercentage) {
-        let fam = resolveEffectiveFontFamily(w.fontFamily);
-        if (!fam) {
-          const fonts = _codegenContextFonts || [];
-          if (fonts.length > 0) fam = fonts[0].path || fonts[0].name || '';
-        }
-        if (fam) {
-          const compress = effectiveFontCompress(project);
-          const spacing = Math.max(0, w.fontSpacing || 0);
-          const smartMono = !!w.fontSmartMono;
-          const fontId = getFontId(fam, w.fontSize || 14, w.fontBpp || 4, compress, spacing, smartMono);
-          setters.push(`sgl_battery_set_font(${obj(w)}, &${fontId});`);
+        const builtinSym = getBuiltinFontSymbol(w.fontFamily);
+        if (builtinSym) {
+          setters.push(`sgl_battery_set_font(${obj(w)}, &${builtinSym});`);
+        } else {
+          let fam = resolveEffectiveFontFamily(w.fontFamily);
+          if (!fam) {
+            const fonts = _codegenContextFonts || [];
+            if (fonts.length > 0) fam = fonts[0].path || fonts[0].name || '';
+          }
+          if (fam) {
+            const compress = effectiveFontCompress(project);
+            const spacing = Math.max(0, w.fontSpacing || 0);
+            const smartMono = !!w.fontSmartMono;
+            const fontId = getFontId(fam, w.fontSize || 14, w.fontBpp || 4, compress, spacing, smartMono);
+            setters.push(`sgl_battery_set_font(${obj(w)}, &${fontId});`);
+          }
         }
       } else if (shouldGenerateFont(w, defaults)) {
         const fontId = getWidgetFontId(w, project);
@@ -2618,10 +2877,52 @@ function getSglSetters(w, project) {
             if (chartType === 'barchart') {
               setters.push(`${prefix}_set_series_color(${obj(w)}, ${idx}, ${hexToSglColor(color)}, 255);`);
             } else {
+              const fillAlphas = String(w.seriesFillAlpha || '').split(';').map(s => s.trim());
+              const fillA = fillAlphas[idx] !== undefined && fillAlphas[idx] !== '' ? Number(fillAlphas[idx]) : 0;
               setters.push(`${prefix}_set_series_line_color(${obj(w)}, ${idx}, ${hexToSglColor(color)});`);
-              setters.push(`${prefix}_set_series_fill_color(${obj(w)}, ${idx}, ${hexToSglColor(color)}, 0);`);
+              setters.push(`${prefix}_set_series_fill_color(${obj(w)}, ${idx}, ${hexToSglColor(color)}, ${fillA});`);
             }
           });
+        }
+        if (shouldGenerateValue(w.seriesLabels, defaults, 'seriesLabels') && w.seriesLabels) {
+          w.seriesLabels.split(';').map(s => s.trim()).filter(s => s).forEach((label, idx) => {
+            setters.push(`${prefix}_set_series_label(${obj(w)}, ${idx}, "${escapeStr(label)}");`);
+          });
+        }
+        // line/bar 共有：轴步长、刻度、绘图区
+        if (shouldGenerateValue(w.axisStep, defaults, 'axisStep') && Number(w.axisStep) > 0) {
+          setters.push(`${prefix}_set_axis_step(${obj(w)}, ${axisY}, ${Number(w.axisStep)});`);
+        }
+        if (shouldGenerateValue(w.axisTicks, defaults, 'axisTicks')) {
+          setters.push(`${prefix}_enable_axis_ticks(${obj(w)}, ${axisY}, ${w.axisTicks ? 'true' : 'false'});`);
+          setters.push(`${prefix}_enable_axis_ticks(${obj(w)}, ${axisX}, ${w.axisTicks ? 'true' : 'false'});`);
+        }
+        if (shouldGenerateValue(w.plotAreaRel, defaults, 'plotAreaRel') && w.plotAreaRel) {
+          const parts = String(w.plotAreaRel).split(',').map(s => s.trim()).map(Number);
+          if (parts.length >= 4 && parts.every(n => Number.isFinite(n))) {
+            setters.push(`${prefix}_set_plot_area_rel(${obj(w)}, ${parts[0]}, ${parts[1]}, ${parts[2]}, ${parts[3]});`);
+          }
+        }
+        // linechart 专用：系列模式/填充/点样式
+        if (chartType === 'linechart') {
+          if (shouldGenerateValue(w.seriesMode, defaults, 'seriesMode') && w.seriesMode) {
+            w.seriesMode.split(';').map(s => s.trim()).filter(s => s !== '').forEach((mode, idx) => {
+              setters.push(`${prefix}_set_series_mode(${obj(w)}, ${idx}, ${Number(mode) || 0});`);
+            });
+          }
+          if (shouldGenerateValue(w.seriesFill, defaults, 'seriesFill') && w.seriesFill) {
+            w.seriesFill.split(';').map(s => s.trim()).filter(s => s !== '').forEach((en, idx) => {
+              const on = en === '1' || en === 'true' || en === 'True';
+              setters.push(`${prefix}_enable_series_fill(${obj(w)}, ${idx}, ${on ? 'true' : 'false'});`);
+            });
+          }
+          if (shouldGenerateValue(w.seriesPointStyle, defaults, 'seriesPointStyle') && w.seriesPointStyle) {
+            w.seriesPointStyle.split(';').map(s => s.trim()).filter(s => s).forEach((style, idx) => {
+              const [shape, radius] = style.split(',').map(s => s.trim());
+              setters.push(`${prefix}_set_series_point_style(${obj(w)}, ${idx}, ${Number(shape) || 1}, ${Number(radius) || 3});`);
+              setters.push(`${prefix}_enable_series_points(${obj(w)}, ${idx}, true);`);
+            });
+          }
         }
         if (chartType !== 'piechart' && shouldGenerateValue(w.xLabels, defaults, 'xLabels') && w.xLabels) {
           const labels = w.xLabels.split(';').map(s => `"${escapeStr(s.trim())}"`).filter(s => s !== '""');
@@ -2660,7 +2961,7 @@ function getSglSetters(w, project) {
     }
 
     case 'sprite':
-      if (shouldGeneratePixmap(w.pixmap)) setters.push(`sgl_sprite_set_pixmap(${obj(w)}, &${pixmapVarName(w.pixmap, 'ARGB4444')});`);
+      if (shouldGeneratePixmap(w.pixmap)) setters.push(`sgl_sprite_set_pixmap(${obj(w)}, &${pixmapVarName(w.pixmap, w.pixmapFormat || 'ARGB4444')});`);
       if (shouldGenerateValue(w.alpha, defaults, 'alpha')) setters.push(`sgl_sprite_set_alpha(${obj(w)}, ${w.alpha});`);
       break;
 
@@ -2687,6 +2988,93 @@ function getSglSetters(w, project) {
       if (shouldGenerateValue(w.alpha, defaults, 'alpha')) setters.push(`sgl_roller_set_alpha(${obj(w)}, ${w.alpha});`);
       break;
 
+    case 'stepper':
+      if (shouldGenerateFont(w, defaults)) {
+        const fontId = getWidgetFontId(w, project);
+        setters.push(`sgl_stepper_set_font(${obj(w)}, &${fontId});`);
+      }
+      if (shouldGenerateValue(w.value, defaults, 'value')) setters.push(`sgl_stepper_set_value(${obj(w)}, ${w.value});`);
+      if (shouldGenerateValue(w.step, defaults, 'step')) setters.push(`sgl_stepper_set_step(${obj(w)}, ${w.step});`);
+      if (shouldGenerateValue(w.minValue, defaults, 'minValue') || shouldGenerateValue(w.maxValue, defaults, 'maxValue')) {
+        setters.push(`sgl_stepper_set_range(${obj(w)}, ${w.minValue != null ? w.minValue : 0}, ${w.maxValue != null ? w.maxValue : 100});`);
+      }
+      if (shouldGenerateValue(w.decimals, defaults, 'decimals')) setters.push(`sgl_stepper_set_decimals(${obj(w)}, ${w.decimals});`);
+      if (shouldGenerateValue(w.wrap, defaults, 'wrap')) setters.push(`sgl_stepper_set_wrap(${obj(w)}, ${w.wrap ? 1 : 0});`);
+      if (shouldGenerateValue(w.bgColor, defaults, 'bgColor')) setters.push(`sgl_stepper_set_bg_color(${obj(w)}, ${hexToSglColor(w.bgColor)});`);
+      if (shouldGenerateValue(w.btnColor, defaults, 'btnColor')) setters.push(`sgl_stepper_set_btn_color(${obj(w)}, ${hexToSglColor(w.btnColor)});`);
+      if (shouldGenerateValue(w.textColor, defaults, 'textColor')) setters.push(`sgl_stepper_set_text_color(${obj(w)}, ${hexToSglColor(w.textColor)});`);
+      if (shouldGenerateValue(w.signColor, defaults, 'signColor')) setters.push(`sgl_stepper_set_sign_color(${obj(w)}, ${hexToSglColor(w.signColor)});`);
+      if (shouldGenerateValue(w.borderColor, defaults, 'borderColor')) setters.push(`sgl_stepper_set_border_color(${obj(w)}, ${hexToSglColor(w.borderColor)});`);
+      if (shouldGenerateValue(w.radius, defaults, 'radius')) setters.push(`sgl_stepper_set_radius(${obj(w)}, ${w.radius});`);
+      break;
+
+    case 'tabview':
+      // add_tab / set_active 在 generateSGLCode 中处理
+      if (shouldGenerateFont(w, defaults)) {
+        const fontId = getWidgetFontId(w, project);
+        setters.push(`sgl_tabview_set_font(${obj(w)}, &${fontId});`);
+      }
+      if (shouldGenerateValue(w.bgColor, defaults, 'bgColor')) setters.push(`sgl_tabview_set_bg_color(${obj(w)}, ${hexToSglColor(w.bgColor)});`);
+      if (shouldGenerateValue(w.barColor, defaults, 'barColor')) setters.push(`sgl_tabview_set_bar_color(${obj(w)}, ${hexToSglColor(w.barColor)});`);
+      if (shouldGenerateValue(w.tabColor, defaults, 'tabColor')) setters.push(`sgl_tabview_set_tab_color(${obj(w)}, ${hexToSglColor(w.tabColor)});`);
+      if (shouldGenerateValue(w.tabActiveColor, defaults, 'tabActiveColor')) setters.push(`sgl_tabview_set_tab_active_color(${obj(w)}, ${hexToSglColor(w.tabActiveColor)});`);
+      if (shouldGenerateValue(w.textColor, defaults, 'textColor')) setters.push(`sgl_tabview_set_text_color(${obj(w)}, ${hexToSglColor(w.textColor)});`);
+      if (shouldGenerateValue(w.textActiveColor, defaults, 'textActiveColor')) setters.push(`sgl_tabview_set_text_active_color(${obj(w)}, ${hexToSglColor(w.textActiveColor)});`);
+      if (shouldGenerateValue(w.barHeight, defaults, 'barHeight')) setters.push(`sgl_tabview_set_bar_height(${obj(w)}, ${w.barHeight});`);
+      if (shouldGenerateValue(w.borderColor, defaults, 'borderColor')) setters.push(`sgl_tabview_set_border_color(${obj(w)}, ${hexToSglColor(w.borderColor)});`);
+      if (shouldGenerateValue(w.borderWidth, defaults, 'borderWidth')) setters.push(`sgl_tabview_set_border_width(${obj(w)}, ${w.borderWidth});`);
+      if (shouldGenerateValue(w.radius, defaults, 'radius')) setters.push(`sgl_tabview_set_radius(${obj(w)}, ${w.radius});`);
+      if (shouldGenerateValue(w.alpha, defaults, 'alpha')) setters.push(`sgl_tabview_set_alpha(${obj(w)}, ${w.alpha});`);
+      if (shouldGeneratePixmap(w.pixmap)) setters.push(`sgl_tabview_set_pixmap(${obj(w)}, &${pixmapVarName(w.pixmap, w.pixmapFormat)});`);
+      break;
+
+    case 'scrollview':
+      if (w.contentHeight != null && Number(w.contentHeight) > 0) {
+        setters.push(`sgl_scrollview_set_content_height(${obj(w)}, ${Number(w.contentHeight)});`);
+      }
+      if (shouldGenerateValue(w.bgColor, defaults, 'bgColor')) setters.push(`sgl_scrollview_set_bg_color(${obj(w)}, ${hexToSglColor(w.bgColor)});`);
+      if (shouldGenerateValue(w.borderColor, defaults, 'borderColor')) setters.push(`sgl_scrollview_set_border_color(${obj(w)}, ${hexToSglColor(w.borderColor)});`);
+      if (shouldGenerateValue(w.borderWidth, defaults, 'borderWidth')) setters.push(`sgl_scrollview_set_border_width(${obj(w)}, ${w.borderWidth});`);
+      if (shouldGenerateValue(w.radius, defaults, 'radius')) setters.push(`sgl_scrollview_set_radius(${obj(w)}, ${w.radius});`);
+      if (shouldGenerateValue(w.alpha, defaults, 'alpha')) setters.push(`sgl_scrollview_set_alpha(${obj(w)}, ${w.alpha});`);
+      if (shouldGeneratePixmap(w.pixmap)) setters.push(`sgl_scrollview_set_pixmap(${obj(w)}, &${pixmapVarName(w.pixmap, w.pixmapFormat)});`);
+      break;
+
+    case 'curve': {
+      if (shouldGenerateValue(w.color, defaults, 'color')) setters.push(`sgl_curve_set_color(${obj(w)}, ${hexToSglColor(w.color)});`);
+      if (shouldGenerateValue(w.thickness, defaults, 'thickness')) setters.push(`sgl_curve_set_thickness(${obj(w)}, ${w.thickness});`);
+      if (shouldGenerateValue(w.alpha, defaults, 'alpha')) setters.push(`sgl_curve_set_alpha(${obj(w)}, ${w.alpha});`);
+      const pts = String(w.points || '')
+        .split(';')
+        .map(p => p.trim())
+        .filter(p => p)
+        .map(p => {
+          const [xs, ys] = p.split(',').map(s => s.trim());
+          const x = Math.max(0, Math.min(255, parseInt(xs, 10) || 0));
+          const y = Math.max(0, Math.min(255, parseInt(ys, 10) || 0));
+          return [x, y];
+        });
+      const isCubic = (w.curveType || 'quad') === 'cubic';
+      const n = pts.length;
+      if (n > 0) {
+        const flat = pts.flat();
+        if (!isCubic && n === 3) {
+          setters.push(`sgl_curve_set_quad(${obj(w)}, ${flat.join(', ')});`);
+        } else if (isCubic && n === 4) {
+          setters.push(`sgl_curve_set_cubic(${obj(w)}, ${flat.join(', ')});`);
+        } else if (!isCubic && n >= 3 && n % 2 === 1) {
+          const arrName = `${obj(w)}_pts`;
+          setters.push(`static const uint8_t ${arrName}[] = { ${flat.join(', ')} };`);
+          setters.push(`sgl_curve_set_quads(${obj(w)}, ${arrName}, ${n});`);
+        } else if (isCubic && n >= 4 && (n - 1) % 3 === 0) {
+          const arrName = `${obj(w)}_pts`;
+          setters.push(`static const uint8_t ${arrName}[] = { ${flat.join(', ')} };`);
+          setters.push(`sgl_curve_set_cubics(${obj(w)}, ${arrName}, ${n});`);
+        }
+      }
+      break;
+    }
+
     case 'analogclock':
       if (shouldGenerateFont(w, defaults)) {
         const fontId = getWidgetFontId(w, project);
@@ -2700,12 +3088,17 @@ function getSglSetters(w, project) {
       if (shouldGenerateValue(w.textColor, defaults, 'textColor')) setters.push(`sgl_analogclock_set_text_color(${obj(w)}, ${hexToSglColor(w.textColor)});`);
       if (shouldGenerateValue(w.hubColor, defaults, 'hubColor')) setters.push(`sgl_analogclock_set_hub_color(${obj(w)}, ${hexToSglColor(w.hubColor)});`);
       if (shouldGenerateValue(w.bgColor, defaults, 'bgColor')) setters.push(`sgl_analogclock_set_bg_color(${obj(w)}, ${hexToSglColor(w.bgColor)});`);
+      // border_color 在 SGL 绘制中未使用（边框环用 bg_color），仍保留 setter 以兼容未来修复
       if (shouldGenerateValue(w.borderColor, defaults, 'borderColor')) setters.push(`sgl_analogclock_set_border_color(${obj(w)}, ${hexToSglColor(w.borderColor)});`);
       if (shouldGenerateValue(w.borderWidth, defaults, 'borderWidth')) setters.push(`sgl_analogclock_set_border_width(${obj(w)}, ${w.borderWidth});`);
       if (shouldGenerateValue(w.hourPtrWidth, defaults, 'hourPtrWidth')) setters.push(`sgl_analogclock_set_hour_ptr_width(${obj(w)}, ${w.hourPtrWidth});`);
       if (shouldGenerateValue(w.minPtrWidth, defaults, 'minPtrWidth')) setters.push(`sgl_analogclock_set_min_ptr_width(${obj(w)}, ${w.minPtrWidth});`);
       if (shouldGenerateValue(w.secPtrWidth, defaults, 'secPtrWidth')) setters.push(`sgl_analogclock_set_sec_ptr_width(${obj(w)}, ${w.secPtrWidth});`);
       if (shouldGenerateValue(w.scaleWidth, defaults, 'scaleWidth')) setters.push(`sgl_analogclock_set_scale_width(${obj(w)}, ${w.scaleWidth});`);
+      // SGL 无公开 set_scale_length，结构体字段 scale_len 公开可写
+      if (shouldGenerateValue(w.scaleLength, defaults, 'scaleLength')) {
+        setters.push(`((sgl_analogclock_t *)${obj(w)})->scale_len = ${w.scaleLength}; sgl_obj_set_dirty(${obj(w)});`);
+      }
       if (shouldGenerateValue(w.hubRadius, defaults, 'hubRadius')) setters.push(`sgl_analogclock_set_hub_radius(${obj(w)}, ${w.hubRadius});`);
       if (shouldGenerateValue(w.alpha, defaults, 'alpha')) setters.push(`sgl_analogclock_set_alpha(${obj(w)}, ${w.alpha});`);
       break;
@@ -2748,11 +3141,17 @@ function getSglSetters(w, project) {
       }
       if (shouldGenerateValue(w.slotColor, defaults, 'slotColor') || shouldGenerateValue(w.slotAlpha, defaults, 'slotAlpha')) {
         const colorVal = hexToSglColor(w.slotColor);
-        const alphaVal = w.slotAlpha || 255;
-        for (let i = 0; i < 4; i++) setters.push(`sgl_statusbar_set_left_slot_color(${obj(w)}, ${i}, ${colorVal});`);
-        for (let i = 0; i < 8; i++) setters.push(`sgl_statusbar_set_right_slot_color(${obj(w)}, ${i}, ${colorVal});`);
-        for (let i = 0; i < 4; i++) setters.push(`sgl_statusbar_set_left_slot_alpha(${obj(w)}, ${i}, ${alphaVal});`);
-        for (let i = 0; i < 8; i++) setters.push(`sgl_statusbar_set_right_slot_alpha(${obj(w)}, ${i}, ${alphaVal});`);
+        const alphaVal = w.slotAlpha != null ? w.slotAlpha : 255;
+        const leftArr = (w.leftSlots || '').split(';').map(s => s.trim()).filter(s => s.length > 0);
+        const rightArr = (w.rightSlots || '').split(';').map(s => s.trim()).filter(s => s.length > 0);
+        for (let i = 0; i < leftArr.length && i < 4; i++) {
+          setters.push(`sgl_statusbar_set_left_slot_color(${obj(w)}, ${i}, ${colorVal});`);
+          setters.push(`sgl_statusbar_set_left_slot_alpha(${obj(w)}, ${i}, ${alphaVal});`);
+        }
+        for (let i = 0; i < rightArr.length && i < 8; i++) {
+          setters.push(`sgl_statusbar_set_right_slot_color(${obj(w)}, ${i}, ${colorVal});`);
+          setters.push(`sgl_statusbar_set_right_slot_alpha(${obj(w)}, ${i}, ${alphaVal});`);
+        }
       }
       break;
 
@@ -2796,7 +3195,9 @@ function getSglSetters(w, project) {
 
     case 'img':
       if (shouldGeneratePixmap(w.pixmap)) setters.push(`sgl_img_set_pixmap(${obj(w)}, &${pixmapVarName(w.pixmap, w.pixmapFormat || 'RGB565')});`);
-      if (w.pixmapNum != null && w.pixmapNum > 1) setters.push(`sgl_img_set_pixmap_num(${obj(w)}, ${w.pixmapNum}, false);`);
+      if (w.pixmapNum != null && w.pixmapNum > 1) {
+        setters.push(`sgl_img_set_pixmap_num(${obj(w)}, ${w.pixmapNum}, ${w.autoRefresh ? 'true' : 'false'});`);
+      }
       if (w.pixmapIndex != null) setters.push(`sgl_img_set_pixmap_index(${obj(w)}, ${w.pixmapIndex});`);
       if (w.readOps && String(w.readOps).trim()) setters.push(`sgl_img_set_read_ops(${obj(w)}, ${String(w.readOps).trim()});`);
       if (shouldGenerateValue(w.alpha, defaults, 'alpha')) setters.push(`sgl_img_set_alpha(${obj(w)}, ${w.alpha});`);

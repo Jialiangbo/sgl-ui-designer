@@ -417,6 +417,41 @@ struct Widget {
     navigbar_color: Option<String>,
     #[serde(default, rename = "currentPage")]
     current_page: Option<i32>,
+    // stepper / tabview / scrollview / curve
+    #[serde(default, rename = "step")]
+    step_value: Option<i32>,
+    #[serde(default)]
+    decimals: Option<i32>,
+    #[serde(default, deserialize_with = "deserialize_bool_or_string")]
+    wrap: Option<bool>,
+    #[serde(default, rename = "signColor")]
+    sign_color: Option<String>,
+    #[serde(default)]
+    tabs: Option<String>,
+    #[serde(default, rename = "activeTab")]
+    active_tab: Option<i32>,
+    #[serde(default, rename = "barHeight")]
+    bar_height: Option<i32>,
+    #[serde(default, rename = "tabColor")]
+    tab_color: Option<String>,
+    #[serde(default, rename = "tabActiveColor")]
+    tab_active_color: Option<String>,
+    #[serde(default, rename = "textActiveColor")]
+    text_active_color: Option<String>,
+    #[serde(default, rename = "tabIndex")]
+    tab_index: Option<i32>,
+    #[serde(default, rename = "contentHeight")]
+    content_height: Option<i32>,
+    #[serde(default, rename = "curveType")]
+    curve_type: Option<String>,
+    #[serde(default)]
+    points: Option<String>,
+    /// launcher 应用列表：每行「名称」或「名称,图标路径」
+    #[serde(default)]
+    apps: Option<String>,
+    /// tabview 各页背景图，分号分隔
+    #[serde(default, rename = "pagePixmaps")]
+    page_pixmaps: Option<String>,
 }
 
 // 兼容前端传来的字符串布尔值（"true"/"false"）
@@ -765,11 +800,22 @@ fn resolve_font_path(family: &str) -> Option<String> {
 /// 统一解析控件的 (font_family, font_size, font_bpp) 三元组，
 /// 确保 collect_fonts、extern 声明、setter 调用 三处完全一致。
 /// 规则：
-/// - 必须存在 font_family，且不能是空白、不能是 "default"；否则返回 None
+/// - 必须存在 font_family，且不能是空白、不能是内置字体；否则返回 None
 /// - font_size 缺失时默认 14（与 sgl_api.js win 标题字体 unwrap_or(14) 对齐）
 /// - font_bpp 缺失时默认 4
 fn resolve_widget_font_spec(w: &Widget) -> Option<(String, i32, i32)> {
-    let fam = w.font_family.as_ref().filter(|s| !s.trim().is_empty() && s.as_str() != "default")?;
+    let fam = w.font_family.as_ref().filter(|s| {
+        let t = s.trim();
+        !t.is_empty()
+            && t != "default"
+            && !t.starts_with("builtin:")
+            && t != "consolas14"
+            && t != "consolas23"
+            && t != "consolas24"
+            && t != "consolas32"
+            && t != "consolas24_compress"
+            && t != "song23"
+    })?;
     let sz = w.font_size.unwrap_or(14);
     let bpp = w.font_bpp.unwrap_or(4);
     Some((fam.clone(), sz, bpp))
@@ -860,6 +906,21 @@ fn font_variant_for_widget(project: &Project, w: &Widget) -> Option<(String, i32
 }
 
 fn font_id_for_widget(project: &Project, w: &Widget) -> Option<String> {
+    // SGL 内置字体 → 直接使用 C 符号名（不生成自定义字模）
+    if let Some(ref fam) = w.font_family {
+        let builtin = match fam.as_str() {
+            "default" | "builtin:consolas14" | "consolas14" => Some("consolas14"),
+            "builtin:consolas23" | "consolas23" => Some("consolas23"),
+            "builtin:consolas24" | "consolas24" => Some("consolas24"),
+            "builtin:consolas32" | "consolas32" => Some("consolas32"),
+            "builtin:consolas24_compress" | "consolas24_compress" => Some("consolas24_compress"),
+            "builtin:song23" | "song23" => Some("song23"),
+            _ => None,
+        };
+        if let Some(sym) = builtin {
+            return Some(sym.to_string());
+        }
+    }
     let (fam, sz, bpp, compress, spacing, mono) = font_variant_for_widget(project, w)?;
     Some(font_id_from_family(&fam, sz, bpp, compress, spacing, mono))
 }
@@ -1348,6 +1409,8 @@ enum PixmapFormat {
     ARGB4444,
     RGB888,
     ARGB8888,
+    ARGB8565,
+    QOI_RGB565,
     RLE_RGB332,
     RLE_ARGB2222,
     RLE_RGB565,
@@ -1365,6 +1428,9 @@ impl PixmapFormat {
             "ARGB4444" => Self::ARGB4444,
             "RGB888" => Self::RGB888,
             "ARGB8888" => Self::ARGB8888,
+            // SGL 官方名 ARGB8565；兼容口语 ARGB565
+            "ARGB8565" | "ARGB565" => Self::ARGB8565,
+            "QOI_RGB565" => Self::QOI_RGB565,
             "RLE_RGB332" => Self::RLE_RGB332,
             "RLE_ARGB2222" => Self::RLE_ARGB2222,
             "RLE_RGB565" => Self::RLE_RGB565,
@@ -1383,6 +1449,8 @@ impl PixmapFormat {
             Self::ARGB4444 => "SGL_PIXMAP_FMT_ARGB4444",
             Self::RGB888 => "SGL_PIXMAP_FMT_RGB888",
             Self::ARGB8888 => "SGL_PIXMAP_FMT_ARGB8888",
+            Self::ARGB8565 => "SGL_PIXMAP_FMT_ARGB8565",
+            Self::QOI_RGB565 => "SGL_PIXMAP_FMT_QOI_RGB565",
             Self::RLE_RGB332 => "SGL_PIXMAP_FMT_RLE_RGB332",
             Self::RLE_ARGB2222 => "SGL_PIXMAP_FMT_RLE_ARGB2222",
             Self::RLE_RGB565 => "SGL_PIXMAP_FMT_RLE_RGB565",
@@ -1421,8 +1489,8 @@ impl PixmapFormat {
     fn bytes_per_pixel(&self) -> usize {
         match self {
             Self::RGB332 | Self::ARGB2222 | Self::RLE_RGB332 | Self::RLE_ARGB2222 => 1,
-            Self::RGB565 | Self::ARGB4444 | Self::RLE_RGB565 | Self::RLE_ARGB4444 => 2,
-            Self::RGB888 | Self::RLE_RGB888 => 3,
+            Self::RGB565 | Self::ARGB4444 | Self::RLE_RGB565 | Self::RLE_ARGB4444 | Self::QOI_RGB565 => 2,
+            Self::RGB888 | Self::RLE_RGB888 | Self::ARGB8565 => 3,
             Self::ARGB8888 | Self::RLE_ARGB8888 => 4,
         }
     }
@@ -1430,7 +1498,7 @@ impl PixmapFormat {
     fn has_alpha(&self) -> bool {
         matches!(
             self,
-            Self::ARGB2222 | Self::ARGB4444 | Self::ARGB8888
+            Self::ARGB2222 | Self::ARGB4444 | Self::ARGB8888 | Self::ARGB8565
                 | Self::RLE_ARGB2222
                 | Self::RLE_ARGB4444
                 | Self::RLE_ARGB8888
@@ -1441,13 +1509,18 @@ impl PixmapFormat {
         match self {
             Self::RGB332 | Self::RLE_RGB332 => vec![((r & 0xE0) | ((g >> 3) & 0x1C) | ((b >> 6) & 0x03))],
             Self::ARGB2222 | Self::RLE_ARGB2222 => vec![((a >> 6) << 6) | ((r >> 6) << 4) | ((g >> 6) << 2) | (b >> 6)],
-            Self::RGB565 | Self::RLE_RGB565 => {
+            Self::RGB565 | Self::RLE_RGB565 | Self::QOI_RGB565 => {
                 let v = (((r as u16) & 0xF8) << 8) | (((g as u16) & 0xFC) << 3) | ((b as u16) >> 3);
                 vec![(v & 0xFF) as u8, ((v >> 8) & 0xFF) as u8]
             }
             Self::ARGB4444 | Self::RLE_ARGB4444 => {
                 let v = (((a as u16) & 0xF0) << 8) | (((r as u16) & 0xF0) << 4) | ((g as u16) & 0xF0) | ((b as u16) >> 4);
                 vec![(v & 0xFF) as u8, ((v >> 8) & 0xFF) as u8]
+            }
+            // SGL img_ext: RGB565 LE + A8（与 sgl_img_ext.c decode_pixel 一致）
+            Self::ARGB8565 => {
+                let v = (((r as u16) & 0xF8) << 8) | (((g as u16) & 0xFC) << 3) | ((b as u16) >> 3);
+                vec![(v & 0xFF) as u8, ((v >> 8) & 0xFF) as u8, a]
             }
             Self::RGB888 | Self::RLE_RGB888 => vec![b, g, r],
             Self::ARGB8888 | Self::RLE_ARGB8888 => vec![b, g, r, a],
@@ -1635,6 +1708,44 @@ fn collect_pixmaps(project: &Project) -> Vec<(String, PixmapFormat)> {
                         let fmt = PixmapFormat::from_str(w.pixmap_format.as_deref().unwrap_or("RGB565"));
                         if seen.insert((logo.clone(), fmt)) {
                             used.push((logo.clone(), fmt));
+                        }
+                    }
+                }
+            }
+            // launcher apps 中的图标路径
+            if w.widget_type == "launcher" {
+                if let Some(ref apps) = w.apps {
+                    let fmt = PixmapFormat::from_str(w.pixmap_format.as_deref().unwrap_or("RGB565"));
+                    for line in apps.split(|c| c == '\n' || c == ';') {
+                        let line = line.trim();
+                        if line.is_empty() {
+                            continue;
+                        }
+                        let icon = if let Some(idx) = line.find('|').or_else(|| line.find(',')) {
+                            line[idx + 1..].trim()
+                        } else {
+                            ""
+                        };
+                        if !icon.is_empty() {
+                            let path = icon.to_string();
+                            if seen.insert((path.clone(), fmt)) {
+                                used.push((path, fmt));
+                            }
+                        }
+                    }
+                }
+            }
+            // tabview 页背景图
+            if w.widget_type == "tabview" {
+                if let Some(ref pages) = w.page_pixmaps {
+                    let fmt = PixmapFormat::from_str(w.pixmap_format.as_deref().unwrap_or("RGB565"));
+                    for p in pages.split(';') {
+                        let p = p.trim();
+                        if !p.is_empty() {
+                            let path = p.to_string();
+                            if seen.insert((path.clone(), fmt)) {
+                                used.push((path, fmt));
+                            }
                         }
                     }
                 }
@@ -2195,6 +2306,10 @@ fn get_create_fn(t: &str) -> &'static str {
         "roller" => "sgl_roller_create",
         "statusbar" => "sgl_statusbar_create",
         "launcher" => "sgl_launcher_create",
+        "stepper" => "sgl_stepper_create",
+        "tabview" => "sgl_tabview_create",
+        "scrollview" => "sgl_scrollview_create",
+        "curve" => "sgl_curve_create",
         _ => "sgl_rect_create",
     }
 }
@@ -2763,9 +2878,19 @@ fn emit_setters(code: &mut String, project: &Project, w: &Widget, obj: &str) {
         }
         "ring" => {
             cclr!("sgl_ring_set_color", w.color);
-            if let (Some(r_in), Some(r_out)) = (w.radius_in, w.radius_out) {
-                code.push_str(&format!("    sgl_ring_set_radius({}, {}, {});\n", obj, r_in, r_out));
+            // 与 JS codegen 对齐：-1/未设时按尺寸推导；radius_in 允许 0
+            let mut r_out = w.radius_out.filter(|&v| v > 0).unwrap_or_else(|| (w.width.max(1)) / 2);
+            if r_out < 1 {
+                r_out = 1;
             }
+            let r_in = match w.radius_in {
+                Some(v) if v >= 0 => v.min(r_out),
+                _ => (r_out - 2).max(0),
+            };
+            code.push_str(&format!(
+                "    sgl_ring_set_radius({}, {}, {});\n",
+                obj, r_in, r_out
+            ));
             c!( "sgl_ring_set_alpha", w.alpha.map(|v| v as u8));
         }
         "checkbox" => {
@@ -3341,6 +3466,109 @@ fn emit_setters(code: &mut String, project: &Project, w: &Widget, obj: &str) {
             cclr!("sgl_launcher_set_label_color", w.label_color);
             cclr!("sgl_launcher_set_navigbar_color", w.navigbar_color);
             c!( "sgl_launcher_set_current_page", w.current_page.map(|v| v as u8));
+        }
+        "stepper" => {
+            if let Some(fid) = font_id_for_widget(&project, w) {
+                code.push_str(&format!("    sgl_stepper_set_font({}, &{});\n", obj, fid));
+            }
+            c!( "sgl_stepper_set_value", w.value);
+            c!( "sgl_stepper_set_step", w.step_value);
+            if w.min_value.is_some() || w.max_value.is_some() {
+                code.push_str(&format!(
+                    "    sgl_stepper_set_range({}, {}, {});\n",
+                    obj,
+                    w.min_value.unwrap_or(0),
+                    w.max_value.unwrap_or(100)
+                ));
+            }
+            c!( "sgl_stepper_set_decimals", w.decimals.map(|v| v as u8));
+            if let Some(wrap) = w.wrap {
+                code.push_str(&format!("    sgl_stepper_set_wrap({}, {});\n", obj, if wrap { 1 } else { 0 }));
+            }
+            cclr!("sgl_stepper_set_bg_color", w.bg_color);
+            cclr!("sgl_stepper_set_btn_color", w.btn_color);
+            cclr!("sgl_stepper_set_text_color", w.text_color);
+            cclr!("sgl_stepper_set_sign_color", w.sign_color);
+            cclr!("sgl_stepper_set_border_color", w.border_color);
+            c!( "sgl_stepper_set_radius", w.radius.map(|v| v as u8));
+        }
+        "tabview" => {
+            if let Some(fid) = font_id_for_widget(&project, w) {
+                code.push_str(&format!("    sgl_tabview_set_font({}, &{});\n", obj, fid));
+            }
+            cclr!("sgl_tabview_set_bg_color", w.bg_color);
+            cclr!("sgl_tabview_set_bar_color", w.bar_color);
+            cclr!("sgl_tabview_set_tab_color", w.tab_color);
+            cclr!("sgl_tabview_set_tab_active_color", w.tab_active_color);
+            cclr!("sgl_tabview_set_text_color", w.text_color);
+            cclr!("sgl_tabview_set_text_active_color", w.text_active_color);
+            c!( "sgl_tabview_set_bar_height", w.bar_height.map(|v| v as u8));
+            cclr!("sgl_tabview_set_border_color", w.border_color);
+            c!( "sgl_tabview_set_border_width", w.border_width.map(|v| v as u8));
+            c!( "sgl_tabview_set_radius", w.radius.map(|v| v as u8));
+            c!( "sgl_tabview_set_alpha", w.alpha.map(|v| v as u8));
+            if let Some(ref tabs) = w.tabs {
+                let titles: Vec<&str> = tabs.split(|c| c == '\n' || c == ';')
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                    .take(8)
+                    .collect();
+                for (i, title) in titles.iter().enumerate() {
+                    let escaped = title.replace('\\', "\\\\").replace('"', "\\\"");
+                    code.push_str(&format!(
+                        "    sgl_obj_t *{}_page{} = sgl_tabview_add_tab({}, \"{}\");\n",
+                        obj, i, obj, escaped
+                    ));
+                }
+                if let Some(active) = w.active_tab {
+                    code.push_str(&format!("    sgl_tabview_set_active({}, {});\n", obj, active));
+                }
+            }
+        }
+        "scrollview" => {
+            if let Some(h) = w.content_height {
+                if h > 0 {
+                    code.push_str(&format!("    sgl_scrollview_set_content_height({}, {});\n", obj, h));
+                }
+            }
+            cclr!("sgl_scrollview_set_bg_color", w.bg_color);
+            cclr!("sgl_scrollview_set_border_color", w.border_color);
+            c!( "sgl_scrollview_set_border_width", w.border_width.map(|v| v as u8));
+            c!( "sgl_scrollview_set_radius", w.radius.map(|v| v as u8));
+            c!( "sgl_scrollview_set_alpha", w.alpha.map(|v| v as u8));
+        }
+        "curve" => {
+            cclr!("sgl_curve_set_color", w.color);
+            c!( "sgl_curve_set_thickness", w.thickness.map(|v| v as u8));
+            c!( "sgl_curve_set_alpha", w.alpha.map(|v| v as u8));
+            if let Some(ref pts) = w.points {
+                let coords: Vec<i32> = pts.split(';')
+                    .flat_map(|pair| pair.split(','))
+                    .filter_map(|s| s.trim().parse::<i32>().ok())
+                    .collect();
+                let is_cubic = w.curve_type.as_deref() == Some("cubic");
+                let n = coords.len() / 2;
+                if !is_cubic && n == 3 && coords.len() == 6 {
+                    code.push_str(&format!(
+                        "    sgl_curve_set_quad({}, {}, {}, {}, {}, {}, {});\n",
+                        obj, coords[0], coords[1], coords[2], coords[3], coords[4], coords[5]
+                    ));
+                } else if is_cubic && n == 4 && coords.len() == 8 {
+                    code.push_str(&format!(
+                        "    sgl_curve_set_cubic({}, {}, {}, {}, {}, {}, {}, {}, {});\n",
+                        obj, coords[0], coords[1], coords[2], coords[3], coords[4], coords[5], coords[6], coords[7]
+                    ));
+                } else if n >= 3 {
+                    let arr: String = coords.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
+                    let arr_name = format!("{}_curve_pts", obj);
+                    code.push_str(&format!("    static const uint8_t {}[] = {{{}}};\n", arr_name, arr));
+                    if is_cubic {
+                        code.push_str(&format!("    sgl_curve_set_cubics({}, {}, {});\n", obj, arr_name, n));
+                    } else {
+                        code.push_str(&format!("    sgl_curve_set_quads({}, {}, {});\n", obj, arr_name, n));
+                    }
+                }
+            }
         }
         _ => {}
     }
@@ -6120,7 +6348,7 @@ fn read_sgl_config_from_file(project_path: String) -> Result<SglConfig, String> 
         heap_memory_size: get_i32(&content, "CONFIG_SGL_HEAP_MEMORY_SIZE", 10240),
         label_rotation: get_i32(&content, "CONFIG_SGL_LABEL_ROTATION", 0),
         font_song23: get_i32(&content, "CONFIG_SGL_FONT_SONG23", 0),
-        font_consolas14: get_i32(&content, "CONFIG_SGL_FONT_CONSOLAS14", 1),
+        font_consolas14: get_i32(&content, "CONFIG_SGL_FONT_CONSOLAS14", 0),
         font_consolas23: get_i32(&content, "CONFIG_SGL_FONT_CONSOLAS23", 0),
         font_consolas24: get_i32(&content, "CONFIG_SGL_FONT_CONSOLAS24", 0),
         font_consolas32: get_i32(&content, "CONFIG_SGL_FONT_CONSOLAS32", 0),

@@ -1,6 +1,6 @@
 import './sgl_renderer.js';
 import { AppState, navigate, showToast, initNav, downloadFile, escapeHtml, escapeAttr, setupUpdateChecker, setupWindowControls } from './app.js';
-import { SGL_WIDGET_TYPES, WIDGET_CATEGORIES, PROP_META, WIDGET_EVENTS, WIDGET_DEFAULTS, validateProjectFonts, validateProjectEmptyTexts, validateSpritePixmaps, getWidgetVarName, setCodegenLogCallback } from './sgl_api.js';
+import { SGL_WIDGET_TYPES, WIDGET_CATEGORIES, PROP_META, WIDGET_EVENTS, WIDGET_DEFAULTS, validateProjectFonts, validateProjectEmptyTexts, validateSpritePixmaps, getWidgetVarName, setCodegenLogCallback, SGL_BUILTIN_FONTS, isBuiltinFontFamily, resolveBuiltinFont, builtinFontFamilyValue } from './sgl_api.js';
 import { getCheckboxIconDataUrl } from './checkbox_icon.js';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -54,7 +54,7 @@ setCodegenLogCallback((message, level) => logMessage(message, level));
 // 获取字体的实际路径（用于字模加载）；仅返回项目资源中存在的字体
 function resolveFontPath(family) {
   const fonts = (AppState.project.resources && AppState.project.resources.fonts) || [];
-  if (!family || family === 'default') return '';
+  if (!family || isBuiltinFontFamily(family)) return '';
   const matched = resolveFontResourcePath(family, fonts);
   return matched || '';
 }
@@ -91,7 +91,7 @@ function isFontMatchedInProject(family, fonts) {
 
 // 将控件 fontFamily 解析为资源中的规范 path；找不到返回 ''
 function resolveFontResourcePath(family, fonts) {
-  if (!family || family === 'default') return '';
+  if (!family || isBuiltinFontFamily(family)) return '';
   const list = fonts || [];
   if (list.length === 0) return '';
   const famNorm = normalizeFontPathKey(family);
@@ -123,7 +123,7 @@ function widgetHasFont(widget) {
   const fonts = (AppState.project.resources && AppState.project.resources.fonts) || [];
   if (fonts.length === 0) return false;
   const family = widget.fontFamily;
-  if (!family || family === 'default') return false;
+  if (!family || isBuiltinFontFamily(family)) return false;
   return isFontMatchedInProject(family, fonts);
 }
 
@@ -1247,6 +1247,16 @@ function drawWidget(w, parentEl) {
   const page = AppState.getCurrentPage();
   if (!page) return;
 
+  // tabview：仅绘制当前活动标签页下的子控件（其他 tab 子项仍保留在工程数据中）
+  if (w.parentId) {
+    const tabParent = page.widgets.find(p => p.id === w.parentId);
+    if (tabParent && tabParent.type === 'tabview') {
+      const active = tabParent.activeTab != null ? Number(tabParent.activeTab) : 0;
+      const tabIdx = w.tabIndex != null ? Number(w.tabIndex) : 0;
+      if (tabIdx !== active) return;
+    }
+  }
+
   // 计算绝对位置
   let absPos = getWidgetAbsPos(w, page);
   const z = AppState.zoom;
@@ -1431,7 +1441,7 @@ function drawWidget(w, parentEl) {
   renderWidgetVisual(el, w, { domW, domH });
 
   // 字体校验：未匹配资源时，有资源则自动回退到第一个字体；无资源则提示
-  if (!inPreview && w.fontFamily && w.fontFamily !== 'default' && !widgetHasFont(w)) {
+  if (!inPreview && w.fontFamily && !isBuiltinFontFamily(w.fontFamily) && !widgetHasFont(w)) {
     const fonts = (AppState.project.resources && AppState.project.resources.fonts) || [];
     if (fonts.length > 0 && fonts[0] && fonts[0].path) {
       const old = w.fontFamily;
@@ -1492,6 +1502,34 @@ function drawWidget(w, parentEl) {
       AppState.selectWidget(w.id, false);
     }
     // 普通点击已选中的控件：不改变选择，允许拖动
+
+    // tabview：点击顶部标签栏切换 activeTab（不启动拖拽）
+    if (w.type === 'tabview' && !isMultiSelect) {
+      const zz = AppState.zoom;
+      const rect = el.getBoundingClientRect();
+      const lx = (e.clientX - rect.left) / zz;
+      const ly = (e.clientY - rect.top) / zz;
+      const barH = (w.barHeight != null && Number(w.barHeight) > 0) ? Number(w.barHeight) : 28;
+      if (ly >= 0 && ly < barH) {
+        const titles = String(w.tabs || '')
+          .split(/[\n;]+/)
+          .map(t => t.trim())
+          .filter(t => t)
+          .slice(0, 8);
+        if (titles.length > 0) {
+          const idx = Math.min(titles.length - 1, Math.max(0, Math.floor(lx / (w.width / titles.length))));
+          const cur = w.activeTab != null ? Number(w.activeTab) : 0;
+          if (idx !== cur) {
+            AppState.updateWidget(w.id, { activeTab: idx });
+            renderCanvas();
+            renderLayerList();
+            renderWidgetProps();
+            AppState.save();
+          }
+          return;
+        }
+      }
+    }
 
     // 锁定控件不允许拖拽
     if (w.locked) return;
@@ -1857,21 +1895,23 @@ function renderWidgetVisual(el, w, renderSize) {
     }
 
     case 'ring': {
-      // SGL ring: 圆心 cx=(x1+x2)/2, cy=(y1+y2)/2
-      // radius_out = width / 2，radius_in = radius_out - 2（默认环厚度 2）
-      // 单色 color 填充，alpha 透明度
+      // SGL ring (sgl_ring.c):
+      //   cx = (x1+x2)/2, cy = (y1+y2)/2
+      //   radius_out = width/2, radius_in = radius_out - ring->width
+      // 本地 surface 对应 coords 0..d-1，故 cx = floor((d-1)/2)，rOut = trunc(d/2)
       const ringColor = p('color', '#FFFFFF');
-      // el 尺寸由 drawWidget 基于 radiusOut 计算，surface 逻辑尺寸需与之匹配
-      const ringDiameter = (w.radiusOut != null && w.radiusOut > 0) ? w.radiusOut * 2 : Math.min(w.width, w.height);
-      const radiusOutVal = (w.radiusOut != null && w.radiusOut > 0) ? w.radiusOut : (ringDiameter / 2);
-      const radiusInVal = (w.radiusIn != null && w.radiusIn > 0) ? w.radiusIn : (radiusOutVal - 2);
-      const rOut = Math.max(1, radiusOutVal);
-      const rIn = Math.max(0, Math.min(radiusInVal, radiusOutVal));
+      const ringDiameter = (w.radiusOut != null && w.radiusOut > 0)
+        ? (w.radiusOut * 2)
+        : Math.min(w.width, w.height);
+      const rOut = Math.max(1, Math.trunc(ringDiameter / 2));
+      // radiusIn>=0 有效（含 0）；未设或负数则厚度默认 2（SGL create 默认 width=2）
+      const rIn = (w.radiusIn != null && w.radiusIn >= 0)
+        ? Math.max(0, Math.min(w.radiusIn, rOut))
+        : Math.max(0, rOut - 2);
 
-      // 用 SGLRenderer 像素级渲染
       const surf = sglSurface(ringDiameter, ringDiameter);
-      const cx = ringDiameter / 2;
-      const cy = ringDiameter / 2;
+      const cx = Math.floor((ringDiameter - 1) / 2);
+      const cy = Math.floor((ringDiameter - 1) / 2);
       SGLR.drawFillRing(surf, cx, cy, rIn, rOut, SGLR.hexToColor(ringColor), alpha);
       SGLR.flushSurface(surf);
       break;
@@ -4793,6 +4833,202 @@ function renderWidgetVisual(el, w, renderSize) {
       break;
     }
 
+    case 'stepper': {
+      // 步进器：左[-] / 中数值 / 右[+]，value 为定点（显示 = value / 10^decimals）
+      const stW = w.width;
+      const stH = w.height;
+      const stRadius = p('radius', 4);
+      const stBtnW = Math.max(24, Math.floor(stW / 4));
+      const stBg = SGLR.hexToColor(p('bgColor', '#FFFFFF'));
+      const stBtn = SGLR.hexToColor(p('btnColor', '#E0E0E0'));
+      const stBorder = SGLR.hexToColor(p('borderColor', '#000000'));
+      const stSignCol = p('signColor', '#000000');
+      const stTextCol = p('textColor', '#000000');
+      const stFontSize = p('fontSize', 14);
+      const stDecimals = Math.max(0, Number(p('decimals', 0)) || 0);
+      const stValue = Number(p('value', 50));
+      const stDisplay = stDecimals > 0
+        ? (stValue / Math.pow(10, stDecimals)).toFixed(stDecimals)
+        : String(stValue);
+
+      const surf = sglSurface(stW, stH);
+      SGLR.drawRect(surf, 0, 0, stW - 1, stH - 1, {
+        alpha: alpha, border: 1, border_alpha: alpha, border_mask: 0,
+        color: stBg, border_color: stBorder, radius: stRadius
+      });
+      // 左按钮区
+      SGLR.drawFillRect(surf, 1, 1, stBtnW - 1, stH - 2, Math.max(0, stRadius - 1), stBtn, alpha);
+      // 右按钮区
+      SGLR.drawFillRect(surf, stW - stBtnW, 1, stW - 2, stH - 2, Math.max(0, stRadius - 1), stBtn, alpha);
+      SGLR.flushSurface(surf);
+      overlayText({
+        text: '−', color: stSignCol, fontSize: stFontSize, fontFamily: p('fontFamily', ''),
+        align: 'CENTER', x: 0, y: 0, w: stBtnW, h: stH
+      });
+      overlayText({
+        text: '+', color: stSignCol, fontSize: stFontSize, fontFamily: p('fontFamily', ''),
+        align: 'CENTER', x: stW - stBtnW, y: 0, w: stBtnW, h: stH
+      });
+      overlayText({
+        text: stDisplay, color: stTextCol, fontSize: stFontSize, fontFamily: p('fontFamily', ''),
+        align: 'CENTER', x: stBtnW, y: 0, w: Math.max(0, stW - 2 * stBtnW), h: stH
+      });
+      break;
+    }
+
+    case 'tabview': {
+      // 顶部标签栏 + 内容区背景
+      const tvW = w.width;
+      const tvH = w.height;
+      const tvBarH = (p('barHeight', 0) > 0) ? p('barHeight', 0) : 28;
+      const tvRadius = p('radius', 0);
+      const tvBorderW = p('borderWidth', 1);
+      const titles = String(p('tabs', '标签1\n标签2'))
+        .split(/[\n;]+/)
+        .map(t => t.trim())
+        .filter(t => t)
+        .slice(0, 8);
+      const active = Math.max(0, Math.min(titles.length > 0 ? titles.length - 1 : 0, Number(p('activeTab', 0)) || 0));
+      const surf = sglSurface(tvW, tvH);
+      // 内容区
+      SGLR.drawRect(surf, 0, tvBarH, tvW - 1, tvH - 1, {
+        alpha: alpha, border: tvBorderW, border_alpha: alpha, border_mask: 0,
+        color: SGLR.hexToColor(p('bgColor', '#FFFFFF')),
+        border_color: SGLR.hexToColor(p('borderColor', '#000000')),
+        radius: tvRadius
+      });
+      // 标签栏背景
+      if (tvBarH > 0) {
+        SGLR.drawFillRect(surf, 0, 0, tvW - 1, tvBarH - 1, 0, SGLR.hexToColor(p('barColor', '#F0F0F0')), alpha);
+        const n = Math.max(1, titles.length);
+        const tabW = tvW / n;
+        for (let i = 0; i < titles.length; i++) {
+          const x1 = Math.round(i * tabW);
+          const x2 = Math.round((i + 1) * tabW) - 1;
+          const isAct = i === active;
+          SGLR.drawFillRect(surf, x1, 0, x2, tvBarH - 1, 0,
+            SGLR.hexToColor(isAct ? p('tabActiveColor', '#FFFFFF') : p('tabColor', '#E0E0E0')), alpha);
+        }
+      }
+      SGLR.flushSurface(surf);
+      if (tvBarH > 0 && titles.length) {
+        const n = titles.length;
+        const tabW = tvW / n;
+        const tvFontSize = p('fontSize', 14);
+        for (let i = 0; i < n; i++) {
+          const isAct = i === active;
+          overlayText({
+            text: titles[i],
+            color: isAct ? p('textActiveColor', '#000000') : p('textColor', '#666666'),
+            fontSize: tvFontSize,
+            fontFamily: p('fontFamily', ''),
+            align: 'CENTER',
+            x: Math.round(i * tabW), y: 0,
+            w: Math.round(tabW), h: tvBarH
+          });
+        }
+      }
+      break;
+    }
+
+    case 'scrollview': {
+      // 圆角容器，类似 box；可选提示文字
+      const surf = sglSurface(w.width, w.height);
+      SGLR.drawRect(surf, 0, 0, w.width - 1, w.height - 1, {
+        alpha: alpha,
+        border: p('borderWidth', 1),
+        border_alpha: alpha,
+        border_mask: 0,
+        color: SGLR.hexToColor(p('bgColor', '#FFFFFF')),
+        radius: p('radius', 0),
+        border_color: SGLR.hexToColor(p('borderColor', '#000000')),
+      });
+      SGLR.flushSurface(surf);
+      overlayText({
+        text: 'scrollview',
+        color: 'rgba(128,128,128,0.55)',
+        fontSize: 12,
+        fontFamily: '',
+        align: 'CENTER',
+        x: 0, y: 0, w: w.width, h: w.height
+      });
+      break;
+    }
+
+    case 'curve': {
+      // 贝塞尔曲线：points "x,y;..." 归一化 0-255 映射到控件尺寸
+      const pts = String(p('points', '0,255;128,0;255,255'))
+        .split(';')
+        .map(s => s.trim())
+        .filter(s => s)
+        .map(s => {
+          const [xs, ys] = s.split(',').map(t => t.trim());
+          return [
+            Math.max(0, Math.min(255, parseInt(xs, 10) || 0)),
+            Math.max(0, Math.min(255, parseInt(ys, 10) || 0)),
+          ];
+        });
+      const mapped = pts.map(([px, py]) => [
+        (px / 255) * Math.max(0, w.width - 1),
+        (py / 255) * Math.max(0, w.height - 1),
+      ]);
+      const isCubic = (p('curveType', 'quad') === 'cubic');
+      const thickness = Math.max(1, p('thickness', 3));
+      const colorHex = p('color', '#FF0000');
+      const color = SGLR.hexToColor(colorHex);
+      const surf = sglSurface(w.width, w.height);
+
+      // 用折线近似贝塞尔，写入 SGL 像素缓冲
+      function sampleQuad(p0, p1, p2, steps) {
+        const out = [];
+        for (let i = 0; i <= steps; i++) {
+          const t = i / steps;
+          const u = 1 - t;
+          out.push([
+            u * u * p0[0] + 2 * u * t * p1[0] + t * t * p2[0],
+            u * u * p0[1] + 2 * u * t * p1[1] + t * t * p2[1],
+          ]);
+        }
+        return out;
+      }
+      function sampleCubic(p0, p1, p2, p3, steps) {
+        const out = [];
+        for (let i = 0; i <= steps; i++) {
+          const t = i / steps;
+          const u = 1 - t;
+          out.push([
+            u * u * u * p0[0] + 3 * u * u * t * p1[0] + 3 * u * t * t * p2[0] + t * t * t * p3[0],
+            u * u * u * p0[1] + 3 * u * u * t * p1[1] + 3 * u * t * t * p2[1] + t * t * t * p3[1],
+          ]);
+        }
+        return out;
+      }
+
+      let poly = [];
+      if (!isCubic) {
+        // 连续二次：P0-P1-P2, P2-P3-P4, ...
+        for (let i = 0; i + 2 < mapped.length; i += 2) {
+          const seg = sampleQuad(mapped[i], mapped[i + 1], mapped[i + 2], 24);
+          if (poly.length) seg.shift();
+          poly = poly.concat(seg);
+        }
+      } else {
+        for (let i = 0; i + 3 < mapped.length; i += 3) {
+          const seg = sampleCubic(mapped[i], mapped[i + 1], mapped[i + 2], mapped[i + 3], 24);
+          if (poly.length) seg.shift();
+          poly = poly.concat(seg);
+        }
+      }
+      if (poly.length < 2 && mapped.length >= 2) {
+        poly = mapped.slice();
+      }
+      for (let i = 1; i < poly.length; i++) {
+        SGLR.drawLine(surf, poly[i - 1][0], poly[i - 1][1], poly[i][0], poly[i][1], thickness, color, alpha);
+      }
+      SGLR.flushSurface(surf);
+      break;
+    }
+
     default: {
       // SGL 默认: 背景 + 边框 + 居中类型名，用 SGLRenderer 像素级渲染
       const surf = sglSurface(w.width, w.height);
@@ -4947,6 +5183,7 @@ function getAllDescendantIds(wId, page) {
 /** 适合作为父对象的容器类型（与 SGL 常用容器对齐；其它类型仍可选，但排在后面） */
 const PARENT_CONTAINER_TYPES = new Set([
   'rect', 'rect_ext', 'box', 'win', 'viewlist', 'msgbox',
+  'tabview', 'scrollview',
 ]);
 
 function isParentContainerType(type) {
@@ -5435,6 +5672,16 @@ function renderWidgetProps() {
   }
   html += `</select></div>`;
 
+  // 父对象为 tabview 时，注入「所属标签页」tabIndex（即使不在类型 properties 列表中）
+  if (w.parentId && currentPage) {
+    const tabParent = currentPage.widgets.find(p => p.id === w.parentId);
+    if (tabParent && tabParent.type === 'tabview') {
+      const ti = w.tabIndex != null ? w.tabIndex : 0;
+      html += `<div class="form-group"><label class="form-label">所属标签页</label>`;
+      html += `<input type="number" class="form-input" data-prop="tabIndex" value="${escapeAttr(String(ti))}" min="0" max="7" /></div>`;
+    }
+  }
+
   // 根据 properties 列表 + PROP_META 动态渲染属性（跳过 locked，已在位置与尺寸标题处显示）
   let inFontSection = false;
   let inEventSection = false;
@@ -5481,18 +5728,31 @@ function renderWidgetProps() {
       html += `<div class="form-group"><label class="form-label">${label}</label><div class="switch-input ${rawVal ? 'on' : ''}" data-prop="${prop}" data-bool="1" style="cursor:pointer;"></div></div>`;
     } else if (meta.type === 'select') {
       if (prop === 'fontFamily') {
-        // 字体选择：只显示项目资源中的字体
+        // 字体选择：无 / SGL 内置字体 / 项目资源字体
         const projectFonts = (AppState.project.resources && AppState.project.resources.fonts) || [];
         const currentVal = rawVal || '';
-        const matchedPath = resolveFontResourcePath(currentVal, projectFonts);
+        const bif = resolveBuiltinFont(currentVal);
+        const matchedPath = bif ? '' : resolveFontResourcePath(currentVal, projectFonts);
         // 路径写法不一致时，自动纠正为资源中的规范 path，避免误报“字体不在资源中”
         if (matchedPath && matchedPath !== currentVal && w) {
           w.fontFamily = matchedPath;
         }
-        const selectVal = matchedPath || currentVal;
+        // 旧值 default → 规范为 builtin:consolas14
+        if (currentVal === 'default' && w) {
+          w.fontFamily = builtinFontFamilyValue('consolas14');
+        }
+        const selectVal = bif
+          ? builtinFontFamilyValue(bif.id)
+          : (matchedPath || currentVal);
         html += `<div class="form-group"><label class="form-label">${label}</label>`;
         html += `<select class="form-select" data-prop="fontFamily">`;
-        html += `<option value="">无</option>`;
+        html += `<option value="" ${selectVal === '' ? 'selected' : ''}>无</option>`;
+        html += `<optgroup label="SGL 内置字体 (ASCII)">`;
+        SGL_BUILTIN_FONTS.forEach(f => {
+          const v = builtinFontFamilyValue(f.id);
+          html += `<option value="${escapeAttr(v)}" ${selectVal === v ? 'selected' : ''}>${escapeHtml(f.label)} (${f.height}px)</option>`;
+        });
+        html += `</optgroup>`;
         if (projectFonts.length > 0) {
           html += `<optgroup label="项目字体">`;
           projectFonts.forEach(f => {
@@ -5923,9 +6183,11 @@ function renderWidgetProps() {
           if (w.type === 'ring' && (prop === 'width' || prop === 'height')) {
             const newVal = Math.max(20, Math.round(parseFloat(input.value) || 20));
             const newRadiusOut = Math.round(newVal / 2);
-            const ringWidth = (w.radiusOut || 30) - (w.radiusIn || 28);
+            const thick = (w.radiusOut != null && w.radiusOut > 0 && w.radiusIn != null && w.radiusIn >= 0)
+              ? (w.radiusOut - w.radiusIn)
+              : 2;
             w.radiusOut = newRadiusOut;
-            w.radiusIn = Math.max(0, newRadiusOut - ringWidth);
+            w.radiusIn = Math.max(0, newRadiusOut - thick);
             w.width = newVal;
             w.height = newVal;
           }
@@ -5938,10 +6200,11 @@ function renderWidgetProps() {
             w.height = newRadiusOut * 2;
           }
 
-          // Ring 控件：修改内半径时，外半径保持不变（内半径必须小于外半径）
+          // Ring 控件：修改内半径时，外半径保持不变（内半径必须小于外半径；允许 0）
           if (w.type === 'ring' && prop === 'radiusIn') {
-            const maxRadiusIn = (w.radiusOut || Math.round(Math.min(w.width, w.height) / 2)) - 1;
-            const newRadiusIn = Math.max(0, Math.min(maxRadiusIn, Math.round(parseFloat(input.value) || 28)));
+            const maxRadiusIn = Math.max(0, (w.radiusOut || Math.round(Math.min(w.width, w.height) / 2)) - 1);
+            const parsed = parseFloat(input.value);
+            const newRadiusIn = Math.max(0, Math.min(maxRadiusIn, Number.isFinite(parsed) ? Math.round(parsed) : 0));
             w.radiusIn = newRadiusIn;
           }
 
@@ -6176,12 +6439,17 @@ function renderWidgetProps() {
                 let relY = childAbs.y - parentAbs.y;
                 const clamped = clampChildPosInParent(wgt, parent, relX, relY);
                 const newZOrder = (parent.zOrder != null ? parent.zOrder : 0);
-                AppState.updateWidget(w.id, {
+                const patch = {
                   parentId: val,
                   x: clamped.x,
                   y: clamped.y,
                   zOrder: newZOrder,
-                });
+                };
+                // 挂到 tabview 时：若未设置 tabIndex，默认到当前活动标签
+                if (parent.type === 'tabview' && (wgt.tabIndex == null || wgt.tabIndex === '')) {
+                  patch.tabIndex = parent.activeTab != null ? Number(parent.activeTab) : 0;
+                }
+                AppState.updateWidget(w.id, patch);
               }
             } else {
               // 移除父对象：将相对位置转换为绝对位置，保留视觉位置不变
@@ -6218,11 +6486,16 @@ function renderWidgetProps() {
         
         AppState.updateWidget(w.id, { [prop]: val });
 
+        // 选择 SGL 内置字体时自动勾选对应 CONFIG
+        if (prop === 'fontFamily' && isBuiltinFontFamily(val)) {
+          AppState._ensureBuiltinFont(val, false);
+        }
+
         // 字体/字号/bpp 变更时立即重新渲染（实时响应）
         if (prop === 'fontFamily' || prop === 'fontSize' || prop === 'fontBpp') {
           const wgt = AppState.getWidget(w.id);
           const fam = wgt ? wgt.fontFamily : '';
-          if (fam && fam !== 'default') {
+          if (fam && !isBuiltinFontFamily(fam)) {
             // 收集控件文本字符作为 symbols，确保字模包含所需字符
             const symbols = collectWidgetText(wgt);
             registerFontFile(fam).then(() => {
@@ -6770,8 +7043,8 @@ document.getElementById('btn-add-font').addEventListener('click', async () => {
     _reportedMissingFontWidget.clear();
     // 注册新字体到浏览器并刷新画布
     await Promise.all(paths.map(p => registerFontFile(p)));
-    // 添加字体后：自动给 fontFamily 为空 / default / 指向已删除字体的控件补上第一个字体的 path
-    // 这样属性面板字体下拉也能正确显示，所见即所得（不再依赖渲染层 fallback）
+    // 添加字体后：仅给 fontFamily 为空 / 指向已删除字体的控件补上第一个字体
+    // 已明确选择 SGL 内置字体的控件不覆盖
     {
       const fonts = AppState.project.resources.fonts || [];
       if (fonts.length > 0) {
@@ -6782,14 +7055,15 @@ document.getElementById('btn-add-font').addEventListener('click', async () => {
             (page.widgets || []).forEach(w => {
               if (!w.hasOwnProperty('fontFamily')) return;
               const cur = w.fontFamily;
-              if (!cur || cur === 'default' || !isFontMatchedInProject(cur, fonts)) {
+              if (isBuiltinFontFamily(cur)) return;
+              if (!cur || !isFontMatchedInProject(cur, fonts)) {
                 w.fontFamily = firstPath;
                 patched++;
               }
             });
           });
           if (patched > 0) {
-            logMessage(`已自动为 ${patched} 个控件设置默认字体: ${fonts[0].name}`, 'info');
+            logMessage(`已自动为 ${patched} 个控件设置项目字体: ${fonts[0].name}`, 'info');
           }
         }
       }

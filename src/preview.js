@@ -1,5 +1,5 @@
 import { AppState, navigate, initNav, escapeHtml, setupUpdateChecker, setupWindowControls, showToast } from './app.js';
-import { SGL_WIDGET_TYPES, WIDGET_DEFAULTS, getWidgetVarName, addGlyphCoverageChars } from './sgl_api.js';
+import { SGL_WIDGET_TYPES, WIDGET_DEFAULTS, getWidgetVarName, addGlyphCoverageChars, isBuiltinFontFamily } from './sgl_api.js';
 import { getCheckboxIconDataUrl } from './checkbox_icon.js';
 import { invoke } from '@tauri-apps/api/core';
 import {
@@ -37,7 +37,7 @@ export function initPreview() {
 // 无可见字符时不登记（对齐后端空 symbols 过滤），避免打开项目时误报字模失败
 function collectWidgetFontChars(w, fontTextMap) {
   const fam = resolveEffectiveFontFamily(w.fontFamily);
-  if (fam && fam !== 'default') {
+  if (fam && !isBuiltinFontFamily(fam)) {
     const chars = new Set();
     const texts = [w.text, w.titleText, w.options, w.leftSlots, w.rightSlots, w.xLabels,
       w.msgText, w.leftBtnText, w.rightBtnText, w.sliceLabels];
@@ -113,10 +113,10 @@ function resolveFontPath(family) {
   return resolveEffectiveFontFamily(family);
 }
 
-// 空/default = 系统字体；仅当资源中存在时返回规范路径（与编辑器 / 代码生成一致）
+// 空/内置字体 = 系统字体预览；仅当资源中存在时返回规范路径
 function resolveEffectiveFontFamily(family) {
   const fonts = (AppState.project.resources && AppState.project.resources.fonts) || [];
-  if (!family || family === 'default') return '';
+  if (!family || isBuiltinFontFamily(family)) return '';
   if (fonts.length === 0) return '';
   const famNorm = String(family).replace(/\\/g, '/').trim();
   const famFile = famNorm.split('/').pop().toLowerCase();
@@ -494,6 +494,12 @@ function ensureWidgetState(w) {
     case 'viewlist':
       s.scrollY = 0;
       break;
+    case 'stepper':
+      s.value = w.value != null ? Number(w.value) : 0;
+      break;
+    case 'tabview':
+      s.activeTab = w.activeTab != null ? Number(w.activeTab) : 0;
+      break;
   }
   runtimeState.set(w.id, s);
   return s;
@@ -733,6 +739,17 @@ export function render() {
         const ps = ensureWidgetState(pw);
         if ((pw.type === 'win' || pw.type === 'msgbox') && ps.dismissed) return;
         pid = pw.parentId;
+      }
+    }
+
+    // tabview：仅渲染当前活动标签页下的子控件
+    if (w.parentId) {
+      const tabParent = widgetMap.get(w.parentId);
+      if (tabParent && tabParent.type === 'tabview') {
+        ensureWidgetState(tabParent);
+        const active = Number(getRuntimeValue(tabParent, 'activeTab', 'activeTab') || 0);
+        const tabIdx = w.tabIndex != null ? Number(w.tabIndex) : 0;
+        if (tabIdx !== active) return;
       }
     }
 
@@ -1198,6 +1215,41 @@ function onWidgetClick(info, evt) {
       render();
       break;
     }
+    case 'stepper': {
+      const third = w.width / 3;
+      let delta = 0;
+      if (ptX < third) delta = -(w.step != null ? Number(w.step) : 1);
+      else if (ptX >= 2 * third) delta = (w.step != null ? Number(w.step) : 1);
+      else break;
+      const min = w.minValue != null ? Number(w.minValue) : 0;
+      const max = w.maxValue != null ? Number(w.maxValue) : 100;
+      let v = (s.value != null ? Number(s.value) : (w.value != null ? Number(w.value) : 0)) + delta;
+      if (w.wrap) {
+        if (v > max) v = min;
+        else if (v < min) v = max;
+      } else {
+        v = Math.max(min, Math.min(max, v));
+      }
+      s.value = v;
+      dispatchPreviewEvent(w, 'onClicked');
+      render();
+      break;
+    }
+    case 'tabview': {
+      const barH = (w.barHeight != null && Number(w.barHeight) > 0) ? Number(w.barHeight) : 28;
+      if (ptY < 0 || ptY >= barH) break;
+      const titles = String(w.tabs || '')
+        .split(/[\n;]+/)
+        .map(t => t.trim())
+        .filter(t => t)
+        .slice(0, 8);
+      if (!titles.length) break;
+      const idx = Math.min(titles.length - 1, Math.max(0, Math.floor(ptX / (w.width / titles.length))));
+      s.activeTab = idx;
+      dispatchPreviewEvent(w, 'onClicked');
+      render();
+      break;
+    }
   }
 }
 
@@ -1301,7 +1353,7 @@ function onWidgetPointerDown(info, evt) {
     }
 
     case 'dropdown': case 'textlist': case 'numberkbd': case 'keyboard': case 'led':
-    case 'msgbox': case 'launcher': case 'win':
+    case 'msgbox': case 'launcher': case 'win': case 'stepper': case 'tabview':
       // 这些控件在 pointerup/click 中处理具体行为，pointerdown 仅记录上下文
       dragCtx.active = true;
       dragCtx.widgetId = w.id;
@@ -1453,7 +1505,7 @@ function onWidgetPointerUp(evt) {
       render();
       break;
     case 'dropdown': case 'textlist': case 'numberkbd': case 'keyboard': case 'led':
-    case 'msgbox': case 'launcher': case 'win':
+    case 'msgbox': case 'launcher': case 'win': case 'stepper': case 'tabview':
       // 先处理点击（需用到旧的 info.el 计算坐标），再 render 重建 DOM
       if (isClick) onWidgetClick(info, evt);
       if (s.pressed) {
@@ -1815,12 +1867,13 @@ function updateLabelLongModeText(info, offsetPx, estTextW, contentW) {
 function renderPreviewWidget(el, w, z, renderSize, page) {
   // renderSize: scroll 绑定对象时的实际渲染尺寸 { domW, domH }，其他控件为 undefined
   // page: 当前页面（用于 scroll 查找绑定对象）
-  // 检查控件是否选择了有效字体（项目已添加该字体且控件 fontFamily 非空非 default）
+  // 检查控件是否选择了有效项目字体（内置字体走 CSS 近似预览）
   function widgetHasFont(widget) {
     const fonts = (AppState.project.resources && AppState.project.resources.fonts) || [];
     if (fonts.length === 0) return false;
+    if (isBuiltinFontFamily(widget.fontFamily)) return false;
     const family = resolveEffectiveFontFamily(widget.fontFamily);
-    if (!family || family === 'default') return false;
+    if (!family) return false;
     const fileName = family.replace(/[/\\]/g, '/').split('/').pop();
     return fonts.some(f => f.path === family || f.name === fileName || f.name === family);
   }
@@ -2166,23 +2219,20 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
     }
 
     case 'ring': {
+      // 对齐 SGL：cx=(w-1)/2（整数），radius_out=width/2，radius_in=radius_out-thickness
       const { surf, R } = createWidgetCanvas(el, w, z);
       el.style.opacity = 1;
       const alpha = w.alpha != null ? w.alpha : 255;
       const autoRadius = !(w.radiusOut != null && w.radiusOut > 0);
       const rOutLogic = autoRadius ? Math.trunc(w.width / 2) : w.radiusOut;
-      const rInLogic = (w.radiusIn != null && w.radiusIn > 0) ? w.radiusIn : (rOutLogic - 2);
+      const rInLogic = (w.radiusIn != null && w.radiusIn >= 0) ? w.radiusIn : (rOutLogic - 2);
       const zSaved = surf.scale;
       surf.scale = 1;
       const pcx = Math.floor((surf.w - 1) / 2);
       const pcy = Math.floor((surf.h - 1) / 2);
-      const prOutAuto = Math.ceil(surf.w / 2);
-      const prFromLogic = Math.max(1, Math.round(rOutLogic * zSaved));
-      const prOut = (autoRadius || prFromLogic >= prOutAuto - 1)
-        ? prOutAuto
-        : Math.min(prOutAuto, prFromLogic);
-      const thick = Math.max(1, Math.round((rOutLogic - rInLogic) * zSaved));
-      const prIn = Math.max(0, prOut - thick);
+      const prOut = Math.max(1, Math.trunc(surf.w / 2));
+      const thick = Math.max(0, Math.round((rOutLogic - rInLogic) * zSaved));
+      const prIn = Math.max(0, Math.min(prOut, prOut - thick));
       R.drawFillRing(surf, pcx, pcy, prIn, prOut, R.hexToColor(w.color || '#FFFFFF'), alpha);
       surf.scale = zSaved;
       flushWidget(surf);
@@ -2779,7 +2829,8 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
       // SGL: fill_radius = min(obj->radius, knob_radius, knob_width/2)
       const { surf, R } = createWidgetCanvas(el, w, z);
       el.style.opacity = 1;
-      const alpha = w.alpha != null ? w.alpha : 255;
+      const trackAlpha = w.trackAlpha != null ? w.trackAlpha : 255;
+      const fillAlpha = w.fillAlpha != null ? w.fillAlpha : 255;
       const prValue = getRuntimeValue(w, 'value', 'value') || 0;
       const prFillCol = R.hexToColor(w.fillColor || '#FFFFFF');
       const prGap = w.fillGap != null ? w.fillGap : 4;
@@ -2797,10 +2848,10 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
 
       R.drawRect(surf, 0, 0, w.width - 1, w.height - 1, {
         color: R.hexToColor(w.trackColor || '#000000'),
-        alpha: alpha,
+        alpha: trackAlpha,
         border: prBorder,
         border_color: R.hexToColor(w.borderColor || '#000000'),
-        border_alpha: alpha,
+        border_alpha: trackAlpha,
         border_mask: 0,
         radius: prRadius,
       });
@@ -2811,7 +2862,7 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
         const kx2 = Math.min(surf.w - 1, Math.round(knobX2 * z));
         if (kx2 >= kx1) {
           surf.clip = { x1: kx1, y1: 0, x2: kx2, y2: surf.h - 1 };
-          R.drawFillRect(surf, rectX1, rectY1, rectX2, rectY2, fillR, prFillCol, alpha);
+          R.drawFillRect(surf, rectX1, rectY1, rectX2, rectY2, fillR, prFillCol, fillAlpha);
         }
         surf.clip = oldClip;
         rectX1 = rectX2 + prGap;
@@ -4796,6 +4847,16 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
       const lnFontSize = w.fontSize || 12;
       const lnRadius = w.radius || 8;
       const lnSelected = getRuntimeValue(w, 'selectedIndex', 'selectedIndex');
+      // 解析应用列表（名称[,图标]）
+      const lnApps = String(w.apps || '')
+        .split(/[\n;]+/)
+        .map(s => s.trim())
+        .filter(Boolean)
+        .map(line => {
+          const sep = line.includes('|') ? line.indexOf('|') : line.indexOf(',');
+          if (sep >= 0) return line.slice(0, sep).trim() || 'App';
+          return line;
+        });
       // 背景
       R.drawFillRect(surf, 0, 0, w.width - 1, w.height - 1, lnRadius, lnBg, alpha);
       flushWidget(surf);
@@ -4804,8 +4865,8 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
       const contentW = w.width - lnMarginL - lnMarginR;
       const cellW = Math.floor(contentW / lnGridCol);
       const cellH = Math.floor((contentH - lnMarginT) / lnGridRow);
-      const iconCount = lnGridCol * lnGridRow;
-      for (let i = 0; i < iconCount; i++) {
+      const iconCount = lnApps.length > 0 ? lnApps.length : (lnGridCol * lnGridRow);
+      for (let i = 0; i < iconCount && i < lnGridCol * lnGridRow; i++) {
         const c = i % lnGridCol;
         const r = Math.floor(i / lnGridCol);
         const cx = lnMarginL + c * cellW + Math.floor(cellW / 2);
@@ -4826,7 +4887,8 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
         if (selected) {
           R.drawFillRectBorder(surf, ix, iy, ix + lnIconSize - 1, iy + lnIconSize - 1, 8, R.hexToColor('#c4b5fd'), 2, alpha);
         }
-        overlayTextAt({ text: 'App ' + (i + 1), color: lnLabelCol, fontSize: lnFontSize, fontFamily: (w.fontFamily || ''), x: lnMarginL + c * cellW, y: iy + lnIconSize + 2, w: cellW, h: lnFontSize + 2, align: 'CENTER' });
+        const appName = lnApps[i] || ('App ' + (i + 1));
+        overlayTextAt({ text: appName, color: lnLabelCol, fontSize: lnFontSize, fontFamily: (w.fontFamily || ''), x: lnMarginL + c * cellW, y: iy + lnIconSize + 2, w: cellW, h: lnFontSize + 2, align: 'CENTER' });
       }
       // 底部导航栏
       R.drawFillRect(surf, 0, w.height - lnNavH, w.width - 1, w.height - 1, 0, R.hexToColor(lnNavCol), alpha);
@@ -4834,6 +4896,186 @@ function renderPreviewWidget(el, w, z, renderSize, page) {
       const lnPage = Math.max(0, w.currentPage != null ? w.currentPage : 0);
       const dots = '●'.repeat(Math.max(1, lnPage + 1));
       overlayText({ text: dots, color: lnLabelCol, fontSize: lnFontSize, fontFamily: (w.fontFamily || ''), align: 'CENTER', x: 0, y: w.height - lnNavH, w: w.width, h: lnNavH });
+      break;
+    }
+
+    case 'stepper': {
+      const { surf, R } = createWidgetCanvas(el, w, z);
+      el.style.opacity = 1;
+      const alpha = w.alpha != null ? w.alpha : 255;
+      const stW = w.width;
+      const stH = w.height;
+      const stRadius = w.radius != null ? w.radius : 4;
+      const stBtnW = Math.max(24, Math.floor(stW / 4));
+      const stBg = R.hexToColor(w.bgColor || '#FFFFFF');
+      const stBtn = R.hexToColor(w.btnColor || '#E0E0E0');
+      const stBorder = R.hexToColor(w.borderColor || '#000000');
+      const stSignCol = w.signColor || '#000000';
+      const stTextCol = w.textColor || '#000000';
+      const stFontSize = w.fontSize != null ? w.fontSize : 14;
+      const stDecimals = Math.max(0, Number(w.decimals != null ? w.decimals : 0) || 0);
+      const stValueRaw = getRuntimeValue(w, 'value', 'value');
+      const stValue = Number(stValueRaw != null ? stValueRaw : 50);
+      const stDisplay = stDecimals > 0
+        ? (stValue / Math.pow(10, stDecimals)).toFixed(stDecimals)
+        : String(stValue);
+      R.drawRect(surf, 0, 0, stW - 1, stH - 1, {
+        alpha: alpha, border: 1, border_alpha: alpha, border_mask: 0,
+        color: stBg, border_color: stBorder, radius: stRadius
+      });
+      R.drawFillRect(surf, 1, 1, stBtnW - 1, stH - 2, Math.max(0, stRadius - 1), stBtn, alpha);
+      R.drawFillRect(surf, stW - stBtnW, 1, stW - 2, stH - 2, Math.max(0, stRadius - 1), stBtn, alpha);
+      flushWidget(surf);
+      overlayText({ text: '−', color: stSignCol, fontSize: stFontSize, fontFamily: (w.fontFamily || ''), align: 'CENTER', x: 0, y: 0, w: stBtnW, h: stH });
+      overlayText({ text: '+', color: stSignCol, fontSize: stFontSize, fontFamily: (w.fontFamily || ''), align: 'CENTER', x: stW - stBtnW, y: 0, w: stBtnW, h: stH });
+      overlayText({ text: stDisplay, color: stTextCol, fontSize: stFontSize, fontFamily: (w.fontFamily || ''), align: 'CENTER', x: stBtnW, y: 0, w: Math.max(0, stW - 2 * stBtnW), h: stH });
+      break;
+    }
+
+    case 'tabview': {
+      const { surf, R } = createWidgetCanvas(el, w, z);
+      el.style.opacity = 1;
+      const alpha = w.alpha != null ? w.alpha : 255;
+      const tvW = w.width;
+      const tvH = w.height;
+      const tvBarH = (w.barHeight != null && Number(w.barHeight) > 0) ? Number(w.barHeight) : 28;
+      const tvRadius = w.radius != null ? w.radius : 0;
+      const tvBorderW = w.borderWidth != null ? w.borderWidth : 1;
+      const titles = String(w.tabs || '标签1\n标签2')
+        .split(/[\n;]+/)
+        .map(t => t.trim())
+        .filter(t => t)
+        .slice(0, 8);
+      const activeRaw = getRuntimeValue(w, 'activeTab', 'activeTab');
+      const active = Math.max(0, Math.min(titles.length > 0 ? titles.length - 1 : 0, Number(activeRaw != null ? activeRaw : 0) || 0));
+      R.drawRect(surf, 0, tvBarH, tvW - 1, tvH - 1, {
+        alpha: alpha, border: tvBorderW, border_alpha: alpha, border_mask: 0,
+        color: R.hexToColor(w.bgColor || '#FFFFFF'),
+        border_color: R.hexToColor(w.borderColor || '#000000'),
+        radius: tvRadius
+      });
+      if (tvBarH > 0) {
+        R.drawFillRect(surf, 0, 0, tvW - 1, tvBarH - 1, 0, R.hexToColor(w.barColor || '#F0F0F0'), alpha);
+        const n = Math.max(1, titles.length);
+        const tabW = tvW / n;
+        for (let i = 0; i < titles.length; i++) {
+          const x1 = Math.round(i * tabW);
+          const x2 = Math.round((i + 1) * tabW) - 1;
+          const isAct = i === active;
+          R.drawFillRect(surf, x1, 0, x2, tvBarH - 1, 0,
+            R.hexToColor(isAct ? (w.tabActiveColor || '#FFFFFF') : (w.tabColor || '#E0E0E0')), alpha);
+        }
+      }
+      flushWidget(surf);
+      if (tvBarH > 0 && titles.length) {
+        const n = titles.length;
+        const tabW = tvW / n;
+        const tvFontSize = w.fontSize != null ? w.fontSize : 14;
+        for (let i = 0; i < n; i++) {
+          const isAct = i === active;
+          overlayText({
+            text: titles[i],
+            color: isAct ? (w.textActiveColor || '#000000') : (w.textColor || '#666666'),
+            fontSize: tvFontSize,
+            fontFamily: (w.fontFamily || ''),
+            align: 'CENTER',
+            x: Math.round(i * tabW), y: 0,
+            w: Math.round(tabW), h: tvBarH
+          });
+        }
+      }
+      break;
+    }
+
+    case 'scrollview': {
+      const { surf, R } = createWidgetCanvas(el, w, z);
+      el.style.opacity = 1;
+      const alpha = w.alpha != null ? w.alpha : 255;
+      R.drawRect(surf, 0, 0, w.width - 1, w.height - 1, {
+        alpha: alpha,
+        border: w.borderWidth != null ? w.borderWidth : 1,
+        border_alpha: alpha,
+        border_mask: 0,
+        color: R.hexToColor(w.bgColor || '#FFFFFF'),
+        radius: w.radius != null ? w.radius : 0,
+        border_color: R.hexToColor(w.borderColor || '#000000'),
+      });
+      // 内容高度提示：右侧滚动条示意（子控件由父级 clipPath 裁剪）
+      const contentH = Number(w.contentHeight) > 0 ? Number(w.contentHeight) : w.height;
+      if (contentH > w.height) {
+        const barH = Math.max(12, Math.floor(w.height * w.height / contentH));
+        const barX = w.width - 6;
+        R.drawFillRect(surf, barX, 2, w.width - 3, 2 + barH - 1, 2, R.hexToColor('#A0A0A0'), Math.min(180, alpha));
+      }
+      flushWidget(surf);
+      break;
+    }
+
+    case 'curve': {
+      const { surf, R } = createWidgetCanvas(el, w, z);
+      el.style.opacity = 1;
+      const alpha = w.alpha != null ? w.alpha : 255;
+      const pts = String(w.points || '0,255;128,0;255,255')
+        .split(';')
+        .map(s => s.trim())
+        .filter(s => s)
+        .map(s => {
+          const [xs, ys] = s.split(',').map(t => t.trim());
+          return [
+            Math.max(0, Math.min(255, parseInt(xs, 10) || 0)),
+            Math.max(0, Math.min(255, parseInt(ys, 10) || 0)),
+          ];
+        });
+      const mapped = pts.map(([px, py]) => [
+        (px / 255) * Math.max(0, w.width - 1),
+        (py / 255) * Math.max(0, w.height - 1),
+      ]);
+      const isCubic = (w.curveType || 'quad') === 'cubic';
+      const thickness = Math.max(1, w.thickness != null ? w.thickness : 3);
+      const color = R.hexToColor(w.color || '#FF0000');
+      function sampleQuad(p0, p1, p2, steps) {
+        const out = [];
+        for (let i = 0; i <= steps; i++) {
+          const t = i / steps;
+          const u = 1 - t;
+          out.push([
+            u * u * p0[0] + 2 * u * t * p1[0] + t * t * p2[0],
+            u * u * p0[1] + 2 * u * t * p1[1] + t * t * p2[1],
+          ]);
+        }
+        return out;
+      }
+      function sampleCubic(p0, p1, p2, p3, steps) {
+        const out = [];
+        for (let i = 0; i <= steps; i++) {
+          const t = i / steps;
+          const u = 1 - t;
+          out.push([
+            u * u * u * p0[0] + 3 * u * u * t * p1[0] + 3 * u * t * t * p2[0] + t * t * t * p3[0],
+            u * u * u * p0[1] + 3 * u * u * t * p1[1] + 3 * u * t * t * p2[1] + t * t * t * p3[1],
+          ]);
+        }
+        return out;
+      }
+      let poly = [];
+      if (!isCubic) {
+        for (let i = 0; i + 2 < mapped.length; i += 2) {
+          const seg = sampleQuad(mapped[i], mapped[i + 1], mapped[i + 2], 24);
+          if (poly.length) seg.shift();
+          poly = poly.concat(seg);
+        }
+      } else {
+        for (let i = 0; i + 3 < mapped.length; i += 3) {
+          const seg = sampleCubic(mapped[i], mapped[i + 1], mapped[i + 2], mapped[i + 3], 24);
+          if (poly.length) seg.shift();
+          poly = poly.concat(seg);
+        }
+      }
+      if (poly.length < 2 && mapped.length >= 2) poly = mapped.slice();
+      for (let i = 1; i < poly.length; i++) {
+        R.drawLine(surf, poly[i - 1][0], poly[i - 1][1], poly[i][0], poly[i][1], thickness, color, alpha);
+      }
+      flushWidget(surf);
       break;
     }
 

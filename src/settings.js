@@ -62,7 +62,7 @@ function ensureSglConfig() {
       heap_memory_size: 10240,
       label_rotation: 0,
       font_song23: 0,
-      font_consolas14: 1,
+      font_consolas14: 0,
       font_consolas23: 0,
       font_consolas24: 0,
       font_consolas32: 0,

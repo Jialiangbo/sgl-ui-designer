@@ -1,5 +1,5 @@
 // ============ SGL UI Designer - 全局状态管理 ============
-import { SGL_WIDGET_TYPES, WIDGET_DEFAULTS, createWidgetDefaults, generateSGLCode, validateProjectFonts, addGlyphCoverageChars } from './sgl_api.js';
+import { SGL_WIDGET_TYPES, WIDGET_DEFAULTS, createWidgetDefaults, generateSGLCode, validateProjectFonts, addGlyphCoverageChars, isBuiltinFontFamily, resolveBuiltinFont, builtinFontFamilyValue } from './sgl_api.js';
 import { invoke } from '@tauri-apps/api/core';
 import { open, save, message } from '@tauri-apps/plugin-dialog';
 import { registerFontFile } from './render_common.js';
@@ -295,7 +295,7 @@ export const AppState = {
       zOrder: maxZ + 1,
       ...defaults
     };
-    // 需要字体的控件：有字体资源时默认第一个；无字体资源时留空（系统字体）
+    // 需要字体的控件：有字体资源时默认第一个；无字体资源时留空
     if (widget.hasOwnProperty('fontFamily') && (!widget.fontFamily || widget.fontFamily === 'default')) {
       const fonts = (this.project && this.project.resources && this.project.resources.fonts) || [];
       if (fonts.length > 0 && fonts[0] && fonts[0].path) {
@@ -381,26 +381,43 @@ export const AppState = {
   },
 
   // numberkbd/keyboard 控件需要 ASCII 字模显示按键文字
-  // 控件设置了自定义字体时 collect_fonts 会自动收集字符生成字模，无需额外处理
-  // 控件未设置字体（使用系统默认字体）时，需要确保 SGL 配置中启用了内置 ASCII 字模
+  // 未选项目字体时回退到 Consolas14，并自动勾选 SGL 配置
   _ensureAsciiFontForKbd(widget) {
     const family = widget.fontFamily;
-    // 控件设置了自定义字体，collect_fonts 会自动生成字模，无需处理
-    if (family && family !== 'default' && family !== '') return;
+    if (family && !isBuiltinFontFamily(family) && family !== '') return;
 
-    // 控件未设置字体，需要确保内置 ASCII 字模启用
-    const cfg = this.project.sgl_config;
-    if (!cfg) return;
-
-    // 检查是否已启用任一内置 ASCII 字模
-    const builtinEnabled = cfg.font_consolas14 || cfg.font_consolas23 || cfg.font_consolas24 || cfg.font_consolas32 || cfg.font_consolas24_compress || cfg.font_song23;
-    if (builtinEnabled) return;
-
-    // 自动启用 consolas14（与 numberkbd 默认 fontSize=14 匹配）
-    cfg.font_consolas14 = 1;
-    if (this.logger) {
-      this.logger('已自动启用 SGL 内置 Consolas14 字模（数字键盘/键盘控件需要 ASCII 字模）', 'info');
+    if (!widget.fontFamily || widget.fontFamily === '') {
+      widget.fontFamily = builtinFontFamilyValue('consolas14');
     }
+    this._ensureBuiltinFont(widget.fontFamily, true);
+  },
+
+  // 控件选择 SGL 内置字体时，自动启用对应 CONFIG_SGL_FONT_*
+  _ensureBuiltinFont(family, silent) {
+    const bif = resolveBuiltinFont(family);
+    if (!bif) return false;
+    const cfg = this.project.sgl_config;
+    if (!cfg) return false;
+    if (cfg[bif.configKey]) return false;
+    cfg[bif.configKey] = 1;
+    if (this.logger) {
+      const tip = silent
+        ? `已自动启用 SGL 内置 ${bif.label} 字模（数字键盘/键盘控件需要 ASCII 字模）`
+        : `已自动启用 SGL 内置 ${bif.label}（控件使用该字体）`;
+      this.logger(tip, 'info');
+    }
+    if (this.projectPath) {
+      invoke('write_sgl_config_to_file', {
+        projectPath: this.projectPath,
+        config: cfg
+      }).catch(e => console.log('写入 sgl_config.h 失败:', e));
+    }
+    return true;
+  },
+
+  /** @deprecated 使用 _ensureBuiltinFont */
+  _ensureBuiltinDefaultFont(silent) {
+    return this._ensureBuiltinFont(builtinFontFamilyValue('consolas14'), silent);
   },
 
   removeWidget(id) {
@@ -760,7 +777,7 @@ export const AppState = {
   _collectFontChars(widgets, fontUsageMap) {
     for (const w of widgets) {
       const fam = w.fontFamily;
-      if (fam && fam !== 'default' && fam !== '') {
+      if (fam && !isBuiltinFontFamily(fam) && fam !== '') {
         const sz = w.fontSize || 14;
         const bpp = w.fontBpp || 4;
         const spacing = Math.max(0, w.fontSpacing || 0);
@@ -996,12 +1013,12 @@ export const AppState = {
         theme_dark: 0,
         heap_algo: 'lwmem',
         heap_memory_size: 102400,
-        font_song23: 1,
-        font_consolas14: 1,
-        font_consolas23: 1,
-        font_consolas24: 1,
-        font_consolas32: 1,
-        font_consolas24_compress: 1
+        font_song23: 0,
+        font_consolas14: 0,
+        font_consolas23: 0,
+        font_consolas24: 0,
+        font_consolas32: 0,
+        font_consolas24_compress: 0
       };
     } else {
       // 补充新增字段默认值（兼容旧项目数据）
@@ -1040,11 +1057,16 @@ export const AppState = {
             });
           }
           // 纠正 / 回退 fontFamily：
-          // 1) 路径写法不一致但能匹配 → 规范 path
-          // 2) 指向已删除/未添加的字体（如仍写 Bold，资源只剩 Black）→ 回退到第一个资源字体
+          // 1) SGL 内置字体保留（旧值 default 规范为 builtin:consolas14）
+          // 2) 路径写法不一致但能匹配 → 规范 path
+          // 3) 指向已删除/未添加的字体 → 回退到第一个资源字体
           if (w.hasOwnProperty('fontFamily') && fonts.length > 0) {
             const cur = w.fontFamily;
-            if (cur && cur !== 'default') {
+            if (cur === 'default') {
+              w.fontFamily = builtinFontFamilyValue('consolas14');
+            } else if (cur && isBuiltinFontFamily(cur)) {
+              // keep builtin
+            } else if (cur) {
               const famNorm = String(cur).replace(/\\/g, '/').trim();
               const famFile = famNorm.split('/').pop().toLowerCase();
               const hit = fonts.find(f => {
@@ -1061,9 +1083,11 @@ export const AppState = {
               } else if (fonts[0] && fonts[0].path) {
                 w.fontFamily = fonts[0].path;
               }
-            } else if ((!cur || cur === 'default') && fonts[0] && fonts[0].path) {
+            } else if (fonts[0] && fonts[0].path) {
               w.fontFamily = fonts[0].path;
             }
+          } else if (w.hasOwnProperty('fontFamily') && w.fontFamily === 'default') {
+            w.fontFamily = builtinFontFamilyValue('consolas14');
           }
           // 2dball 控件：SGL circle_zoom 将控件尺寸改为 2*radius，同步 width/height
           if (w.type === '2dball' && w.radius != null && w.radius > 0) {
@@ -1133,12 +1157,12 @@ export const AppState = {
         theme_dark: 0,
         heap_algo: 'lwmem',
         heap_memory_size: 102400,
-        font_song23: 1,
-        font_consolas14: 1,
-        font_consolas23: 1,
-        font_consolas24: 1,
-        font_consolas32: 1,
-        font_consolas24_compress: 1
+        font_song23: 0,
+        font_consolas14: 0,
+        font_consolas23: 0,
+        font_consolas24: 0,
+        font_consolas32: 0,
+        font_consolas24_compress: 0
       }
     };
     this.projectPath = null;
